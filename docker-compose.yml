@@ -1,0 +1,8 @@
+services:
+  fin:
+    build: .
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+      - ./exports:/app/exports
+    entrypoint: ["fin"]
