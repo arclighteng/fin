@@ -1,22 +1,44 @@
+import csv
 import logging
-from datetime import date, timedelta
+import os
+import statistics
+from collections import Counter, defaultdict
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from .status_commands import status_command, drill_command, trend_command
 
+import filelock
 import typer
 from rich.console import Console
 
+from . import db as dbmod
+from .analysis import TimePeriod, analyze_periods
+from .classify import detect_duplicates, detect_sketchy, get_subscriptions
 from .config import load_config
 from .log import setup_logging
-from . import db as dbmod
-from .simplefin_client import SimpleFinClient
 from .models import Account
 from .normalize import normalize_simplefin_txn
+from .simplefin_client import SimpleFinClient
 
 app = typer.Typer(no_args_is_help=True)
+app.command("status")(status_command)
+app.command("drill")(drill_command)
+app.command("trend")(trend_command)
 console = Console()
 log = logging.getLogger("fin")
 
-DEFAULT_LOOKBACK_DAYS = 120
-JAN_ANNUAL_BOOTSTRAP_LOOKBACK = 400  # pragmatic: run in January for annual subs discovery
+# Sync lookback periods:
+# - Quick (14 days): For daily syncs, catches new transactions and pending corrections
+# - Default (30 days): Standard sync, covers statement cycle + correction window
+# - Full (120 days): For catching up after extended absence or initial setup
+# - Annual (400 days): For annual subscription discovery, run once in January
+DEFAULT_LOOKBACK_DAYS = 30
+FULL_LOOKBACK_DAYS = 120
+JAN_ANNUAL_BOOTSTRAP_LOOKBACK = 400
+
+# Watchlist lock path
+WATCHLIST_LOCK_PATH = "/app/exports/.watchlist.csv.lock"
+WATCHLIST_PATH = "/app/exports/watchlist.csv"
 
 
 def _require_simplefin(cfg):
@@ -24,19 +46,83 @@ def _require_simplefin(cfg):
         raise typer.BadParameter("Missing SIMPLEFIN_ACCESS_URL (use .env; do not commit).")
 
 
+def _acquire_watchlist_lock(timeout: int = 10) -> filelock.FileLock:
+    """Acquire exclusive lock for watchlist operations."""
+    os.makedirs(os.path.dirname(WATCHLIST_LOCK_PATH), exist_ok=True)
+    return filelock.FileLock(WATCHLIST_LOCK_PATH, timeout=timeout)
+
+
 @app.command()
-def sync(
-    lookback_days: int = typer.Option(DEFAULT_LOOKBACK_DAYS, help="How many days to pull (default 120)."),
-    annual_bootstrap: bool = typer.Option(False, help="Use ~400-day lookback for annual subscription discovery."),
+def setup(
+    setup_token: str = typer.Argument(..., help="Base64 setup token from SimpleFIN Bridge"),
 ):
     """
-    Pull accounts + transactions, normalize, upsert to SQLite, record run.
+    Exchange a SimpleFIN setup token for a permanent access URL.
+
+    SimpleFIN uses a two-step authentication process:
+    1. You get a Setup Token from SimpleFIN Bridge (base64 encoded)
+    2. Run this command to exchange it for your Access URL
+
+    The Access URL will be printed - add it to your .env file as:
+    SIMPLEFIN_ACCESS_URL=<the-url-printed>
+
+    NOTE: Setup tokens can only be claimed once. If you've already claimed it,
+    you'll need to generate a new one from SimpleFIN Bridge.
+    """
+    from .simplefin_client import claim_access_url
+
+    console.print("[bold]Claiming SimpleFIN access...[/bold]")
+
+    try:
+        access_url = claim_access_url(setup_token)
+
+        console.print()
+        console.print("[green]Success![/green] Your SimpleFIN Access URL:")
+        console.print()
+        console.print(f"[bold]{access_url}[/bold]")
+        console.print()
+        console.print("Add this to your .env file:")
+        console.print(f"[cyan]SIMPLEFIN_ACCESS_URL={access_url}[/cyan]")
+        console.print()
+        console.print("[yellow]Keep this URL secret - it contains your credentials![/yellow]")
+
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[red]Failed to claim access URL:[/red] {e}")
+        raise typer.Exit(1)
+
+
+@app.command()
+def sync(
+    lookback_days: int = typer.Option(DEFAULT_LOOKBACK_DAYS, help="Days to pull (default 30, use --full for 120)."),
+    quick: bool = typer.Option(False, help="Quick sync: 14 days (daily use)."),
+    full: bool = typer.Option(False, help="Full sync: 120 days (catch up after absence)."),
+    annual_bootstrap: bool = typer.Option(False, help="Annual sync: 400 days (yearly subscription discovery)."),
+):
+    """
+    Pull accounts + transactions from SimpleFIN and sync to local database.
+
+    Recommended usage:
+    - Daily: fin sync --quick (14 days)
+    - Weekly: fin sync (30 days, default)
+    - After absence: fin sync --full (120 days)
+    - January: fin sync --annual-bootstrap (400 days for annual subs)
     """
     cfg = load_config()
     setup_logging(cfg)
     _require_simplefin(cfg)
 
-    effective_lookback = JAN_ANNUAL_BOOTSTRAP_LOOKBACK if annual_bootstrap else lookback_days
+    # Determine effective lookback
+    if annual_bootstrap:
+        effective_lookback = JAN_ANNUAL_BOOTSTRAP_LOOKBACK
+    elif full:
+        effective_lookback = FULL_LOOKBACK_DAYS
+    elif quick:
+        effective_lookback = 14
+    else:
+        effective_lookback = lookback_days
     start = date.today() - timedelta(days=effective_lookback)
     end_exclusive = date.today() + timedelta(days=1)
 
@@ -140,10 +226,6 @@ def report(
     """
     Local report: subscriptions + basic anomalies (new merchants, spikes, duplicates).
     """
-    from collections import defaultdict
-    from datetime import datetime
-    import statistics
-
     cfg = load_config()
     setup_logging(cfg)
 
@@ -314,9 +396,9 @@ def report(
         else:
             for s in subs[:top]:
                 console.print(
-                    f"  • {s['label']}  "
+                    f"  * {s['label']}  "
                     f"[dim]({s['cadence']}, ~{cents_to_usd(s['amount_abs'])}, conf={s['confidence']:.2f}, "
-                    f"last={s['last']}, next≈{s['next']}, est/mo={cents_to_usd(s['monthly'])})[/dim]"
+                    f"last={s['last']}, next~{s['next']}, est/mo={cents_to_usd(s['monthly'])})[/dim]"
                 )
 
         console.print("")
@@ -327,21 +409,21 @@ def report(
             console.print("    (none)")
         else:
             for m in new_merchants[:top]:
-                console.print(f"    • {m}")
+                console.print(f"    * {m}")
 
         console.print("  [bold]Amount spikes (latest vs baseline)[/bold]")
         if not spikes:
             console.print("    (none)")
         else:
             for label, d, a, med in spikes[:top]:
-                console.print(f"    • {label} on {d}: {cents_to_usd(a)} vs baseline {cents_to_usd(med)}")
+                console.print(f"    * {label} on {d}: {cents_to_usd(a)} vs baseline {cents_to_usd(med)}")
 
         console.print("  [bold]Duplicate-like[/bold]")
         if not dups:
             console.print("    (none)")
         else:
             for label, d, a, n in dups[:top]:
-                console.print(f"    • {label} on {d}: {cents_to_usd(a)} × {n}")
+                console.print(f"    * {label} on {d}: {cents_to_usd(a)} x {n}")
 
     finally:
         conn.close()
@@ -356,9 +438,6 @@ def subs_pick(
     Add a subscription/watchlist entry locally (data-safe, no secrets).
     Writes to ./exports/watchlist.csv (host) via /app/exports in container.
     """
-    import csv
-    import os
-
     cfg = load_config()
     setup_logging(cfg)
 
@@ -400,14 +479,20 @@ def subs_pick(
 
         out_dir = "/app/exports"
         os.makedirs(out_dir, exist_ok=True)
-        path = os.path.join(out_dir, "watchlist.csv")
+        path = WATCHLIST_PATH
 
-        exists = os.path.exists(path)
-        with open(path, "a", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=list(entry.keys()))
-            if not exists:
-                w.writeheader()
-            w.writerow(entry)
+        lock = _acquire_watchlist_lock()
+        try:
+            with lock:
+                exists = os.path.exists(path)
+                with open(path, "a", newline="", encoding="utf-8") as f:
+                    w = csv.DictWriter(f, fieldnames=list(entry.keys()))
+                    if not exists:
+                        w.writeheader()
+                    w.writerow(entry)
+        except filelock.Timeout:
+            console.print("[red]Could not acquire lock on watchlist.csv (another process may be writing)[/red]")
+            raise typer.Exit(code=1)
 
         console.print(f"[green]watchlisted[/green] {entry['payee_norm']} (occurrences={entry['occurrences']})")
     finally:
@@ -416,12 +501,9 @@ def subs_pick(
 
 @app.command("watchlist-show")
 def watchlist_show():
-    import csv
-    import os
-
-    path = "/app/exports/watchlist.csv"
+    path = WATCHLIST_PATH
     if not os.path.exists(path):
-        console.print("[yellow]No watchlist.csv found yet.[/yellow]")
+        console.print("[yellow]No watchlist.csv found yet.[yellow]")
         raise typer.Exit(code=1)
 
     with open(path, "r", encoding="utf-8") as f:
@@ -433,7 +515,7 @@ def watchlist_show():
 
     for r in rows:
         console.print(
-            f"• {r.get('payee_norm','')}  "
+            f"* {r.get('payee_norm','')}  "
             f"[dim](occ={r.get('occurrences','')}, avg_abs_cents={r.get('avg_abs_amount_cents','')}, "
             f"last={r.get('last_seen','')}, note={r.get('note','')})[/dim]"
         )
@@ -443,45 +525,48 @@ def watchlist_show():
 def watchlist_done(
     label_contains: str = typer.Argument(..., help="Substring match for payee_norm to mark done"),
 ):
-    import csv
-    import os
-    from datetime import datetime
-
-    path = "/app/exports/watchlist.csv"
+    path = WATCHLIST_PATH
     if not os.path.exists(path):
         console.print("[yellow]No watchlist.csv found.[/yellow]")
         raise typer.Exit(code=1)
 
-    with open(path, "r", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
+    lock = _acquire_watchlist_lock()
+    try:
+        with lock:
+            with open(path, "r", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
 
-    if not rows:
-        console.print("[yellow]Watchlist is empty.[/yellow]")
-        return
+            if not rows:
+                console.print("[yellow]Watchlist is empty.[/yellow]")
+                return
 
-    needle = label_contains.strip().lower()
-    changed = 0
-    now = datetime.utcnow().isoformat()
+            needle = label_contains.strip().lower()
+            changed = 0
+            now = datetime.now(timezone.utc).isoformat()
 
-    for r in rows:
-        r.setdefault("status", "")
-        r.setdefault("handled_at", "")
+            for r in rows:
+                r.setdefault("status", "")
+                r.setdefault("handled_at", "")
 
-    for r in rows:
-        if needle in (r.get("payee_norm", "").lower()):
-            r["status"] = "done"
-            r["handled_at"] = now
-            changed += 1
+            for r in rows:
+                if needle in (r.get("payee_norm", "").lower()):
+                    r["status"] = "done"
+                    r["handled_at"] = now
+                    changed += 1
 
-    if changed == 0:
-        console.print("[yellow]No matching watchlist entries.[/yellow]")
+            if changed == 0:
+                console.print("[yellow]No matching watchlist entries.[/yellow]")
+                raise typer.Exit(code=1)
+
+            fieldnames = list(rows[0].keys())
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                w = csv.DictWriter(f, fieldnames=fieldnames)
+                w.writeheader()
+                w.writerows(rows)
+
+    except filelock.Timeout:
+        console.print("[red]Could not acquire lock on watchlist.csv (another process may be writing)[/red]")
         raise typer.Exit(code=1)
-
-    fieldnames = list(rows[0].keys())
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames)
-        w.writeheader()
-        w.writerows(rows)
 
     console.print(f"[green]marked done[/green] matches={changed}")
 
@@ -494,13 +579,6 @@ def export_csv(
     """
     Export enriched transactions + rollups + recurring candidates + actions table (Sheets friendly).
     """
-    import csv
-    import os
-    from collections import defaultdict
-    import statistics
-    from pathlib import Path
-    from datetime import datetime
-
     cfg = load_config()
     setup_logging(cfg)
 
@@ -542,10 +620,47 @@ def export_csv(
             or "cc payment" in s
         )
 
+    def classify_family(label: str) -> tuple[str, str]:
+        s = (label or "").lower()
+
+        # Amazon
+        if "amazon" in s or "prime" in s:
+            if "tip" in s:
+                return ("amazon", "tip")
+            if "prime video" in s:
+                return ("amazon", "prime_video")
+            if "prime" in s:
+                return ("amazon", "prime")
+            return ("amazon", "amazon_misc")
+
+        # Google / YouTube
+        if "youtube" in s or "google" in s:
+            if "fiber" in s:
+                return ("google", "fiber")
+            if "premium" in s:
+                return ("google", "youtube_premium")
+            if "member" in s or "membership" in s:
+                return ("google", "youtube_membership")
+            if "youtube" in s:
+                return ("google", "youtube_misc")
+            return ("google", "google_misc")
+
+        # Disney bundle
+        if "disney" in s or "hulu" in s or "espn" in s:
+            if "disney" in s and "hulu" in s:
+                return ("disney_bundle", "bundle")
+            if "disney" in s:
+                return ("disney_bundle", "disney")
+            if "hulu" in s:
+                return ("disney_bundle", "hulu")
+            return ("disney_bundle", "espn")
+
+        return ("other", "other")
+
     try:
         since = (date.today() - timedelta(days=days)).isoformat()
 
-        # ---- transactions.csv (enriched)
+        # ---- transactions.csv (enriched + family/subtype)
         tx = conn.execute(
             """
             SELECT
@@ -576,6 +691,8 @@ def export_csv(
                     "amount_cents",
                     "currency",
                     "payee_norm",
+                    "family",
+                    "subtype",
                     "merchant",
                     "description",
                 ]
@@ -583,6 +700,7 @@ def export_csv(
             for r in tx:
                 cents = int(r["amount_cents"])
                 direction = "outflow" if cents < 0 else ("inflow" if cents > 0 else "zero")
+                family, subtype = classify_family(r["payee_norm"])
                 w.writerow(
                     [
                         r["posted_at"],
@@ -593,6 +711,8 @@ def export_csv(
                         cents,
                         r["currency"],
                         r["payee_norm"],
+                        family,
+                        subtype,
                         r["merchant"],
                         r["description"],
                     ]
@@ -748,9 +868,13 @@ def export_csv(
             confidence += 0.35 if stable else 0.0
             confidence += 0.10 if (date.today() - last_seen).days <= (step + tol) else 0.0
 
+            family, subtype = classify_family(label)
+
             candidates.append(
                 {
                     "label": label,
+                    "family": family,
+                    "subtype": subtype,
                     "occurrences": len(items),
                     "cadence_guess": cadence,
                     "monthly_est_cents": monthly_est,
@@ -771,6 +895,8 @@ def export_csv(
             w.writerow(
                 [
                     "label",
+                    "family",
+                    "subtype",
                     "occurrences",
                     "cadence_guess",
                     "monthly_est_cents",
@@ -787,6 +913,8 @@ def export_csv(
                 w.writerow(
                     [
                         c["label"],
+                        c["family"],
+                        c["subtype"],
                         c["occurrences"],
                         c["cadence_guess"],
                         c["monthly_est_cents"],
@@ -814,6 +942,8 @@ def export_csv(
             w.writerow(
                 [
                     "payee_norm",
+                    "family",
+                    "subtype",
                     "monthly_est_cents",
                     "cadence_guess",
                     "occurrences",
@@ -832,6 +962,8 @@ def export_csv(
                 w.writerow(
                     [
                         c["label"],
+                        c["family"],
+                        c["subtype"],
                         c["monthly_est_cents"],
                         c["cadence_guess"],
                         c["occurrences"],
@@ -846,10 +978,894 @@ def export_csv(
                     ]
                 )
 
+        # ---- sketchy_charges.csv (new RocketMoney-like alerts)
+        sketchy_path = os.path.join(out, "sketchy_charges.csv")
+        alerts = detect_sketchy(conn, days=60)
+        with open(sketchy_path, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["posted_at", "merchant", "amount_usd", "pattern_type", "severity", "detail"])
+            for alert in alerts:
+                w.writerow([
+                    alert.posted_at.isoformat(),
+                    alert.merchant_norm,
+                    f"{alert.amount_cents / 100:.2f}",
+                    alert.pattern_type,
+                    alert.severity,
+                    alert.detail,
+                ])
+
+        # ---- duplicates.csv (duplicate subscription groups)
+        duplicates_path = os.path.join(out, "duplicates.csv")
+        duplicates = detect_duplicates(conn, days=days)
+        with open(duplicates_path, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["group_type", "merchants", "monthly_total_usd", "severity", "detail"])
+            for dup in duplicates:
+                w.writerow([
+                    dup.group_type,
+                    "; ".join(dup.merchants),
+                    f"{dup.total_monthly_cents / 100:.2f}",
+                    dup.severity,
+                    dup.detail,
+                ])
+
+        # ---- monthly_summary.csv (income vs spend with rolling averages)
+        summary_path = os.path.join(out, "monthly_summary.csv")
+        periods = analyze_periods(conn, TimePeriod.MONTH, num_periods=12, avg_window=3)
+        with open(summary_path, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow([
+                "period", "start_date", "end_date",
+                "income_usd", "recurring_usd", "discretionary_usd", "net_usd",
+                "avg_income_usd", "avg_recurring_usd", "avg_discretionary_usd",
+                "income_trend", "recurring_trend", "discretionary_trend",
+                "transaction_count",
+            ])
+            for p in periods:
+                w.writerow([
+                    p.period_label,
+                    p.start_date.isoformat(),
+                    p.end_date.isoformat(),
+                    f"{p.income_cents / 100:.2f}",
+                    f"{p.recurring_cents / 100:.2f}",
+                    f"{p.discretionary_cents / 100:.2f}",
+                    f"{p.net_cents / 100:.2f}",
+                    f"{p.avg_income_cents / 100:.2f}",
+                    f"{p.avg_recurring_cents / 100:.2f}",
+                    f"{p.avg_discretionary_cents / 100:.2f}",
+                    p.income_trend,
+                    p.recurring_trend,
+                    p.discretionary_trend,
+                    p.transaction_count,
+                ])
+
         console.print(
             f"[green]export complete[/green] wrote: transactions.csv, daily_rollup.csv, weekly_rollup.csv, "
-            f"monthly_rollup.csv, subscription_candidates.csv, actions.csv -> {out}"
+            f"monthly_rollup.csv, subscription_candidates.csv, actions.csv, sketchy_charges.csv, "
+            f"duplicates.csv, monthly_summary.csv -> {out}"
         )
+    finally:
+        conn.close()
+
+
+@app.command("bundle-check")
+def bundle_check(
+    days: int = typer.Option(400, help="Lookback window in days."),
+    window_days: int = typer.Option(3, help="Charges within this many days count as 'nearby'."),
+):
+    """
+    Heuristic: flag possible duplicate subscriptions / bundles.
+    Looks for:
+      1) same vendor family keywords (disney/hulu/espn, apple, amazon, google, microsoft, etc.)
+      2) multiple recurring candidates in same family
+      3) charges occurring on nearby dates (suggests separate subs)
+    """
+    cfg = load_config()
+    setup_logging(cfg)
+
+    conn = dbmod.connect(cfg.db_path)
+    dbmod.init_db(conn)
+
+    def parse_date(s: str):
+        return datetime.fromisoformat(s).date()
+
+    families = {
+        "disney_bundle": ["disney", "hulu", "espn"],
+        "apple": ["apple", "icloud", "app store"],
+        "amazon": ["amazon", "prime"],
+        "google": ["google", "youtube"],
+        "microsoft": ["microsoft", "xbox", "office"],
+        "netflix": ["netflix"],
+        "spotify": ["spotify"],
+    }
+
+    try:
+        since = (date.today() - timedelta(days=days)).isoformat()
+        rows = conn.execute(
+            """
+            SELECT
+              posted_at,
+              ABS(amount_cents) AS abs_amount_cents,
+              TRIM(LOWER(COALESCE(NULLIF(merchant,''), NULLIF(description,''), ''))) AS payee_norm
+            FROM transactions
+            WHERE posted_at >= ?
+              AND amount_cents < 0
+              AND payee_norm <> ''
+            ORDER BY posted_at ASC
+            """,
+            (since,),
+        ).fetchall()
+
+        fam_tx = defaultdict(list)  # fam -> list[(date, payee_norm, cents)]
+        for r in rows:
+            label = r["payee_norm"]
+            d = parse_date(r["posted_at"])
+            cents = int(r["abs_amount_cents"])
+
+            matched = None
+            for fam, keys in families.items():
+                if any(k in label for k in keys):
+                    matched = fam
+                    break
+            if matched:
+                fam_tx[matched].append((d, label, cents))
+
+        flagged = []
+        for fam, items in fam_tx.items():
+            if len(items) < 2:
+                continue
+            items.sort(key=lambda x: x[0])
+
+            labels = sorted(set(l for _, l, _ in items))
+            if len(labels) < 2:
+                continue
+
+            nearby = 0
+            for i in range(len(items)):
+                for j in range(i + 1, len(items)):
+                    di, li, _ = items[i]
+                    dj, lj, _ = items[j]
+                    if (dj - di).days > window_days:
+                        break
+                    if li != lj:
+                        nearby += 1
+
+            flagged.append((fam, len(labels), len(items), nearby, labels))
+
+        if not flagged:
+            console.print("[green]No bundle/duplicate signals found with current heuristics.[/green]")
+            return
+
+        flagged.sort(key=lambda x: (x[3], x[1], x[2]), reverse=True)
+
+        console.print("[bold]Bundle / duplicate signals[/bold]")
+        for fam, uniq_labels, total, nearby, labels in flagged:
+            console.print(f"* {fam}  [dim](labels={uniq_labels}, charges={total}, nearby_pairs={nearby})[/dim]")
+            for l in labels[:10]:
+                console.print(f"   - {l}")
+
+        # --- Export: actionable, per-label bundle rows (Sheets-friendly) ---
+        # Responsible reporting: aggregated label stats only (no raw memos / per-tx detail).
+        export_dir = Path("./exports")
+        export_dir.mkdir(parents=True, exist_ok=True)
+        out_path = export_dir / "bundle_items.csv"
+
+        def _usd(cents: int) -> str:
+            return f"{cents/100:.2f}"
+
+        def _median_interval_days(dates):
+            if len(dates) < 2:
+                return ""
+            ds = sorted(dates)
+            intervals = [(ds[i] - ds[i - 1]).days for i in range(1, len(ds))]
+            intervals = [x for x in intervals if x > 0]
+            if not intervals:
+                return ""
+            return int(statistics.median(intervals))
+
+        def _typical_bill_day(dates):
+            if not dates:
+                return ""
+            days = [d.day for d in dates]
+            try:
+                return int(statistics.median(days))
+            except statistics.StatisticsError:
+                return ""
+
+        with out_path.open("w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(
+                f,
+                fieldnames=[
+                    "family",
+                    "label",
+                    "charge_count",
+                    "first_date",
+                    "last_date",
+                    "median_amount_usd",
+                    "min_amount_usd",
+                    "max_amount_usd",
+                    "median_interval_days",
+                    "typical_bill_day",
+                    "suggested_role",
+                    "suggested_action",
+                ],
+            )
+            w.writeheader()
+
+            for fam, items in fam_tx.items():
+                if len(items) < 2:
+                    continue
+
+                by_label = {}
+                for d, label, cents in items:
+                    by_label.setdefault(label, []).append((d, cents))
+
+                if len(by_label) < 2:
+                    continue
+
+                # Primary candidate = most occurrences (ties broken by most recent)
+                ranked = sorted(
+                    by_label.items(),
+                    key=lambda kv: (len(kv[1]), max(x[0] for x in kv[1])),
+                    reverse=True,
+                )
+                primary_label = ranked[0][0]
+
+                for label, entries in ranked:
+                    dates = [d for d, _ in entries]
+                    cents_list = [c for _, c in entries]
+                    cents_sorted = sorted(cents_list)
+                    med_cents = int(statistics.median(cents_sorted)) if cents_sorted else 0
+
+                    role = "primary_candidate" if label == primary_label else "component_candidate"
+                    action = (
+                        "Verify this is the bundle/master subscription; confirm other family charges are included; keep if correct."
+                        if role == "primary_candidate"
+                        else "Check if this is included in the bundle/master; cancel or downgrade if redundant."
+                    )
+
+                    w.writerow(
+                        {
+                            "family": fam,
+                            "label": label,
+                            "charge_count": len(entries),
+                            "first_date": str(min(dates)),
+                            "last_date": str(max(dates)),
+                            "median_amount_usd": _usd(med_cents),
+                            "min_amount_usd": _usd(min(cents_list)) if cents_list else "",
+                            "max_amount_usd": _usd(max(cents_list)) if cents_list else "",
+                            "median_interval_days": _median_interval_days(dates),
+                            "typical_bill_day": _typical_bill_day(dates),
+                            "suggested_role": role,
+                            "suggested_action": action,
+                        }
+                    )
+
+        console.print(f"[dim]Wrote: {out_path}[/dim]")
+
+    finally:
+        conn.close()
+
+
+# ---------------------------
+# Monthly Survival (budgeting)
+# ---------------------------
+
+
+def _parse_month(month: str):
+    """Return (start_date_iso, end_date_iso) for YYYY-MM."""
+    # Validate format
+    try:
+        dt = datetime.strptime(month, "%Y-%m")
+    except ValueError as e:
+        raise typer.BadParameter("month must be YYYY-MM") from e
+    start = date(dt.year, dt.month, 1)
+    # compute first day of next month
+    if dt.month == 12:
+        end = date(dt.year + 1, 1, 1)
+    else:
+        end = date(dt.year, dt.month + 1, 1)
+    return start.isoformat(), end.isoformat()
+
+
+def _payee_norm(label: str) -> str:
+    return (label or "").strip().lower()
+
+
+def _usd(cents: int) -> float:
+    return round(float(cents) / 100.0, 2)
+
+
+def _load_income_rules():
+    """
+    Load income rules from /app/data/income_sources.csv if present.
+
+    CSV format:
+      pattern,name
+    where pattern is a case-insensitive substring to match against payee_norm.
+    """
+    p = Path("/app/data/income_sources.csv")
+    rules = []
+    if not p.exists():
+        return rules
+    try:
+        with p.open("r", newline="", encoding="utf-8") as f:
+            r = csv.DictReader(f)
+            for row in r:
+                pat = (row.get("pattern") or "").strip().lower()
+                name = (row.get("name") or "").strip()
+                if pat:
+                    rules.append((pat, name or pat))
+    except Exception as e:
+        log.warning(f"Failed to load income rules: {type(e).__name__}: {e}")
+        return rules
+    return rules
+
+
+def _classify_income(label_norm: str, rules):
+    for pat, name in rules:
+        if pat in label_norm:
+            return name
+    return ""
+
+
+def _sha1_rows(rows):
+    import hashlib
+
+    h = hashlib.sha1()
+    for r in rows:
+        # stable ordering assumed
+        s = f"{r['posted_at']}|{r['amount_cents']}|{(r['fingerprint'] if 'fingerprint' in r.keys() else '')}"
+        h.update(s.encode("utf-8", errors="ignore"))
+        h.update(b"\n")
+    return h.hexdigest()
+
+
+@app.command("month-close")
+def month_close(
+    month: str = typer.Option(..., help="Month to close in YYYY-MM (e.g. 2026-01)."),
+):
+    """
+    Close a month: compute totals + data quality signals and write a canonical month_close CSV
+    plus state file under /app/data. This is the "source of truth" snapshot.
+    """
+    import json
+
+    cfg = load_config()
+    setup_logging(cfg)
+
+    conn = dbmod.connect(cfg.db_path)
+    dbmod.init_db(conn)
+
+    start_iso, end_iso = _parse_month(month)
+
+    try:
+        rows = conn.execute(
+            """
+            SELECT posted_at, amount_cents, fingerprint,
+                   COALESCE(NULLIF(merchant,''), NULLIF(description,'')) AS label
+            FROM transactions
+            WHERE posted_at >= ?
+              AND posted_at < ?
+            ORDER BY posted_at ASC
+            """,
+            (start_iso, end_iso),
+        ).fetchall()
+
+        income_cents = sum(int(r["amount_cents"]) for r in rows if int(r["amount_cents"]) > 0)
+        spend_cents = sum(abs(int(r["amount_cents"])) for r in rows if int(r["amount_cents"]) < 0)
+        net_cents = income_cents - spend_cents
+
+        # Coverage signals
+        days = sorted({r["posted_at"] for r in rows})
+        coverage_days = len(days)
+
+        # longest gap between transaction days (rough)
+        def _d(s):
+            return datetime.fromisoformat(s).date()
+
+        gaps = []
+        if days:
+            ds = [_d(d) for d in days]
+            for i in range(1, len(ds)):
+                gaps.append((ds[i] - ds[i - 1]).days)
+        max_gap_days = max(gaps) if gaps else 0
+
+        # fingerprint duplicates (possible double imports)
+        fp = [r["fingerprint"] for r in rows if ("fingerprint" in r.keys() and r["fingerprint"])]
+        c = Counter(fp)
+        dup_fp_kinds = sum(1 for k, v in c.items() if v > 1)
+        dup_fp_extra_rows = sum((v - 1) for v in c.values() if v > 1)
+
+        checksum = _sha1_rows(rows)
+
+        # Write month_close CSV
+        out_dir = Path("/app/exports")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"month_close_{month}.csv"
+
+        fieldnames = ["month", "metric", "value", "notes", "source"]
+        out_rows = [
+            {"month": month, "metric": "income_total", "value": _usd(income_cents), "notes": "", "source": "transactions"},
+            {"month": month, "metric": "spend_total", "value": _usd(spend_cents), "notes": "", "source": "transactions"},
+            {"month": month, "metric": "net", "value": _usd(net_cents), "notes": "", "source": "computed"},
+            {"month": month, "metric": "txn_count", "value": len(rows), "notes": "", "source": "transactions"},
+            {"month": month, "metric": "coverage_days", "value": coverage_days, "notes": "", "source": "computed"},
+            {"month": month, "metric": "max_gap_days", "value": max_gap_days, "notes": "largest gap between transaction days", "source": "computed"},
+            {"month": month, "metric": "dup_fingerprint_kinds", "value": dup_fp_kinds, "notes": "fingerprints seen >1x", "source": "computed"},
+            {"month": month, "metric": "dup_fingerprint_extra_rows", "value": dup_fp_extra_rows, "notes": "rows beyond first for dup fingerprints", "source": "computed"},
+            {"month": month, "metric": "checksum_sha1", "value": checksum, "notes": "", "source": "computed"},
+        ]
+
+        with out_path.open("w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=fieldnames)
+            w.writeheader()
+            w.writerows(out_rows)
+
+        # State file (for reproducibility)
+        state_path = Path("/app/data/month_state.json")
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state = {}
+        if state_path.exists():
+            try:
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+            except Exception:
+                state = {}
+        state.setdefault("closed_months", {})
+        state["last_closed_month"] = month
+        state["closed_months"][month] = {
+            "closed_at": date.today().isoformat(),
+            "start": start_iso,
+            "end": end_iso,
+            "txn_count": len(rows),
+            "income_total": _usd(income_cents),
+            "spend_total": _usd(spend_cents),
+            "net": _usd(net_cents),
+            "coverage_days": coverage_days,
+            "max_gap_days": max_gap_days,
+            "dup_fingerprint_kinds": dup_fp_kinds,
+            "dup_fingerprint_extra_rows": dup_fp_extra_rows,
+            "checksum_sha1": checksum,
+        }
+        state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+        console.print(f"[green]Closed month {month}[/green]")
+        console.print(f"[dim]Wrote: {out_path}[/dim]")
+        console.print(f"[dim]Wrote: {state_path}[/dim]")
+
+    finally:
+        conn.close()
+
+
+@app.command("month-report")
+def month_report(
+    month: str = typer.Option(..., help="Month to report in YYYY-MM (e.g. 2026-01)."),
+    top: int = typer.Option(15, help="Top vendors / sources to include."),
+):
+    """
+    Monthly Survival report: income, spend, net, and a ranked cut plan from exports/report.csv.
+
+    Output: /app/exports/month_report_YYYY-MM.csv
+    Columns: month,section,rank,label,amount_usd,confidence,notes,source
+    """
+    cfg = load_config()
+    setup_logging(cfg)
+
+    conn = dbmod.connect(cfg.db_path)
+    dbmod.init_db(conn)
+
+    start_iso, end_iso = _parse_month(month)
+    rules = _load_income_rules()
+
+    out_dir = Path("/app/exports")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"month_report_{month}.csv"
+
+    fieldnames = ["month", "section", "rank", "label", "amount_usd", "confidence", "notes", "source"]
+    rows_out = []
+
+    def wr(section: str, rank: int, label: str, amount_usd, confidence="", notes="", source=""):
+        rows_out.append(
+            {
+                "month": month,
+                "section": section,
+                "rank": rank,
+                "label": label,
+                "amount_usd": amount_usd,
+                "confidence": confidence,
+                "notes": notes,
+                "source": source,
+            }
+        )
+
+    try:
+        tx = conn.execute(
+            """
+            SELECT posted_at, amount_cents,
+                   COALESCE(NULLIF(merchant,''), NULLIF(description,'')) AS label
+            FROM transactions
+            WHERE posted_at >= ?
+              AND posted_at < ?
+              AND label IS NOT NULL
+            """,
+            (start_iso, end_iso),
+        ).fetchall()
+
+        # Income/spend
+        income = []
+        spend = []
+        for r in tx:
+            cents = int(r["amount_cents"])
+            label = r["label"] or ""
+            ln = _payee_norm(label)
+            if cents > 0:
+                src = _classify_income(ln, rules)
+                income.append((label, cents, src))
+            elif cents < 0:
+                spend.append((label, abs(cents)))
+
+        income_total = sum(c for _, c, _ in income)
+        spend_total = sum(c for _, c in spend)
+        net = income_total - spend_total
+
+        matched_income = sum(c for _, c, src in income if src)
+        income_conf = "low"
+        if income_total > 0:
+            ratio = matched_income / income_total
+            if rules and ratio >= 0.80:
+                income_conf = "high"
+            elif matched_income > 0:
+                income_conf = "medium"
+            else:
+                income_conf = "low"
+
+        wr("summary", 0, "income_total", _usd(income_total), income_conf, "", "transactions")
+        wr("summary", 1, "spend_total", _usd(spend_total), "", "", "transactions")
+        wr("summary", 2, "net", _usd(net), "", "", "computed")
+
+        required_cuts = max(0.0, round((-net) / 100.0, 2)) if net < 0 else 0.0
+        wr("survival", 0, "required_cuts_to_break_even", required_cuts, "", "", "computed")
+
+        # Cut plan from exports/report.csv (if exists)
+        cut_plan_savings = 0.0
+        report_path = Path("/app/exports/report.csv")
+        cut_candidates = []
+        if report_path.exists():
+            try:
+                with report_path.open("r", newline="", encoding="utf-8") as f:
+                    rr = csv.DictReader(f)
+                    for row in rr:
+                        section = (row.get("section") or "").strip()
+                        if section not in ("next_actions", "subscription_candidate", "bundle_component", "anomaly_price_increase"):
+                            continue
+                        # respect watch directives
+                        ws = (row.get("watch_status") or "").strip().lower()
+                        if ws in ("keep", "ignore", "done"):
+                            continue
+                        try:
+                            impact = float(row.get("cancel_impact_usd") or row.get("monthly_est_usd") or 0.0)
+                        except Exception:
+                            impact = 0.0
+                        if impact < 5:
+                            continue
+                        ds = (row.get("decision_suggestion") or "").strip().upper() or "REVIEW"
+                        label = row.get("label") or ""
+                        notes = ds
+                        sa = (row.get("suggested_action") or "").strip()
+                        if sa:
+                            notes = f"{ds} | {sa}"
+                        cut_candidates.append((impact, ds, label, notes))
+            except Exception as e:
+                cut_candidates = []
+                wr("survival", 1, "cut_plan_savings", 0, "", f"failed to read report.csv: {type(e).__name__}", "report.csv")
+        else:
+            wr("survival", 1, "cut_plan_savings", 0, "", "missing exports/report.csv (run `fin report` first)", "report.csv")
+
+        if cut_candidates:
+            # rank and write top cuts
+            cut_candidates.sort(key=lambda x: x[0], reverse=True)
+            top_cuts = cut_candidates[:top]
+            cut_plan_savings = round(sum(x[0] for x in top_cuts), 2)
+            wr("survival", 1, "cut_plan_savings", cut_plan_savings, "", f"from top {len(top_cuts)} cut candidates", "report.csv")
+            net_after = round(_usd(net) + cut_plan_savings, 2)
+            wr("survival", 2, "net_after_cut_plan", net_after, "", "", "computed")
+
+            for i, (impact, ds, label, notes) in enumerate(top_cuts):
+                wr("cut_plan", i, label, round(impact, 2), "", notes, "report.csv")
+        else:
+            # no candidates
+            if report_path.exists():
+                wr("survival", 1, "cut_plan_savings", 0, "", "no eligible cut candidates (check watchlist directives or impact thresholds)", "report.csv")
+            wr("survival", 2, "net_after_cut_plan", _usd(net), "", "", "computed")
+
+        # Top spend vendors
+        spend_by = defaultdict(int)
+        spend_count = Counter()
+        spend_rep = {}
+
+        for label, cents in spend:
+            n = _payee_norm(label)
+            spend_by[n] += int(cents)
+            spend_count[n] += 1
+            if n not in spend_rep:
+                spend_rep[n] = (label or n).strip()
+
+        top_spend = sorted(spend_by.items(), key=lambda x: x[1], reverse=True)[:top]
+        for i, (n, cents) in enumerate(top_spend):
+            rep = spend_rep.get(n, n)
+            wr("top_spend_vendors", i, rep, _usd(cents), "", f"occurrences={spend_count[n]}", "transactions")
+
+        # Income sources
+        inc_by = defaultdict(int)
+        inc_count = Counter()
+        inc_rep = {}
+        inc_kind = {}  # key -> "rule" or "heuristic"
+
+        for label, cents, src in income:
+            if src:
+                key = src
+                inc_kind[key] = "rule"
+                if key not in inc_rep:
+                    inc_rep[key] = src
+            else:
+                key = _payee_norm(label)
+                inc_kind.setdefault(key, "heuristic")
+                if key not in inc_rep:
+                    inc_rep[key] = (label or key).strip()
+            inc_by[key] += int(cents)
+            inc_count[key] += 1
+
+        top_inc = sorted(inc_by.items(), key=lambda x: x[1], reverse=True)[:top]
+        for i, (key, cents) in enumerate(top_inc):
+            rep = inc_rep.get(key, key)
+            kind = inc_kind.get(key, "")
+            note = f"occurrences={inc_count[key]}"
+            if kind:
+                note = f"{note} | {kind}"
+            wr("income_sources", i, rep, _usd(cents), "", note, "transactions")
+
+        # Unknown income total (helpful for reliability)
+        unknown_income = income_total - matched_income
+        if income_total > 0:
+            wr("income_quality", 0, "matched_income_total", _usd(matched_income), income_conf, "", "computed")
+            wr(
+                "income_quality",
+                1,
+                "unknown_income_total",
+                _usd(unknown_income),
+                income_conf,
+                "add patterns to data/income_sources.csv to increase confidence",
+                "computed",
+            )
+
+        with out_path.open("w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=fieldnames)
+            w.writeheader()
+            w.writerows(rows_out)
+
+        console.print(f"[green]Wrote: {out_path}[/green]")
+
+    finally:
+        conn.close()
+
+
+@app.command("export-sketchy")
+def export_sketchy(
+    out: str = typer.Option("/app/exports", help="Output directory for CSV exports."),
+    days: int = typer.Option(60, help="Lookback window in days."),
+):
+    """
+    Export sketchy/suspicious charges to CSV.
+
+    Detects:
+    - Duplicate charges (same merchant + amount within 3 days)
+    - Unusual amounts (>2x median for that merchant)
+    - Test charges ($0.01-$1.00)
+    - Round amount spikes ($50/$100/$200 first time)
+    - Rapid-fire charges (3+ in 24h)
+    - Refund + recharge patterns
+    """
+    cfg = load_config()
+    setup_logging(cfg)
+
+    os.makedirs(out, exist_ok=True)
+
+    conn = dbmod.connect(cfg.db_path)
+    dbmod.init_db(conn)
+
+    try:
+        alerts = detect_sketchy(conn, days=days)
+
+        out_path = os.path.join(out, "sketchy_charges.csv")
+        with open(out_path, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["posted_at", "merchant", "amount_usd", "pattern_type", "severity", "detail"])
+            for alert in alerts:
+                w.writerow([
+                    alert.posted_at.isoformat(),
+                    alert.merchant_norm,
+                    f"{alert.amount_cents / 100:.2f}",
+                    alert.pattern_type,
+                    alert.severity,
+                    alert.detail,
+                ])
+
+        console.print(f"[green]export complete[/green] wrote {len(alerts)} alerts -> {out_path}")
+    finally:
+        conn.close()
+
+
+@app.command("export-duplicates")
+def export_duplicates_cmd(
+    out: str = typer.Option("/app/exports", help="Output directory for CSV exports."),
+    days: int = typer.Option(400, help="Lookback window in days."),
+):
+    """
+    Export duplicate subscription groups to CSV.
+
+    Detects:
+    - Fuzzy merchant matching (NETFLIX vs NETFLIX.COM)
+    - Similar subscriptions (same amount +/- 10%, same cadence)
+    - Known bundle families (Disney, Apple, Amazon, etc.)
+    """
+    cfg = load_config()
+    setup_logging(cfg)
+
+    os.makedirs(out, exist_ok=True)
+
+    conn = dbmod.connect(cfg.db_path)
+    dbmod.init_db(conn)
+
+    try:
+        duplicates = detect_duplicates(conn, days=days)
+
+        out_path = os.path.join(out, "duplicates.csv")
+        with open(out_path, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["group_type", "merchants", "monthly_total_usd", "severity", "detail"])
+            for dup in duplicates:
+                w.writerow([
+                    dup.group_type,
+                    "; ".join(dup.merchants),
+                    f"{dup.total_monthly_cents / 100:.2f}",
+                    dup.severity,
+                    dup.detail,
+                ])
+
+        console.print(f"[green]export complete[/green] wrote {len(duplicates)} groups -> {out_path}")
+    finally:
+        conn.close()
+
+
+@app.command("export-summary")
+def export_summary_cmd(
+    out: str = typer.Option("/app/exports", help="Output directory for CSV exports."),
+    period: str = typer.Option("month", help="Period type: month, quarter, year"),
+    num_periods: int = typer.Option(12, help="Number of periods to export."),
+):
+    """
+    Export income vs spend summary with rolling averages.
+    """
+    cfg = load_config()
+    setup_logging(cfg)
+
+    os.makedirs(out, exist_ok=True)
+
+    conn = dbmod.connect(cfg.db_path)
+    dbmod.init_db(conn)
+
+    period_map = {"month": TimePeriod.MONTH, "quarter": TimePeriod.QUARTER, "year": TimePeriod.YEAR}
+    period_type = period_map.get(period.lower(), TimePeriod.MONTH)
+
+    try:
+        periods = analyze_periods(conn, period_type, num_periods=num_periods, avg_window=3)
+
+        out_path = os.path.join(out, f"{period}_summary.csv")
+        with open(out_path, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow([
+                "period", "start_date", "end_date",
+                "income_usd", "recurring_usd", "discretionary_usd", "net_usd",
+                "avg_income_usd", "avg_recurring_usd", "avg_discretionary_usd",
+                "income_trend", "recurring_trend", "discretionary_trend",
+                "transaction_count",
+            ])
+            for p in periods:
+                w.writerow([
+                    p.period_label,
+                    p.start_date.isoformat(),
+                    p.end_date.isoformat(),
+                    f"{p.income_cents / 100:.2f}",
+                    f"{p.recurring_cents / 100:.2f}",
+                    f"{p.discretionary_cents / 100:.2f}",
+                    f"{p.net_cents / 100:.2f}",
+                    f"{p.avg_income_cents / 100:.2f}",
+                    f"{p.avg_recurring_cents / 100:.2f}",
+                    f"{p.avg_discretionary_cents / 100:.2f}",
+                    p.income_trend,
+                    p.recurring_trend,
+                    p.discretionary_trend,
+                    p.transaction_count,
+                ])
+
+        console.print(f"[green]export complete[/green] wrote {len(periods)} periods -> {out_path}")
+    finally:
+        conn.close()
+
+
+@app.command("dashboard-cli")
+def dashboard_cli(
+    period: str = typer.Option("month", help="Period type: month, quarter, year"),
+):
+    """
+    CLI dashboard: show financial health summary, alerts, and duplicates.
+    """
+    cfg = load_config()
+    setup_logging(cfg)
+
+    conn = dbmod.connect(cfg.db_path)
+    dbmod.init_db(conn)
+
+    period_map = {"month": TimePeriod.MONTH, "quarter": TimePeriod.QUARTER, "year": TimePeriod.YEAR}
+    period_type = period_map.get(period.lower(), TimePeriod.MONTH)
+
+    try:
+        # Get current period analysis
+        periods = analyze_periods(conn, period_type, num_periods=1, avg_window=3)
+
+        if not periods:
+            console.print("[yellow]No transaction data available.[/yellow]")
+            return
+
+        p = periods[0]
+
+        # Format trend arrows
+        def trend_arrow(t):
+            if t == "up":
+                return "[green]^[/green]"
+            elif t == "down":
+                return "[red]v[/red]"
+            return "[dim]-[/dim]"
+
+        console.print()
+        console.print(f"[bold]FINANCIAL HEALTH - {p.period_label}[/bold]")
+        console.print()
+
+        console.print(f"  Income:        [green]${p.income_cents/100:>10,.2f}[/green]  {trend_arrow(p.income_trend)} vs prev  [dim]avg: ${p.avg_income_cents/100:,.0f}[/dim]")
+        console.print(f"  Recurring:     [red]${p.recurring_cents/100:>10,.2f}[/red]  {trend_arrow(p.recurring_trend)} {p.recurring_trend:<6}  [dim]avg: ${p.avg_recurring_cents/100:,.0f}[/dim]")
+        console.print(f"  Discretionary: [red]${p.discretionary_cents/100:>10,.2f}[/red]  {trend_arrow(p.discretionary_trend)} vs prev  [dim]avg: ${p.avg_discretionary_cents/100:,.0f}[/dim]")
+
+        net_color = "green" if p.net_cents >= 0 else "red"
+        net_status = "On track" if p.net_cents >= 0 else "Over budget"
+        console.print(f"  Net:           [{net_color}]${p.net_cents/100:>10,.2f}[/{net_color}]  {net_status}")
+        console.print()
+
+        # Alerts
+        alerts = detect_sketchy(conn, days=60)
+        if alerts:
+            console.print(f"[bold yellow]ALERTS ({len(alerts)})[/bold yellow]")
+            for a in alerts[:5]:
+                icon = "[red]*[/red]" if a.severity == "high" else "[yellow]*[/yellow]" if a.severity == "medium" else "[dim]*[/dim]"
+                console.print(f"  {icon} {a.pattern_type.replace('_', ' ').title()}: {a.merchant_norm} ${a.amount_cents/100:.2f}")
+                console.print(f"      [dim]{a.detail}[/dim]")
+            if len(alerts) > 5:
+                console.print(f"  [dim]+ {len(alerts) - 5} more...[/dim]")
+            console.print()
+
+        # Duplicates
+        duplicates = detect_duplicates(conn, days=400)
+        if duplicates:
+            console.print(f"[bold yellow]POSSIBLE DUPLICATE SUBSCRIPTIONS ({len(duplicates)})[/bold yellow]")
+            for d in duplicates[:3]:
+                console.print(f"  * {d.detail} [dim](${d.total_monthly_cents/100:.2f}/mo)[/dim]")
+                for item in d.items[:3]:
+                    console.print(f"      - {item[0]} ${item[1]/100:.2f}/mo ({item[2]})")
+            if len(duplicates) > 3:
+                console.print(f"  [dim]+ {len(duplicates) - 3} more...[/dim]")
+            console.print()
+
+        console.print("[dim]Run 'fin web' to see full dashboard in browser[/dim]")
+
     finally:
         conn.close()
 

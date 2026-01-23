@@ -1,0 +1,1347 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - fin{% endblock %}
+
+{% block content %}
+<h1>Financial Dashboard</h1>
+
+<!-- Transaction Search -->
+<div class="search-container">
+    <div class="search-box">
+        <input type="text" id="searchInput" placeholder="Search transactions (merchant, description)..." autocomplete="off">
+        <button class="search-clear" id="searchClear" style="display: none;" onclick="clearSearch()">&#10005;</button>
+    </div>
+    <div class="search-results" id="searchResults" style="display: none;">
+        <div class="search-results-header">
+            <span id="searchResultsCount"></span>
+            <button class="btn btn-sm" onclick="clearSearch()">Close</button>
+        </div>
+        <div class="search-results-body" id="searchResultsBody"></div>
+        <div class="search-pagination" id="searchPagination" style="display: none;">
+            <button id="searchPrevBtn" onclick="searchPrevPage()">&laquo; Prev</button>
+            <span class="page-info" id="searchPageInfo">1 / 1</span>
+            <button id="searchNextBtn" onclick="searchNextPage()">Next &raquo;</button>
+        </div>
+        <div class="search-other-accounts" id="searchOtherAccounts" style="display: none;"></div>
+    </div>
+</div>
+
+{% if pending_count > 0 %}
+<div class="pending-notice">
+    <span class="pending-icon">&#9201;</span>
+    <span><strong>{{ pending_count }}</strong> pending transaction{{ 's' if pending_count != 1 else '' }} in this period.</span>
+    <span class="pending-note">Pending charges are included in the calculations shown.</span>
+</div>
+{% endif %}
+
+{# Define macro to show account filter badge in section headers #}
+{% macro account_filter_badge() %}
+{% if selected_accounts and all_accounts %}
+    {% if selected_accounts|length == 1 %}
+        {% for acc in all_accounts if acc['account_id'] in selected_accounts %}
+        <span class="section-account-badge">{{ acc['name'] }}</span>
+        {% endfor %}
+    {% else %}
+        <span class="section-account-badge">{{ selected_accounts|length }} accounts</span>
+    {% endif %}
+{% elif show_no_data %}
+    <span class="section-account-badge warning">No accounts selected</span>
+{% endif %}
+{% endmacro %}
+
+<!-- Period Selector Card -->
+<div class="card">
+    <div class="card-header">
+        <h2>
+            <span class="toggle-icon">&#9660;</span>
+            Financial Health
+        </h2>
+    </div>
+
+    <div class="card-body">
+    <!-- Period Selector and Date Range -->
+    {% set min_date = (today - timedelta(days=180)).isoformat() if today else '' %}
+    <div class="date-controls">
+        <div class="period-selector">
+            <a href="?period=this_month{% if selected_accounts %}&accounts={{ selected_accounts|join(',') }}{% endif %}" class="period-btn {% if period_type == 'this_month' and not start_date %}active{% endif %}">This Month</a>
+            <a href="?period=last_month{% if selected_accounts %}&accounts={{ selected_accounts|join(',') }}{% endif %}" class="period-btn {% if period_type == 'last_month' and not start_date %}active{% endif %}">Last Month</a>
+        </div>
+        <form class="date-range" method="get" action="/dashboard" id="dashboardForm">
+            <input type="hidden" name="period" value="{{ period_type }}">
+            <label>From:</label>
+            <input type="date" name="start_date" value="{{ start_date }}" min="{{ min_date }}" onchange="this.form.submit()">
+            <label>To:</label>
+            <input type="date" name="end_date" value="{{ end_date }}" onchange="this.form.submit()">
+            {% if start_date and end_date %}
+            <a href="?period={{ period_type }}{% if selected_accounts %}&accounts={{ selected_accounts|join(',') }}{% endif %}" class="btn btn-sm">Clear</a>
+            {% endif %}
+        </form>
+        <button type="button" class="date-limit-link" onclick="showDateLimitModal()" aria-haspopup="dialog">Max. 180 days <span class="why-link">Why?</span></button>
+    </div>
+
+    <!-- Date Limit Modal -->
+    <div id="dateLimitModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="dateLimitTitle" style="display: none;" onclick="if(event.target===this)hideDateLimitModal()">
+        <div class="modal-content">
+            <h3 id="dateLimitTitle">Why 180 days?</h3>
+            <p>Most banks only share the last 180 days of transactions through data aggregators like SimpleFIN.</p>
+            <p>For older history, download monthly statements directly from your bank's website.</p>
+            <button class="btn" onclick="hideDateLimitModal()" autofocus>Got it</button>
+        </div>
+    </div>
+
+    <!-- Account Filter -->
+    {% if all_accounts %}
+    <div class="account-filter">
+        <label class="filter-label">Accounts:</label>
+        <div class="account-chips">
+            {% for acc in all_accounts %}
+            {% set is_selected = (acc['account_id'] in selected_accounts) if selected_accounts else (not show_no_data) %}
+            <label class="account-chip{% if is_selected %} selected{% endif %}">
+                <input type="checkbox"
+                       value="{{ acc['account_id'] }}"
+                       {% if is_selected %}checked{% endif %}
+                       onchange="updateAccountFilter()">
+                <span class="chip-text">{{ acc['name'] }}</span>
+            </label>
+            {% endfor %}
+        </div>
+        {% if selected_accounts or show_no_data %}
+        <a href="?period={{ period_type }}{% if start_date %}&start_date={{ start_date }}{% endif %}{% if end_date %}&end_date={{ end_date }}{% endif %}" class="btn btn-sm" style="margin-left: 8px;">All Accounts</a>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% if current_period %}
+    <p style="color: var(--text-muted); margin-bottom: 16px;">Period: {{ current_period.period_label }}</p>
+
+    {% if expense_only_view %}
+    <!-- Expense-Only View (Credit Cards) -->
+    <div class="health-score-banner breakeven">
+        <div class="health-score-icon">💳</div>
+        <div class="health-score-text">
+            <div class="health-score-label">Card Spending</div>
+            <div class="health-score-value">
+                ${{ "%.2f"|format((current_period.recurring_cents + current_period.discretionary_cents) / 100) }}
+            </div>
+        </div>
+        <div class="health-metrics">
+            {% set total_spending = current_period.recurring_cents + current_period.discretionary_cents %}
+            {% set recurring_pct = (current_period.recurring_cents / total_spending * 100) if total_spending > 0 else 0 %}
+            <div class="health-metric" title="Recurring charges">
+                <span class="metric-value">{{ "%.0f"|format(recurring_pct) }}%</span>
+                <span class="metric-label">Recurring</span>
+            </div>
+            <div class="health-metric" title="One-time charges">
+                <span class="metric-value">{{ "%.0f"|format(100 - recurring_pct) }}%</span>
+                <span class="metric-label">One-time</span>
+            </div>
+            <div class="health-metric" title="Number of transactions">
+                <span class="metric-value">{{ current_period.transaction_count }}</span>
+                <span class="metric-label">Txns</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="stats-grid">
+        <div class="stat-box clickable" onclick="drillStatBox('recurring')" title="Click to see recurring transactions">
+            <div class="stat-label">Recurring</div>
+            <div class="stat-value neutral">${{ "%.2f"|format(current_period.recurring_cents / 100) }}</div>
+            <div class="stat-trend {{ current_period.recurring_trend }}">
+                {% if current_period.recurring_trend == 'up' %}&#8593;{% elif current_period.recurring_trend == 'down' %}&#8595;{% else %}&#8594;{% endif %}
+                vs prev
+            </div>
+            <div class="stat-avg">avg: ${{ "%.0f"|format(current_period.avg_recurring_cents / 100) }}</div>
+        </div>
+
+        <div class="stat-box clickable" onclick="drillStatBox('discretionary')" title="Click to see one-time transactions">
+            <div class="stat-label">One-time</div>
+            <div class="stat-value neutral">${{ "%.2f"|format(current_period.discretionary_cents / 100) }}</div>
+            <div class="stat-trend {{ current_period.discretionary_trend }}">
+                {% if current_period.discretionary_trend == 'up' %}&#8593;{% elif current_period.discretionary_trend == 'down' %}&#8595;{% else %}&#8594;{% endif %}
+                vs prev
+            </div>
+            <div class="stat-avg">avg: ${{ "%.0f"|format(current_period.avg_discretionary_cents / 100) }}</div>
+        </div>
+
+        <div class="stat-box">
+            <div class="stat-label">Total Spending</div>
+            <div class="stat-value neutral">
+                ${{ "%.2f"|format((current_period.recurring_cents + current_period.discretionary_cents) / 100) }}
+            </div>
+            <div class="stat-trend stable">
+                {{ current_period.transaction_count }} transactions
+            </div>
+        </div>
+    </div>
+
+    <!-- Stat Box Drill-down (for expense-only view) -->
+    <div id="stat-drilldown" class="stat-drilldown" style="display: none;">
+        <div class="stat-drilldown-header">
+            <span id="stat-drilldown-title">Transactions</span>
+            <button class="btn btn-sm" onclick="closeStatDrilldown()">Close</button>
+        </div>
+        <div class="stat-drilldown-body" id="stat-drilldown-body">
+            <div class="drilldown-loading">Loading...</div>
+        </div>
+    </div>
+
+    {% else %}
+    <!-- Full View (with Income) - Hero Insight -->
+    {% set avg_net = current_period.avg_income_cents - current_period.avg_recurring_cents - current_period.avg_discretionary_cents %}
+    <div class="hero-insight {{ 'positive' if current_period.net_cents >= 0 else 'negative' }}">
+        <div class="hero-headline">
+            {% if current_period.net_cents >= 0 %}
+            You saved <span class="hero-amount">${{ "%.0f"|format(current_period.net_cents / 100) }}</span> this period
+            {% else %}
+            You spent <span class="hero-amount">${{ "%.0f"|format((-current_period.net_cents) / 100) }}</span> more than you earned
+            {% endif %}
+        </div>
+        {% if current_period.incoming_transfer_cents > 0 %}
+        <div class="hero-transfers">
+            + ${{ "%.0f"|format(current_period.incoming_transfer_cents / 100) }} transferred in from other accounts
+        </div>
+        {% endif %}
+        <div class="hero-comparison">
+            {% if avg_net != 0 %}
+                {% set diff = current_period.net_cents - avg_net %}
+                {% set diff_pct = (diff / (avg_net if avg_net > 0 else -avg_net) * 100)|int %}
+                {% if diff > 0 %}
+                <span class="comparison-good">↑ ${{ "%.0f"|format(diff / 100) }} better</span> than your 3-month average
+                {% elif diff < 0 %}
+                <span class="comparison-bad">↓ ${{ "%.0f"|format((-diff) / 100) }} worse</span> than your 3-month average
+                {% else %}
+                → Same as your 3-month average
+                {% endif %}
+            {% else %}
+                {{ current_period.transaction_count }} transactions
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Secondary Stats Row -->
+    <div class="stats-secondary">
+        <div class="stat-secondary clickable" onclick="drillStatBox('income')" title="Click to see income">
+            <div class="stat-secondary-label">Income</div>
+            <div class="stat-secondary-value positive">${{ "%.0f"|format(current_period.income_cents / 100) }}</div>
+        </div>
+        {% if current_period.incoming_transfer_cents > 0 %}
+        <div class="stat-secondary clickable" onclick="drillStatBox('transfer')" title="Click to see transfers in">
+            <div class="stat-secondary-label">Transfers In</div>
+            <div class="stat-secondary-value transfers">+${{ "%.0f"|format(current_period.incoming_transfer_cents / 100) }}</div>
+        </div>
+        {% endif %}
+        <div class="stat-secondary-divider">−</div>
+        <div class="stat-secondary clickable" onclick="drillStatBox('recurring')" title="Click to see recurring">
+            <div class="stat-secondary-label">Recurring</div>
+            <div class="stat-secondary-value">${{ "%.0f"|format(current_period.recurring_cents / 100) }}</div>
+        </div>
+        <div class="stat-secondary-divider">−</div>
+        <div class="stat-secondary clickable" onclick="drillStatBox('discretionary')" title="Click to see discretionary">
+            <div class="stat-secondary-label">Discretionary</div>
+            <div class="stat-secondary-value">${{ "%.0f"|format(current_period.discretionary_cents / 100) }}</div>
+        </div>
+        <div class="stat-secondary-divider">=</div>
+        <div class="stat-secondary">
+            <div class="stat-secondary-label">Net</div>
+            <div class="stat-secondary-value {{ 'positive' if current_period.net_cents >= 0 else 'negative' }}">${{ "%.0f"|format(current_period.net_cents / 100) }}</div>
+        </div>
+    </div>
+
+    <!-- Checksum Verification (clickable for transform details) -->
+    <div class="checksum-container">
+        <div class="checksum-indicator {{ 'valid' if current_period.checksum_valid else 'invalid' }} clickable" onclick="toggleTransformDetails()">
+            {% if current_period.checksum_valid %}
+            <span class="checksum-icon">✓</span> {{ current_period.transaction_count }} transactions verified
+            <span class="checksum-expand">▸ Show math</span>
+            {% else %}
+            <span class="checksum-icon">✗</span> Data mismatch detected
+            <span class="checksum-expand">▸ Show details</span>
+            {% endif %}
+        </div>
+        <div class="transform-details" id="transform-details" style="display: none;">
+            <div class="transform-title">Transform Verification</div>
+            <div class="transform-row">
+                <span class="transform-label">Raw transaction sum:</span>
+                <span class="transform-value">${{ "%.2f"|format(current_period.raw_sum_cents / 100) }}</span>
+            </div>
+            <div class="transform-breakdown">
+                <div class="transform-row indent">
+                    <span class="transform-label">+ Income:</span>
+                    <span class="transform-value positive">+${{ "%.2f"|format(current_period.income_cents / 100) }}</span>
+                </div>
+                {% if current_period.incoming_transfer_cents > 0 %}
+                <div class="transform-row indent">
+                    <span class="transform-label">+ Transfers In:</span>
+                    <span class="transform-value positive">+${{ "%.2f"|format(current_period.incoming_transfer_cents / 100) }}</span>
+                </div>
+                {% endif %}
+                <div class="transform-row indent">
+                    <span class="transform-label">− Recurring:</span>
+                    <span class="transform-value negative">−${{ "%.2f"|format(current_period.recurring_cents / 100) }}</span>
+                </div>
+                <div class="transform-row indent">
+                    <span class="transform-label">− Discretionary:</span>
+                    <span class="transform-value negative">−${{ "%.2f"|format(current_period.discretionary_cents / 100) }}</span>
+                </div>
+                {% if current_period.transfer_cents > 0 %}
+                <div class="transform-row indent">
+                    <span class="transform-label">− Transfers Out:</span>
+                    <span class="transform-value negative">−${{ "%.2f"|format(current_period.transfer_cents / 100) }}</span>
+                </div>
+                {% endif %}
+            </div>
+            <div class="transform-row total">
+                <span class="transform-label">Classification sum:</span>
+                <span class="transform-value">${{ "%.2f"|format(current_period.classification_sum_cents / 100) }}</span>
+            </div>
+            {% if current_period.checksum_valid %}
+            <div class="transform-status valid">✓ Sums match - all transactions classified</div>
+            {% else %}
+            <div class="transform-status invalid">
+                ✗ Difference: ${{ "%.2f"|format((current_period.raw_sum_cents - current_period.classification_sum_cents)|abs / 100) }}
+                <br><small>Some transactions may be unclassified or double-counted</small>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    {% if cross_account_dups %}
+    <!-- Cross-Account Duplicate Warning -->
+    <div class="cross-account-dups">
+        <div class="cross-dup-header">
+            <span class="cross-dup-icon">⚠️</span>
+            <span class="cross-dup-title">{{ cross_account_dups|length }} potential cross-account duplicate{{ 's' if cross_account_dups|length != 1 else '' }}</span>
+        </div>
+        <div class="cross-dup-list">
+            {% for dup in cross_account_dups[:5] %}
+            <div class="cross-dup-item">
+                <div class="cross-dup-amount">${{ "%.2f"|format(dup.amount_cents|abs / 100) }}</div>
+                <div class="cross-dup-details">
+                    <div class="cross-dup-merchants">
+                        {{ dup.merchant1 or 'Unknown' }} <span class="cross-dup-vs">vs</span> {{ dup.merchant2 or 'Unknown' }}
+                    </div>
+                    <div class="cross-dup-accounts">
+                        {{ dup.account1_name }} ({{ dup.date1.strftime('%b %d') }}) ↔ {{ dup.account2_name }} ({{ dup.date2.strftime('%b %d') }})
+                    </div>
+                </div>
+                <div class="cross-dup-score" title="Similarity: {{ '%.0f'|format(dup.similarity_score * 100) }}%">
+                    {{ '%.0f'|format(dup.similarity_score * 100) }}%
+                </div>
+            </div>
+            {% endfor %}
+            {% if cross_account_dups|length > 5 %}
+            <div class="cross-dup-more">+ {{ cross_account_dups|length - 5 }} more</div>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Stat Box Drill-down -->
+    <div id="stat-drilldown" class="stat-drilldown" style="display: none;">
+        <div class="stat-drilldown-header">
+            <span id="stat-drilldown-title">Transactions</span>
+            <button class="btn btn-sm" onclick="closeStatDrilldown()">Close</button>
+        </div>
+        <div class="stat-drilldown-body" id="stat-drilldown-body">
+            <div class="drilldown-loading">Loading...</div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Income Breakdown (hidden for expense-only accounts) -->
+    {% if income_breakdown and not expense_only_view %}
+    <div style="margin-top: 24px;">
+        <h3 style="font-size: 13px; color: var(--text-secondary); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.5px;">Income Sources (click row to see transactions)</h3>
+        <div class="income-list">
+            {% for merchant, amount in income_breakdown[:12] %}
+            {% set is_confirmed = merchant in income_sources %}
+            {% set is_excluded = merchant in excluded_sources %}
+            <div class="income-item{% if is_confirmed %} confirmed{% elif is_excluded %} excluded{% endif %}" data-merchant="{{ merchant }}">
+                <div class="income-row clickable" onclick="drillIncomeSource('{{ merchant }}', this)">
+                    <div class="income-merchant">
+                        {{ merchant }}
+                        {% if is_confirmed %}
+                        <span class="income-badge confirmed">✓ Income</span>
+                        {% elif is_excluded %}
+                        <span class="income-badge excluded">✗ Transfer</span>
+                        {% else %}
+                        <span class="income-badge unclassified">? Unclassified</span>
+                        {% endif %}
+                    </div>
+                    <div class="income-amount">${{ "%.2f"|format(amount / 100) }}</div>
+                    <div class="income-expand">▶</div>
+                </div>
+                <div class="income-actions">
+                    <button class="btn btn-sm{% if is_confirmed %} btn-success{% endif %}" onclick="event.stopPropagation(); markIncome('{{ merchant }}', true)" title="This is real income">✓ Income</button>
+                    <button class="btn btn-sm{% if is_excluded %} btn-danger{% endif %}" onclick="event.stopPropagation(); markIncome('{{ merchant }}', false)" title="Not income (transfer/refund)">✗ Transfer</button>
+                </div>
+                <div class="income-drilldown" style="display: none;">
+                    <div class="drilldown-loading">Loading transactions...</div>
+                    <div class="drilldown-content"></div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% if income_breakdown|length > 12 %}
+        <p style="margin-top: 8px; color: var(--text-muted); font-size: 12px;">+ {{ income_breakdown|length - 12 }} more sources</p>
+        {% endif %}
+    </div>
+    {% endif %}
+    {% else %}
+    <div class="empty-state">
+        <p>No transaction data available for this period.</p>
+        <p style="margin-top: 8px;">Click the <strong>Sync</strong> button above to load your transactions.</p>
+    </div>
+    {% endif %}
+    </div>
+</div>
+
+<!-- Spending by Category Card (collapsed by default) -->
+{% if category_breakdown %}
+{% set total_category_spending = category_breakdown|sum(attribute='1') %}
+<div class="card collapsed" id="spending-card">
+    <div class="card-header">
+        <h2>
+            <span class="toggle-icon">&#9660;</span>
+            Spending by Category {{ account_filter_badge() }}
+            <span class="card-summary">${{ "%.0f"|format(total_category_spending / 100) }} across {{ category_breakdown|length }} categories</span>
+        </h2>
+        <div class="card-actions">
+            <span class="collapse-hint" style="font-size: 12px; color: var(--text-muted);">Click header to expand</span>
+            <span class="expand-hint" style="font-size: 12px; color: var(--text-muted);">Click row to drill down</span>
+        </div>
+    </div>
+
+    <div class="card-body">
+    <div class="category-breakdown">
+        {% for category, total_cents, count in category_breakdown %}
+        <div class="category-item clickable" onclick="drillCategory('{{ category.id }}')" data-category="{{ category.id }}" data-search="{{ category.name|lower }}">
+            <div class="category-icon">{{ category.icon }}</div>
+            <div class="category-info">
+                <div class="category-name">{{ category.name }}</div>
+                <div class="category-meta">{{ count }} transaction{% if count != 1 %}s{% endif %}</div>
+            </div>
+            <div class="category-amount">${{ "%.0f"|format(total_cents / 100) }}</div>
+            <div class="category-bar-container">
+                {% set max_amount = category_breakdown[0][1] if category_breakdown else 1 %}
+                <div class="category-bar" style="width: {{ (total_cents / max_amount * 100)|int }}%; background: {{ category.color }};"></div>
+            </div>
+        </div>
+        <!-- Drill-down section (hidden by default) -->
+        <div class="category-drilldown" id="drilldown-{{ category.id }}" style="display: none;">
+            <div class="drilldown-loading">Loading...</div>
+            <div class="drilldown-content"></div>
+        </div>
+        {% endfor %}
+    </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Alerts Card -->
+<div class="card" id="alerts-card">
+    <div class="card-header">
+        <h2>
+            <span class="toggle-icon">&#9660;</span>
+            Alerts ({{ alerts|length }}{% if total_alerts > alerts|length %} / {{ total_alerts }}{% endif %}) {{ account_filter_badge() }}
+        </h2>
+        <div class="card-actions">
+            {% if show_dismissed %}
+            <a href="?period={{ period_type }}{% if start_date %}&start_date={{ start_date }}{% endif %}{% if end_date %}&end_date={{ end_date }}{% endif %}&show_dismissed=false" class="btn btn-sm btn-primary">Including Dismissed</a>
+            {% else %}
+            <a href="?period={{ period_type }}{% if start_date %}&start_date={{ start_date }}{% endif %}{% if end_date %}&end_date={{ end_date }}{% endif %}&show_dismissed=true" class="btn btn-sm">Show Dismissed</a>
+            {% endif %}
+            <a href="/export/sketchy" class="btn btn-sm">Export CSV</a>
+        </div>
+    </div>
+
+    <div class="card-body">
+    {% if alerts %}
+    <div class="alert-list">
+        {% for item in alerts[:15] %}
+        <div class="alert-item {{ item.alert.severity }}{% if item.action %} actioned{% endif %}" data-alert-key="{{ item.key }}" data-search="{{ item.alert.merchant_norm|lower }}">
+            <span class="alert-icon">
+                {% if item.alert.severity == 'high' %}&#128308;{% elif item.alert.severity == 'medium' %}&#128993;{% else %}&#9898;{% endif %}
+            </span>
+            <div class="alert-content" style="flex: 1;">
+                <div class="alert-title" onclick="toggleAlertDetails(this)" style="cursor: pointer;">
+                    <span class="alert-expand-icon">&#9654;</span>
+                    {{ item.alert.pattern_type|replace('_', ' ')|title }}: {{ item.alert.merchant_norm }}
+                    {% if item.alert.amount_cents %}
+                    <span class="alert-amount">${{ "%.2f"|format(item.alert.amount_cents / 100) }}</span>
+                    {% endif %}
+                </div>
+                <div class="alert-detail">
+                    <span class="alert-date">{{ item.alert.posted_at.strftime('%b %d, %Y') }}</span> &mdash; {{ item.alert.detail }}
+                </div>
+                {% if item.action %}
+                <div class="alert-detail" style="color: var(--accent-blue); margin-top: 4px;">
+                    Marked as: {{ item.action|replace('_', ' ')|title }}
+                </div>
+                {% endif %}
+                <!-- Drill-down details (hidden by default) -->
+                <div class="alert-details" style="display: none;">
+                    <!-- Primary Charge Details -->
+                    <div class="primary-charge">
+                        <div class="charge-header">Flagged Transaction</div>
+                        <div class="charge-details-grid">
+                            <div class="charge-detail">
+                                <span class="charge-label">Amount</span>
+                                <span class="charge-value amount">${{ "%.2f"|format(item.alert.amount_cents / 100) }}</span>
+                            </div>
+                            <div class="charge-detail">
+                                <span class="charge-label">Date</span>
+                                <span class="charge-value">{{ item.alert.posted_at.strftime('%b %d, %Y') }}</span>
+                            </div>
+                            {% if item.alert.account_name %}
+                            <div class="charge-detail">
+                                <span class="charge-label">Account</span>
+                                <span class="charge-value">{{ item.alert.account_name }}</span>
+                            </div>
+                            {% endif %}
+                        </div>
+                        {% if item.alert.raw_description %}
+                        <div class="charge-description">
+                            <span class="charge-label">Bank Description</span>
+                            <span class="charge-value desc">{{ item.alert.raw_description }}</span>
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% if item.alert.related_transactions %}
+                    <div class="related-txns">
+                        <div class="charge-header">Related Transactions</div>
+                        <table class="txn-table">
+                            <thead>
+                                <tr><th>Date</th><th>Amount</th><th>Description</th></tr>
+                            </thead>
+                            <tbody>
+                            {% for txn_date, txn_amount, txn_desc in item.alert.related_transactions %}
+                                <tr>
+                                    <td>{{ txn_date.strftime('%b %d, %Y') }}</td>
+                                    <td>${{ "%.2f"|format(txn_amount / 100) }}</td>
+                                    <td>{{ txn_desc }}</td>
+                                </tr>
+                            {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="alert-actions">
+                {% if not item.action %}
+                <button class="btn btn-sm" onclick="alertAction('{{ item.key }}', 'not_suspicious')" title="Not suspicious">&#10003; OK</button>
+                <button class="btn btn-sm btn-danger" onclick="alertAction('{{ item.key }}', 'confirmed')" title="Confirmed issue">&#9888; Issue</button>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% if alerts|length > 15 %}
+    <p style="margin-top: 12px; color: var(--text-muted); font-size: 0.9rem;">
+        + {{ alerts|length - 15 }} more alerts. <a href="/export/sketchy">Export all</a>
+    </p>
+    {% endif %}
+    {% else %}
+    <div class="empty-state">
+        <p>No suspicious charges detected. Good news!</p>
+    </div>
+    {% endif %}
+    </div>
+</div>
+
+<!-- Duplicate Subscriptions Card -->
+{% if duplicates %}
+<div class="card" id="duplicates-card">
+    <div class="card-header">
+        <h2>
+            <span class="toggle-icon">&#9660;</span>
+            Possible Duplicate Subscriptions ({{ duplicates|length }}) {{ account_filter_badge() }}
+        </h2>
+        <div class="card-actions">
+            <a href="/export/duplicates" class="btn btn-sm">Export CSV</a>
+        </div>
+    </div>
+
+    <div class="card-body">
+    <div class="alert-list">
+        {% for dup in duplicates %}
+        <div class="alert-item {{ dup.severity }}" data-search="{{ dup.items|map(attribute=0)|join(' ')|lower }}">
+            <span class="alert-icon">
+                {% if dup.severity == 'high' %}&#128308;{% else %}&#128993;{% endif %}
+            </span>
+            <div class="alert-content">
+                <div class="alert-title">
+                    {{ dup.detail }}
+                    <span class="alert-amount">${{ "%.2f"|format(dup.total_monthly_cents / 100) }}/mo</span>
+                </div>
+                <div class="alert-detail">
+                    {% for item in dup.items %}
+                    {{ item[0] }} (${{ "%.2f"|format(item[1] / 100) }}/mo, {{ item[2] }}){% if not loop.last %}, {% endif %}
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Subscriptions & Bills Card -->
+<div class="card" id="subscriptions-card">
+    <div class="card-header">
+        <h2>
+            <span class="toggle-icon">&#9660;</span>
+            Subscriptions ({{ subscriptions|length }}) & Bills ({{ bills|length }}) {{ account_filter_badge() }}
+        </h2>
+        <div class="card-actions">
+            <a href="/subs" class="btn btn-sm">View All</a>
+            <a href="/export/subscriptions" class="btn btn-sm">Export CSV</a>
+        </div>
+    </div>
+
+    <div class="card-body">
+    <div class="filter-bar">
+        <button class="filter-btn active" data-filter="all">All</button>
+        <button class="filter-btn" data-filter="subscriptions">Subscriptions</button>
+        <button class="filter-btn" data-filter="bills">Bills</button>
+        <button class="filter-btn" data-filter="duplicates">Duplicates</button>
+    </div>
+
+    {% if subscriptions or bills %}
+    <table data-sortable>
+        <thead>
+            <tr>
+                <th>Type</th>
+                <th>Merchant</th>
+                <th>Charge</th>
+                <th>Last Seen</th>
+                <th>Status</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for sub in subscriptions %}
+            {% set is_known = sub[7] %}
+            {% set display_name = sub[8] %}
+            {% set actual_charge = sub[9] %}
+            {% set cadence = sub[2] %}
+            {% set last_seen = sub[4] %}
+            {% set cadence_suffix = '/yr' if cadence == 'annual' else '/qtr' if cadence == 'quarterly' else '/wk' if cadence == 'weekly' else '/mo' %}
+            <tr data-type="subscriptions" data-is-dup="{{ 'yes' if sub[5] else 'no' }}" data-merchant="{{ sub[0] }}" class="clickable-row" onclick="drillDashboardPayee('{{ sub[0] }}', this)">
+                <td><span class="type-badge subscription clickable" onclick="event.stopPropagation(); toggleType('{{ sub[0] }}', 'subscription')" title="Click to change to Bill">&#128260; Sub</span></td>
+                <td>
+                    {% if display_name %}{{ display_name }}{% else %}{{ sub[0] }}{% endif %}
+                    {% if display_name and display_name != sub[0] %}<br><small style="color: var(--text-muted);">{{ sub[0] }}</small>{% endif %}
+                </td>
+                <td data-value="{{ actual_charge }}">${{ "%.2f"|format(actual_charge / 100) }}{{ cadence_suffix }}</td>
+                <td>{{ last_seen }}</td>
+                <td class="status-cell">
+                    {% if sub[5] %}
+                    <span class="status-badge warning clickable" onclick="event.stopPropagation(); dismissDuplicate('{{ sub[0] }}')" title="Possible duplicate subscription. Click to dismiss this warning.">⚠️ Dup?</span>
+                    {% elif is_known %}
+                    <span class="status-badge success">✓ Known</span>
+                    {% else %}
+                    <span class="status-badge neutral">Active</span>
+                    {% endif %}
+                </td>
+                <td class="actions-cell">
+                    <button class="btn btn-xs btn-muted" onclick="event.stopPropagation(); dismissSubscription('{{ sub[0] }}')" title="Remove from recurring list">Dismiss</button>
+                </td>
+            </tr>
+            <!-- Drill-down row (hidden by default) -->
+            <tr class="drilldown-row" id="drilldown-sub-{{ loop.index }}" style="display: none;">
+                <td colspan="6" class="drilldown-cell">
+                    <div class="drilldown-loading">Loading transactions...</div>
+                    <div class="drilldown-content"></div>
+                </td>
+            </tr>
+            {% endfor %}
+            {% for bill in bills %}
+            <tr data-type="bills" data-merchant="{{ bill[0] }}" class="clickable-row" onclick="drillDashboardPayee('{{ bill[0] }}', this)">
+                <td><span class="type-badge bill clickable" onclick="event.stopPropagation(); toggleType('{{ bill[0] }}', 'bill')" title="Click to change to Subscription">&#9889; Bill</span></td>
+                <td>{{ bill[0] }}</td>
+                <td data-value="{{ bill[1] }}">${{ "%.2f"|format(bill[1] / 100) }}/mo</td>
+                <td>{{ bill[4] }}</td>
+                <td class="status-cell">
+                    <span class="status-badge neutral">Active</span>
+                </td>
+                <td class="actions-cell">
+                    <button class="btn btn-xs btn-muted" onclick="event.stopPropagation(); dismissSubscription('{{ bill[0] }}')" title="Remove from recurring list">Dismiss</button>
+                </td>
+            </tr>
+            <!-- Drill-down row (hidden by default) -->
+            <tr class="drilldown-row" id="drilldown-bill-{{ loop.index }}" style="display: none;">
+                <td colspan="6" class="drilldown-cell">
+                    <div class="drilldown-loading">Loading transactions...</div>
+                    <div class="drilldown-content"></div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+        <p>No subscriptions or bills detected yet.</p>
+        <p style="margin-top: 8px;">These are detected after 3+ recurring charges.</p>
+    </div>
+    {% endif %}
+    </div>
+</div>
+
+<!-- Historical Periods -->
+{% if periods|length > 1 %}
+<div class="card">
+    <div class="card-header">
+        <h2>
+            <span class="toggle-icon">&#9660;</span>
+            Historical Summary {{ account_filter_badge() }}
+        </h2>
+        <div class="card-actions">
+            <a href="/export/summary?period={{ period_type }}" class="btn btn-sm">Export CSV</a>
+        </div>
+    </div>
+
+    <div class="card-body">
+    <table data-sortable>
+        <thead>
+            <tr>
+                <th>Period</th>
+                <th>Income</th>
+                <th>Recurring</th>
+                <th>Discretionary</th>
+                <th>Net</th>
+                <th>Transactions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in periods %}
+            <tr>
+                <td>{{ p.period_label }}</td>
+                <td data-value="{{ p.income_cents }}">${{ "%.0f"|format(p.income_cents / 100) }}</td>
+                <td data-value="{{ p.recurring_cents }}">${{ "%.0f"|format(p.recurring_cents / 100) }}</td>
+                <td data-value="{{ p.discretionary_cents }}">${{ "%.0f"|format(p.discretionary_cents / 100) }}</td>
+                <td data-value="{{ p.net_cents }}" class="{% if p.net_cents >= 0 %}positive{% else %}negative{% endif %}">
+                    ${{ "%.0f"|format(p.net_cents / 100) }}
+                </td>
+                <td>{{ p.transaction_count }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Date limit modal
+    function showDateLimitModal() {
+        const modal = document.getElementById('dateLimitModal');
+        modal.style.display = 'flex';
+        modal.querySelector('button').focus();
+        document.addEventListener('keydown', handleModalEscape);
+    }
+
+    function hideDateLimitModal() {
+        document.getElementById('dateLimitModal').style.display = 'none';
+        document.removeEventListener('keydown', handleModalEscape);
+    }
+
+    function handleModalEscape(e) {
+        if (e.key === 'Escape') hideDateLimitModal();
+    }
+
+    // Update account filter - navigates to new URL with selected accounts
+    function updateAccountFilter() {
+        const checkboxes = document.querySelectorAll('.account-chip input[type="checkbox"]');
+        const selectedAccounts = [];
+
+        checkboxes.forEach(cb => {
+            if (cb.checked) {
+                selectedAccounts.push(cb.value);
+            }
+        });
+
+        // Update visual state
+        checkboxes.forEach(cb => {
+            cb.closest('.account-chip').classList.toggle('selected', cb.checked);
+        });
+
+        // Build new URL
+        const urlParams = new URLSearchParams(window.location.search);
+
+        if (selectedAccounts.length === checkboxes.length) {
+            // All selected = remove filter (show all)
+            urlParams.delete('accounts');
+        } else if (selectedAccounts.length === 0) {
+            // None selected = use special marker to show no data
+            urlParams.set('accounts', 'none');
+        } else {
+            urlParams.set('accounts', selectedAccounts.join(','));
+        }
+
+        // Navigate to new URL
+        const newUrl = window.location.pathname + (urlParams.toString() ? '?' + urlParams.toString() : '');
+        window.location.href = newUrl;
+    }
+
+    // Stat box drill-down (Income, Recurring, Discretionary)
+    async function drillStatBox(txnType) {
+        const drilldown = document.getElementById('stat-drilldown');
+        const titleEl = document.getElementById('stat-drilldown-title');
+        const bodyEl = document.getElementById('stat-drilldown-body');
+
+        // Set title based on type
+        const typeLabels = {
+            'income': 'Income Transactions',
+            'recurring': 'Recurring Transactions',
+            'discretionary': 'One-time / Discretionary Transactions',
+            'transfer': 'Transfer Transactions'
+        };
+        titleEl.textContent = typeLabels[txnType] || 'Transactions';
+
+        drilldown.style.display = 'block';
+        bodyEl.innerHTML = '<div class="drilldown-loading">Loading...</div>';
+
+        try {
+            // Get current period dates from URL or use defaults
+            const urlParams = new URLSearchParams(window.location.search);
+            const accountsParam = urlParams.get('accounts');
+            const startDate = urlParams.get('start_date') || '{{ current_period.start_date.isoformat() if current_period else "" }}';
+            const endDate = urlParams.get('end_date') || '{{ current_period.end_date.isoformat() if current_period else "" }}';
+
+            let url = `/api/transactions-by-type?txn_type=${txnType}&start_date=${startDate}&end_date=${endDate}`;
+            if (accountsParam) {
+                url += '&accounts=' + encodeURIComponent(accountsParam);
+            }
+
+            const resp = await fetch(url);
+            const data = await resp.json();
+
+            if (data.error) {
+                bodyEl.innerHTML = '<div class="error">' + data.error + '</div>';
+                return;
+            }
+
+            let html = '<div class="stat-drilldown-summary">';
+            html += data.transaction_count + ' transactions totaling ';
+            const totalAbs = Math.abs(data.total_cents / 100);
+            html += '$' + totalAbs.toFixed(2);
+            html += '</div>';
+
+            if (data.transactions.length === 0) {
+                html += '<div class="drilldown-loading">No transactions found</div>';
+            } else {
+                for (const txn of data.transactions) {
+                    const amountClass = txn.amount_cents >= 0 ? 'positive' : 'negative';
+                    const pendingClass = txn.pending ? ' pending' : '';
+                    html += `
+                        <div class="stat-drilldown-item${pendingClass}">
+                            <span class="stat-drilldown-date">${txn.date}${txn.pending ? ' (pending)' : ''}</span>
+                            <span class="stat-drilldown-merchant">${txn.merchant || txn.description}</span>
+                            <span class="stat-drilldown-amount ${amountClass}">$${Math.abs(txn.amount_cents / 100).toFixed(2)}</span>
+                            <span class="stat-drilldown-account">${txn.account_name}</span>
+                        </div>
+                    `;
+                }
+            }
+
+            bodyEl.innerHTML = html;
+
+        } catch (err) {
+            bodyEl.innerHTML = '<div class="error">Failed to load transactions</div>';
+        }
+    }
+
+    function closeStatDrilldown() {
+        document.getElementById('stat-drilldown').style.display = 'none';
+    }
+
+    // Toggle transform details visibility
+    function toggleTransformDetails() {
+        const details = document.getElementById('transform-details');
+        const expand = document.querySelector('.checksum-expand');
+        if (details.style.display === 'none') {
+            details.style.display = 'block';
+            if (expand) expand.textContent = '▾ Hide math';
+        } else {
+            details.style.display = 'none';
+            if (expand) expand.textContent = '▸ Show math';
+        }
+    }
+
+    // Drill-down for subscriptions/bills in dashboard
+    async function drillDashboardPayee(payee, rowEl) {
+        // Find the next row (drill-down row)
+        const drilldownRow = rowEl.nextElementSibling;
+        if (!drilldownRow || !drilldownRow.classList.contains('drilldown-row')) return;
+
+        const isVisible = drilldownRow.style.display !== 'none';
+
+        // Toggle visibility
+        if (isVisible) {
+            drilldownRow.style.display = 'none';
+            rowEl.classList.remove('expanded');
+            return;
+        }
+
+        drilldownRow.style.display = 'table-row';
+        rowEl.classList.add('expanded');
+
+        const loadingEl = drilldownRow.querySelector('.drilldown-loading');
+        const contentEl = drilldownRow.querySelector('.drilldown-content');
+
+        // Check if already loaded
+        if (contentEl.innerHTML.trim()) {
+            loadingEl.style.display = 'none';
+            return;
+        }
+
+        loadingEl.style.display = 'block';
+
+        try {
+            // Include account filter if present
+            const urlParams = new URLSearchParams(window.location.search);
+            const accountsParam = urlParams.get('accounts');
+            let url = '/api/payee/' + encodeURIComponent(payee) + '?days=400';
+            if (accountsParam) {
+                url += '&accounts=' + encodeURIComponent(accountsParam);
+            }
+
+            const resp = await fetch(url);
+            const data = await resp.json();
+
+            let html = '<div class="drilldown-transactions">';
+            html += '<div class="drilldown-summary">' + data.transaction_count + ' transactions</div>';
+            html += '<table class="txn-table"><thead><tr>';
+            html += '<th>Date</th><th>Amount</th><th>Account</th><th>Bank Payee</th><th>First Seen</th>';
+            html += '</tr></thead><tbody>';
+
+            for (const txn of data.transactions) {
+                const amount = txn.amount_cents;
+                const amountClass = amount >= 0 ? 'positive' : 'negative';
+                const provenanceInfo = txn.last_updated
+                    ? txn.first_seen + ' <span class="updated-badge" title="Updated ' + txn.last_updated + '">↻</span>'
+                    : txn.first_seen || '-';
+                html += '<tr>';
+                html += '<td>' + txn.date + '</td>';
+                html += '<td class="' + amountClass + '">$' + Math.abs(amount / 100).toFixed(2) + '</td>';
+                html += '<td>' + txn.account + '</td>';
+                html += '<td class="bank-field">' + (txn.bank_merchant || txn.bank_description || '-') + '</td>';
+                html += '<td class="provenance">' + provenanceInfo + '</td>';
+                html += '</tr>';
+            }
+
+            html += '</tbody></table></div>';
+            contentEl.innerHTML = html;
+            loadingEl.style.display = 'none';
+
+        } catch (err) {
+            contentEl.innerHTML = '<div class="error">Failed to load transactions</div>';
+            loadingEl.style.display = 'none';
+        }
+    }
+
+    // Drill-down for income sources
+    async function drillIncomeSource(merchant, rowEl) {
+        const incomeItem = rowEl.closest('.income-item');
+        const drilldownEl = incomeItem.querySelector('.income-drilldown');
+        const expandIcon = rowEl.querySelector('.income-expand');
+
+        if (!drilldownEl) return;
+
+        const isVisible = drilldownEl.style.display !== 'none';
+
+        // Toggle visibility
+        if (isVisible) {
+            drilldownEl.style.display = 'none';
+            incomeItem.classList.remove('expanded');
+            return;
+        }
+
+        drilldownEl.style.display = 'block';
+        incomeItem.classList.add('expanded');
+
+        const loadingEl = drilldownEl.querySelector('.drilldown-loading');
+        const contentEl = drilldownEl.querySelector('.drilldown-content');
+
+        // Check if already loaded
+        if (contentEl.innerHTML.trim()) {
+            loadingEl.style.display = 'none';
+            return;
+        }
+
+        loadingEl.style.display = 'block';
+
+        try {
+            // Use search API to find positive transactions from this merchant
+            const urlParams = new URLSearchParams(window.location.search);
+            const accountsParam = urlParams.get('accounts');
+            let url = '/api/payee/' + encodeURIComponent(merchant) + '?days=400';
+            if (accountsParam) {
+                url += '&accounts=' + encodeURIComponent(accountsParam);
+            }
+
+            const resp = await fetch(url);
+            const data = await resp.json();
+
+            // Filter to only positive amounts (income)
+            const incomeTransactions = data.transactions.filter(t => t.amount_cents > 0);
+
+            let html = '<table class="txn-table"><thead><tr>';
+            html += '<th>Date</th><th>Amount</th><th>Account</th><th>Description</th>';
+            html += '</tr></thead><tbody>';
+
+            if (incomeTransactions.length === 0) {
+                html += '<tr><td colspan="4" style="text-align: center; color: var(--text-muted);">No income transactions found</td></tr>';
+            } else {
+                for (const txn of incomeTransactions) {
+                    html += '<tr>';
+                    html += '<td>' + txn.date + '</td>';
+                    html += '<td style="color: var(--accent-green);">+$' + (txn.amount_cents / 100).toFixed(2) + '</td>';
+                    html += '<td>' + txn.account + '</td>';
+                    html += '<td style="font-size: 11px; color: var(--text-secondary);">' + (txn.bank_description || txn.bank_merchant || '-') + '</td>';
+                    html += '</tr>';
+                }
+            }
+
+            html += '</tbody></table>';
+            contentEl.innerHTML = html;
+            loadingEl.style.display = 'none';
+
+        } catch (err) {
+            contentEl.innerHTML = '<div class="error">Failed to load transactions</div>';
+            loadingEl.style.display = 'none';
+        }
+    }
+
+    // Dismiss a subscription/bill from the recurring lists
+    async function dismissSubscription(merchant) {
+        try {
+            const response = await fetch('/api/type-override', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ merchant: merchant, override_type: 'ignore' })
+            });
+
+            if (response.ok) {
+                showToast('Removed from recurring charges');
+                // Find and hide the row
+                const row = document.querySelector(`tr[data-merchant="${merchant}"]`);
+                if (row) {
+                    row.style.display = 'none';
+                    // Also hide any drill-down row
+                    const drilldownRow = row.nextElementSibling;
+                    if (drilldownRow && drilldownRow.classList.contains('drilldown-row')) {
+                        drilldownRow.style.display = 'none';
+                    }
+                }
+            } else {
+                const data = await response.json();
+                showToast('Error: ' + (data.error || 'Failed to dismiss'));
+            }
+        } catch (err) {
+            showToast('Error: ' + err.message);
+        }
+    }
+
+    // Dismiss duplicate warning for a merchant
+    async function dismissDuplicate(merchant) {
+        try {
+            const response = await fetch('/api/dismiss-duplicate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ merchant: merchant, dismiss: true })
+            });
+
+            if (response.ok) {
+                showToast('Duplicate warning dismissed');
+                // Find and remove the badge
+                const row = document.querySelector(`tr[data-merchant="${merchant}"]`);
+                if (row) {
+                    const badge = row.querySelector('.badge-duplicate');
+                    if (badge) badge.remove();
+                    row.setAttribute('data-is-dup', 'no');
+                }
+            } else {
+                const data = await response.json();
+                showToast('Error: ' + (data.error || 'Failed to dismiss'));
+            }
+        } catch (err) {
+            showToast('Error: ' + err.message);
+        }
+    }
+
+    // Transaction Search with Pagination
+    let searchTimeout = null;
+    let searchCurrentPage = 1;
+    const SEARCH_PAGE_SIZE = 8;
+    let searchAllMatches = [];
+    let searchAccountsParam = null;
+
+    const searchInput = document.getElementById('searchInput');
+    const searchClear = document.getElementById('searchClear');
+    const searchResults = document.getElementById('searchResults');
+    const searchResultsCount = document.getElementById('searchResultsCount');
+    const searchResultsBody = document.getElementById('searchResultsBody');
+    const searchOtherAccounts = document.getElementById('searchOtherAccounts');
+    const searchPagination = document.getElementById('searchPagination');
+    const searchPageInfo = document.getElementById('searchPageInfo');
+    const searchPrevBtn = document.getElementById('searchPrevBtn');
+    const searchNextBtn = document.getElementById('searchNextBtn');
+
+    if (searchInput) {
+        searchInput.addEventListener('input', function() {
+            const query = this.value.trim();
+
+            // Show/hide clear button
+            searchClear.style.display = query ? 'block' : 'none';
+
+            // Debounce search
+            clearTimeout(searchTimeout);
+
+            if (query.length < 2) {
+                searchResults.style.display = 'none';
+                clearDashboardFilter();
+                return;
+            }
+
+            searchTimeout = setTimeout(() => performSearch(query), 300);
+        });
+
+        searchInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                clearSearch();
+            }
+        });
+    }
+
+    async function performSearch(query) {
+        // Get current account filter from URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const accountsParam = urlParams.get('accounts');
+
+        let url = '/api/search?q=' + encodeURIComponent(query);
+        if (accountsParam && accountsParam !== 'none') {
+            url += '&accounts=' + encodeURIComponent(accountsParam);
+        }
+
+        try {
+            const response = await fetch(url);
+            const data = await response.json();
+
+            displaySearchResults(data, accountsParam);
+            // Also filter dashboard sections
+            filterDashboardSections(query);
+        } catch (err) {
+            searchResultsBody.innerHTML = '<div class="search-no-results">Search failed</div>';
+            searchResults.style.display = 'block';
+        }
+    }
+
+    function displaySearchResults(data, accountsParam) {
+        searchResults.style.display = 'block';
+        searchAllMatches = data.matches || [];
+        searchAccountsParam = accountsParam;
+        searchCurrentPage = 1;
+
+        if (data.matches.length === 0 && data.other_matches_count === 0) {
+            searchResultsCount.textContent = 'No results found';
+            searchResultsBody.innerHTML = '<div class="search-no-results">No transactions match your search</div>';
+            searchOtherAccounts.style.display = 'none';
+            searchPagination.style.display = 'none';
+            return;
+        }
+
+        // Show result count
+        searchResultsCount.textContent = `${data.matches_count} result${data.matches_count !== 1 ? 's' : ''}` +
+            (accountsParam ? ' in selected accounts' : '');
+
+        // Render current page
+        renderSearchPage();
+
+        // Show other accounts section if filtering and there are other matches
+        if (accountsParam && data.other_matches_count > 0) {
+            let otherHtml = `<strong>${data.other_matches_count}</strong> more match${data.other_matches_count !== 1 ? 'es' : ''} in other accounts`;
+
+            if (data.other_matches_preview.length > 0) {
+                const previewAccounts = [...new Set(data.other_matches_preview.map(t => t.account_name))];
+                otherHtml += `: <a onclick="clearAccountFilter()">${previewAccounts.slice(0, 3).join(', ')}${previewAccounts.length > 3 ? '...' : ''}</a>`;
+            }
+
+            searchOtherAccounts.innerHTML = otherHtml;
+            searchOtherAccounts.style.display = 'block';
+        } else {
+            searchOtherAccounts.style.display = 'none';
+        }
+    }
+
+    function renderSearchPage() {
+        const totalPages = Math.ceil(searchAllMatches.length / SEARCH_PAGE_SIZE);
+        const startIdx = (searchCurrentPage - 1) * SEARCH_PAGE_SIZE;
+        const endIdx = Math.min(startIdx + SEARCH_PAGE_SIZE, searchAllMatches.length);
+        const pageMatches = searchAllMatches.slice(startIdx, endIdx);
+
+        // Display matches for current page
+        let html = '';
+        if (pageMatches.length === 0) {
+            html = '<div class="search-no-results">No matches in selected accounts</div>';
+        } else {
+            for (const txn of pageMatches) {
+                const amountClass = txn.amount_cents >= 0 ? 'positive' : 'negative';
+                const amountStr = '$' + Math.abs(txn.amount_cents / 100).toFixed(2);
+                const pendingClass = txn.pending ? ' pending' : '';
+                html += `
+                    <div class="search-result-item${pendingClass}">
+                        <span class="search-result-date">${txn.date}</span>
+                        <span class="search-result-merchant">${txn.merchant || txn.description}</span>
+                        <span class="search-result-amount ${amountClass}">${amountStr}</span>
+                        <span class="search-result-account">${txn.account_name}</span>
+                    </div>
+                `;
+            }
+        }
+        searchResultsBody.innerHTML = html;
+
+        // Update pagination controls
+        if (totalPages > 1) {
+            searchPagination.style.display = 'flex';
+            searchPageInfo.textContent = `${searchCurrentPage} / ${totalPages}`;
+            searchPrevBtn.disabled = searchCurrentPage <= 1;
+            searchNextBtn.disabled = searchCurrentPage >= totalPages;
+        } else {
+            searchPagination.style.display = 'none';
+        }
+    }
+
+    function searchPrevPage() {
+        if (searchCurrentPage > 1) {
+            searchCurrentPage--;
+            renderSearchPage();
+        }
+    }
+
+    function searchNextPage() {
+        const totalPages = Math.ceil(searchAllMatches.length / SEARCH_PAGE_SIZE);
+        if (searchCurrentPage < totalPages) {
+            searchCurrentPage++;
+            renderSearchPage();
+        }
+    }
+
+    function clearSearch() {
+        if (searchInput) {
+            searchInput.value = '';
+            searchClear.style.display = 'none';
+            searchResults.style.display = 'none';
+            clearDashboardFilter();
+        }
+    }
+
+    // Filter dashboard sections based on search query
+    function filterDashboardSections(query) {
+        const searchLower = query.toLowerCase();
+
+        // Filter Spending by Category
+        const spendingCard = document.getElementById('spending-card');
+        if (spendingCard) {
+            const categoryItems = spendingCard.querySelectorAll('.category-item');
+            let visibleCount = 0;
+            categoryItems.forEach(item => {
+                const searchData = item.getAttribute('data-search') || '';
+                const matches = searchData.includes(searchLower);
+                item.style.display = matches ? '' : 'none';
+                // Also hide the drilldown if category is hidden
+                const drilldown = item.nextElementSibling;
+                if (drilldown && drilldown.classList.contains('category-drilldown')) {
+                    drilldown.style.display = 'none';
+                }
+                if (matches) visibleCount++;
+            });
+            spendingCard.style.display = visibleCount > 0 ? '' : 'none';
+        }
+
+        // Filter Alerts
+        const alertsCard = document.getElementById('alerts-card');
+        if (alertsCard) {
+            const alertItems = alertsCard.querySelectorAll('.alert-item');
+            let visibleCount = 0;
+            alertItems.forEach(item => {
+                const searchData = item.getAttribute('data-search') || '';
+                const matches = searchData.includes(searchLower);
+                item.style.display = matches ? '' : 'none';
+                if (matches) visibleCount++;
+            });
+            // Show card if there are matches or keep it showing the empty state message
+            const alertList = alertsCard.querySelector('.alert-list');
+            if (alertList) {
+                alertsCard.style.display = visibleCount > 0 || alertItems.length === 0 ? '' : 'none';
+            }
+        }
+
+        // Filter Duplicate Subscriptions
+        const duplicatesCard = document.getElementById('duplicates-card');
+        if (duplicatesCard) {
+            const dupItems = duplicatesCard.querySelectorAll('.alert-item');
+            let visibleCount = 0;
+            dupItems.forEach(item => {
+                const searchData = item.getAttribute('data-search') || '';
+                const matches = searchData.includes(searchLower);
+                item.style.display = matches ? '' : 'none';
+                if (matches) visibleCount++;
+            });
+            duplicatesCard.style.display = visibleCount > 0 ? '' : 'none';
+        }
+
+        // Filter Subscriptions & Bills
+        const subsCard = document.getElementById('subscriptions-card');
+        if (subsCard) {
+            const rows = subsCard.querySelectorAll('tbody tr[data-merchant]');
+            let visibleCount = 0;
+            rows.forEach(row => {
+                const merchant = (row.getAttribute('data-merchant') || '').toLowerCase();
+                const matches = merchant.includes(searchLower);
+                row.style.display = matches ? '' : 'none';
+                // Also hide the drilldown row
+                const drilldownRow = row.nextElementSibling;
+                if (drilldownRow && drilldownRow.classList.contains('drilldown-row')) {
+                    drilldownRow.style.display = 'none';
+                }
+                if (matches) visibleCount++;
+            });
+            // Don't hide the card entirely, just show empty table
+        }
+    }
+
+    function clearDashboardFilter() {
+        // Show all items in all filterable sections
+        const allFilterable = document.querySelectorAll('[data-search], [data-merchant]');
+        allFilterable.forEach(item => {
+            // For table rows
+            if (item.tagName === 'TR') {
+                item.style.display = '';
+            } else {
+                item.style.display = '';
+            }
+        });
+
+        // Show all cards
+        ['spending-card', 'alerts-card', 'duplicates-card', 'subscriptions-card'].forEach(id => {
+            const card = document.getElementById(id);
+            if (card) card.style.display = '';
+        });
+    }
+
+    function clearAccountFilter() {
+        // Remove account filter and re-search
+        const urlParams = new URLSearchParams(window.location.search);
+        urlParams.delete('accounts');
+        const newUrl = window.location.pathname + (urlParams.toString() ? '?' + urlParams.toString() : '');
+        window.location.href = newUrl;
+    }
+</script>
+{% endblock %}

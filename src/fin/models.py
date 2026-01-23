@@ -18,3 +18,4 @@ class Transaction(BaseModel):
     merchant: Optional[str] = None
     source_txn_id: Optional[str] = None
     fingerprint: str
+    pending: bool = False
