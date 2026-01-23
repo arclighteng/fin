@@ -271,44 +271,6 @@ fin sync --full
 fin sync --annual-bootstrap
 ```
 
-## Manual Overrides
-
-### Changing Categories
-
-When the auto-categorization is wrong:
-
-1. Go to Dashboard > Spending by Category
-2. Click the category to expand it
-3. Find the miscategorized merchant
-4. Click the pencil icon
-5. Select the correct category
-
-Your choice is saved and applied to all future transactions from that merchant.
-
-### Changing Subscription/Bill Type
-
-1. Go to Dashboard or Recurring page
-2. Find the item in the table
-3. Click the type badge (blue "Sub" or yellow "Bill")
-4. It toggles to the other type
-
-Example: If "AT&T" shows as a Subscription but it's your phone bill, click to change it to Bill.
-
-## Key Concepts
-
-**Baseline** = Income - Recurring Expenses
-
-- Positive baseline: Your lifestyle costs less than you earn
-- Negative baseline: Spending exceeds income (unsustainable)
-
-**Net** = Baseline - One-off Spending
-
-- This is your actual savings (or loss) for the period
-
-**Subscriptions** = Recurring charges for optional services (streaming, software)
-
-**Bills** = Recurring charges for essential utilities (electric, water, internet)
-
 ## Getting SimpleFIN
 
 1. Go to [SimpleFIN Bridge](https://beta-bridge.simplefin.org/)
@@ -318,13 +280,6 @@ Example: If "AT&T" shows as a Subscription but it's your phone bill, click to ch
 5. Credentials auto-save to keyring, or add to `.env` manually
 
 See [docs/SIMPLEFIN_SETUP.md](docs/SIMPLEFIN_SETUP.md) for detailed instructions.
-
-## Data Storage
-
-- All data stored locally in `./data/fin.db` (SQLite)
-- No cloud services beyond SimpleFIN
-- No tracking, no ads
-- You own your data
 
 ## Troubleshooting
 
