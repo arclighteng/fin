@@ -1,6 +1,6 @@
 # fin
 
-A local-first personal finance tool. Syncs with your bank accounts via SimpleFIN, analyzes spending patterns, detects subscriptions, and helps you simplify your financial health, securely.
+A local-first personal finance tool. Syncs with your bank accounts via SimpleFIN or import CSV directly—analyzes spending patterns, detects subscriptions, and keeps your data local with encrypted backups.
 
 ## Features
 
