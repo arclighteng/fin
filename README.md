@@ -170,8 +170,6 @@ fin audit-subs
 fin audit-subs --all
 ```
 
-This prevents false positives—we don't want to show "Ring" subscription because you ate at Burger King.
-
 ### Bundle Detection
 
 Find overlapping subscriptions:
