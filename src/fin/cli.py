@@ -2418,6 +2418,24 @@ def web(
 ):
     """Run the local web UI."""
     import uvicorn
+    from pathlib import Path
+
+    cfg = load_config()
+    db_path = Path(cfg.db_path)
+
+    # Check if this looks like demo or real data
+    if "demo" in str(db_path).lower():
+        console.print(f"[yellow]Using demo database:[/yellow] {db_path}")
+    else:
+        console.print(f"[dim]Database:[/dim] {db_path}")
+
+        # Hint about demo if no real data exists
+        if not db_path.exists():
+            console.print()
+            console.print("[dim]No data yet. Try [cyan]fin demo[/cyan] to explore with sample data.[/dim]")
+
+    console.print(f"[dim]Dashboard:[/dim] http://127.0.0.1:{port}/dashboard")
+    console.print()
 
     uvicorn.run("fin.web:app", host="0.0.0.0", port=port, reload=False)
 
@@ -2429,6 +2447,7 @@ def demo(
     port: int = typer.Option(8000, help="Port for web dashboard."),
     reset: bool = typer.Option(False, "--reset", help="Delete existing demo database first."),
     clear: bool = typer.Option(False, "--clear", help="Delete demo database and exit (cleanup)."),
+    status: bool = typer.Option(False, "--status", help="Show demo vs real database status."),
 ):
     """
     Load demo data to explore fin without SimpleFIN.
@@ -2452,12 +2471,44 @@ def demo(
         fin demo --no-web     # Just load data, don't start web
         fin demo --reset      # Clear and reload demo data
         fin demo --clear      # Delete demo database (cleanup)
+        fin demo --status     # Check which databases exist
     """
     from pathlib import Path
     from .demo import load_demo_data, DEMO_ACCOUNTS
 
     # Use a separate demo database
     demo_db_path = Path("data/demo.db")
+    real_db_path = Path(load_config().db_path)
+
+    # Handle --status: show database status
+    if status:
+        console.print("[bold]Database Status[/bold]")
+        console.print()
+
+        # Demo database
+        if demo_db_path.exists():
+            conn = dbmod.connect(str(demo_db_path))
+            cursor = conn.execute("SELECT COUNT(*) FROM transactions")
+            demo_count = cursor.fetchone()[0]
+            conn.close()
+            console.print(f"[green]Demo:[/green] {demo_db_path} ({demo_count} transactions)")
+        else:
+            console.print(f"[dim]Demo:[/dim] {demo_db_path} (not created)")
+
+        # Real database
+        if real_db_path.exists():
+            conn = dbmod.connect(str(real_db_path))
+            cursor = conn.execute("SELECT COUNT(*) FROM transactions")
+            real_count = cursor.fetchone()[0]
+            conn.close()
+            console.print(f"[green]Real:[/green] {real_db_path} ({real_count} transactions)")
+        else:
+            console.print(f"[dim]Real:[/dim] {real_db_path} (not created)")
+
+        console.print()
+        console.print("[dim]fin web[/dim] uses the real database")
+        console.print("[dim]fin demo[/dim] uses the demo database")
+        return
 
     # Handle --clear: delete demo database and exit
     if clear:
