@@ -68,6 +68,23 @@ docker compose run --rm fin sync
 docker compose run --rm fin web
 ```
 
+### Try the Demo First
+
+Explore fin with sample data before connecting your bank:
+
+```bash
+pip install -e .
+fin demo
+# Opens dashboard with 12 months of realistic demo data
+```
+
+When ready for real data:
+```bash
+fin demo --clear      # Remove demo database
+fin credentials set   # Configure SimpleFIN
+fin sync --full       # Pull real transactions
+```
+
 ## Security
 
 Your financial data is sensitive. fin is designed with security as a priority.

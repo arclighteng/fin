@@ -2420,3 +2420,108 @@ def web(
     import uvicorn
 
     uvicorn.run("fin.web:app", host="0.0.0.0", port=port, reload=False)
+
+
+@app.command()
+def demo(
+    months: int = typer.Option(12, help="Months of demo data to generate."),
+    start_web: bool = typer.Option(True, "--web/--no-web", help="Start web dashboard after loading."),
+    port: int = typer.Option(8000, help="Port for web dashboard."),
+    reset: bool = typer.Option(False, "--reset", help="Delete existing demo database first."),
+    clear: bool = typer.Option(False, "--clear", help="Delete demo database and exit (cleanup)."),
+):
+    """
+    Load demo data to explore fin without SimpleFIN.
+
+    Creates a demo database with realistic transactions:
+    - Income (bi-weekly paychecks)
+    - Subscriptions (Netflix, Spotify, etc.)
+    - Bills (utilities with variable amounts)
+    - One-off spending (restaurants, shopping, gas)
+    - Sample alerts (duplicate charge, unusual amount)
+
+    The demo uses a SEPARATE database (data/demo.db) that won't
+    affect your real data. When you're ready to use real data:
+
+        fin demo --clear      # Remove demo database
+        fin credentials set   # Configure SimpleFIN
+        fin sync --full       # Pull real transactions
+
+    Examples:
+        fin demo              # Load 12 months of data and start web
+        fin demo --no-web     # Just load data, don't start web
+        fin demo --reset      # Clear and reload demo data
+        fin demo --clear      # Delete demo database (cleanup)
+    """
+    from pathlib import Path
+    from .demo import load_demo_data, DEMO_ACCOUNTS
+
+    # Use a separate demo database
+    demo_db_path = Path("data/demo.db")
+
+    # Handle --clear: delete demo database and exit
+    if clear:
+        if demo_db_path.exists():
+            demo_db_path.unlink()
+            console.print("[green]Demo database deleted.[/green]")
+            console.print()
+            console.print("You can now set up real data:")
+            console.print("  [cyan]fin credentials set[/cyan]   # Configure SimpleFIN")
+            console.print("  [cyan]fin sync --full[/cyan]       # Pull real transactions")
+        else:
+            console.print("[dim]No demo database found.[/dim]")
+        return
+
+    demo_db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if reset and demo_db_path.exists():
+        demo_db_path.unlink()
+        console.print("[yellow]Deleted existing demo database[/yellow]")
+
+    # Check if demo data already exists
+    if demo_db_path.exists():
+        conn = dbmod.connect(str(demo_db_path))
+        cursor = conn.execute("SELECT COUNT(*) FROM transactions")
+        count = cursor.fetchone()[0]
+        conn.close()
+
+        if count > 0:
+            console.print(f"[green]Demo database already has {count} transactions.[/green]")
+            console.print(f"[dim]Use --reset to regenerate demo data.[/dim]")
+        else:
+            # Empty database, load data
+            conn = dbmod.connect(str(demo_db_path))
+            dbmod.init_db(conn)
+            accounts, txns = load_demo_data(conn, months)
+            conn.close()
+            console.print(f"[green]Loaded {txns} demo transactions across {accounts} accounts.[/green]")
+    else:
+        # Create and load
+        conn = dbmod.connect(str(demo_db_path))
+        dbmod.init_db(conn)
+        accounts, txns = load_demo_data(conn, months)
+        conn.close()
+        console.print(f"[green]Created demo database with {txns} transactions.[/green]")
+
+    console.print()
+    console.print("[bold]Demo Accounts:[/bold]")
+    for acct in DEMO_ACCOUNTS:
+        console.print(f"  - {acct['name']} ({acct['type']})")
+
+    if start_web:
+        console.print()
+        console.print(f"[bold]Starting web dashboard...[/bold]")
+        console.print(f"Open [cyan]http://127.0.0.1:{port}/dashboard[/cyan]")
+        console.print()
+
+        # Set environment to use demo database
+        os.environ["FIN_DB_PATH"] = str(demo_db_path)
+
+        import uvicorn
+        uvicorn.run("fin.web:app", host="0.0.0.0", port=port, reload=False)
+    else:
+        console.print()
+        console.print(f"To view the demo, run:")
+        console.print(f"  [cyan]set FIN_DB_PATH={demo_db_path}[/cyan]  (Windows)")
+        console.print(f"  [cyan]export FIN_DB_PATH={demo_db_path}[/cyan]  (Mac/Linux)")
+        console.print(f"  [cyan]fin web[/cyan]")
