@@ -55,6 +55,7 @@ def _acquire_watchlist_lock(timeout: int = 10) -> filelock.FileLock:
 @app.command()
 def setup(
     setup_token: str = typer.Argument(..., help="Base64 setup token from SimpleFIN Bridge"),
+    store_in_keyring: bool = typer.Option(True, "--keyring/--no-keyring", help="Store in system keyring (recommended)"),
 ):
     """
     Exchange a SimpleFIN setup token for a permanent access URL.
@@ -63,13 +64,14 @@ def setup(
     1. You get a Setup Token from SimpleFIN Bridge (base64 encoded)
     2. Run this command to exchange it for your Access URL
 
-    The Access URL will be printed - add it to your .env file as:
-    SIMPLEFIN_ACCESS_URL=<the-url-printed>
+    By default, credentials are stored in your system keyring (secure).
+    Use --no-keyring to just print the URL for manual .env setup.
 
     NOTE: Setup tokens can only be claimed once. If you've already claimed it,
     you'll need to generate a new one from SimpleFIN Bridge.
     """
     from .simplefin_client import claim_access_url
+    from . import credentials
 
     console.print("[bold]Claiming SimpleFIN access...[/bold]")
 
@@ -77,7 +79,20 @@ def setup(
         access_url = claim_access_url(setup_token)
 
         console.print()
-        console.print("[green]Success![/green] Your SimpleFIN Access URL:")
+        console.print("[green]Success![/green] Access URL claimed.")
+
+        # Try to store in keyring if requested
+        if store_in_keyring and credentials.is_keyring_available():
+            if credentials.set_simplefin_url(access_url):
+                console.print()
+                console.print("[green]Credentials stored in system keyring.[/green]")
+                console.print()
+                console.print("You're all set! Run [cyan]fin sync[/cyan] to pull your transactions.")
+                return
+
+        # Fall back to showing URL for manual setup
+        console.print()
+        console.print("Your SimpleFIN Access URL:")
         console.print()
         console.print(f"[bold]{access_url}[/bold]")
         console.print()
@@ -92,6 +107,115 @@ def setup(
     except Exception as e:
         console.print(f"[red]Failed to claim access URL:[/red] {e}")
         raise typer.Exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Credentials management (keyring)
+# ---------------------------------------------------------------------------
+credentials_app = typer.Typer(help="Manage credentials in system keyring.")
+app.add_typer(credentials_app, name="credentials")
+
+
+@credentials_app.command("set")
+def credentials_set(
+    url: str = typer.Option(None, "--url", "-u", help="SimpleFIN Access URL (or prompted if not provided)"),
+):
+    """
+    Store SimpleFIN credentials in system keyring.
+
+    Uses the OS secure credential store:
+    - Windows: Credential Manager
+    - macOS: Keychain
+    - Linux: Secret Service (GNOME Keyring, KWallet)
+
+    Example:
+        fin credentials set
+        fin credentials set --url "https://user:pass@..."
+    """
+    from . import credentials
+
+    if not credentials.is_keyring_available():
+        console.print("[red]Error:[/red] System keyring not available.")
+        console.print()
+        console.print("On Linux, ensure you have a secrets service running:")
+        console.print("  - GNOME: gnome-keyring")
+        console.print("  - KDE: KWallet")
+        console.print("  - Or install: [cyan]apt install gnome-keyring[/cyan]")
+        raise typer.Exit(1)
+
+    # Prompt for URL if not provided
+    if not url:
+        url = typer.prompt("SimpleFIN Access URL", hide_input=True)
+
+    url = url.strip()
+    if not url:
+        console.print("[red]Error:[/red] URL cannot be empty.")
+        raise typer.Exit(1)
+
+    if not url.startswith("http"):
+        console.print("[red]Error:[/red] URL must start with http:// or https://")
+        raise typer.Exit(1)
+
+    if credentials.set_simplefin_url(url):
+        console.print("[green]Credentials stored in system keyring.[/green]")
+        console.print()
+        console.print("[dim]You can now remove SIMPLEFIN_ACCESS_URL from your .env file.[/dim]")
+    else:
+        console.print("[red]Failed to store credentials in keyring.[/red]")
+        raise typer.Exit(1)
+
+
+@credentials_app.command("clear")
+def credentials_clear():
+    """
+    Remove SimpleFIN credentials from system keyring.
+    """
+    from . import credentials
+
+    if not credentials.is_keyring_available():
+        console.print("[yellow]System keyring not available.[/yellow]")
+        raise typer.Exit(0)
+
+    if credentials.clear_simplefin_url():
+        console.print("[green]Credentials removed from keyring.[/green]")
+    else:
+        console.print("[red]Failed to remove credentials.[/red]")
+        raise typer.Exit(1)
+
+
+@credentials_app.command("status")
+def credentials_status():
+    """
+    Show where credentials are being loaded from.
+    """
+    from . import credentials
+
+    source = credentials.get_credential_source()
+    keyring_available = credentials.is_keyring_available()
+
+    console.print("[bold]Credential Status[/bold]")
+    console.print()
+
+    if keyring_available:
+        console.print(f"  Keyring: [green]Available[/green]")
+    else:
+        console.print(f"  Keyring: [yellow]Not available[/yellow]")
+
+    console.print()
+    if source == "keyring":
+        console.print(f"  SimpleFIN URL: [green]Stored in keyring[/green] (most secure)")
+    elif source == "env":
+        console.print(f"  SimpleFIN URL: [yellow]Loaded from .env file[/yellow]")
+        if keyring_available:
+            console.print()
+            console.print("  [dim]Tip: Run 'fin credentials set' to move to keyring[/dim]")
+    else:
+        console.print(f"  SimpleFIN URL: [red]Not configured[/red]")
+        console.print()
+        console.print("  Configure with:")
+        if keyring_available:
+            console.print("    [cyan]fin credentials set[/cyan]  (recommended)")
+        console.print("    Or add SIMPLEFIN_ACCESS_URL to .env file")
 
 
 @app.command()
@@ -569,6 +693,89 @@ def watchlist_done(
         raise typer.Exit(code=1)
 
     console.print(f"[green]marked done[/green] matches={changed}")
+
+
+@app.command("audit-subs")
+def audit_subs(
+    days: int = typer.Option(400, help="Lookback window in days."),
+    show_all: bool = typer.Option(False, "--all", "-a", help="Show all detected, not just known services."),
+):
+    """
+    Audit detected subscriptions - verify pattern matching.
+
+    Shows which merchants are being detected as subscriptions and why.
+    Use this to verify that the known subscription patterns are working
+    correctly and not producing false positives.
+
+    By default, shows only KNOWN service matches (Netflix, Spotify, etc.).
+    Use --all to see all detected subscriptions including frequency-based.
+    """
+    from rich.table import Table
+
+    cfg = load_config()
+    setup_logging(cfg)
+
+    conn = dbmod.connect(cfg.db_path)
+    dbmod.init_db(conn)
+
+    try:
+        subs = get_subscriptions(conn, days=days)
+
+        # Filter to known services unless --all
+        if not show_all:
+            subs = [s for s in subs if s[7]]  # index 7 = is_known_service
+
+        if not subs:
+            if show_all:
+                console.print("[dim]No subscriptions detected.[/dim]")
+            else:
+                console.print("[dim]No known service matches found.[/dim]")
+                console.print("[dim]Use --all to see all detected subscriptions.[/dim]")
+            return
+
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Merchant (normalized)", style="dim")
+        table.add_column("Display Name")
+        table.add_column("Known?", justify="center")
+        table.add_column("Cadence")
+        table.add_column("Amount", justify="right")
+        table.add_column("Type")
+
+        # Sort: known services first, then by merchant name
+        subs_sorted = sorted(subs, key=lambda x: (not x[7], x[0].lower()))
+
+        for sub in subs_sorted:
+            merchant = sub[0]
+            monthly_cents = sub[1]
+            cadence = sub[2]
+            is_known = sub[7]
+            display_name = sub[8] or merchant
+            txn_type = sub[6]
+
+            known_marker = "[green]Yes[/green]" if is_known else "[dim]No[/dim]"
+            amount = f"${abs(monthly_cents) / 100:.2f}/mo"
+
+            table.add_row(
+                merchant[:30],  # truncate long names
+                display_name,
+                known_marker,
+                cadence,
+                amount,
+                txn_type,
+            )
+
+        console.print()
+        console.print(f"[bold]Subscription Audit[/bold] (last {days} days)")
+        console.print()
+        console.print(table)
+        console.print()
+
+        known_count = sum(1 for s in subs if s[7])
+        pattern_count = len(subs) - known_count
+        console.print(f"[dim]Known services: {known_count}, Pattern-detected: {pattern_count}[/dim]")
+
+    finally:
+        conn.close()
 
 
 @app.command("export-csv")

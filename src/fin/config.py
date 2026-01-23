@@ -12,6 +12,7 @@ class Config:
     simplefin_access_url: str
     db_path: str
     log_level: str
+    log_format: str = "simple"
 
 
 def _get_default_db_path() -> str:
@@ -32,14 +33,37 @@ def _get_default_db_path() -> str:
     return "data/fin.db"
 
 
+def _get_simplefin_url() -> str:
+    """
+    Get SimpleFIN access URL with keyring priority.
+
+    Priority:
+    1. System keyring (most secure)
+    2. Environment variable / .env file (fallback)
+    """
+    # Try keyring first
+    try:
+        from . import credentials
+        keyring_url = credentials.get_simplefin_url()
+        if keyring_url:
+            return keyring_url
+    except Exception:
+        pass  # Keyring not available, fall through to env
+
+    # Fall back to environment variable
+    return os.getenv("SIMPLEFIN_ACCESS_URL", "").strip()
+
+
 def load_config() -> Config:
-    access_url = os.getenv("SIMPLEFIN_ACCESS_URL", "").strip()
+    access_url = _get_simplefin_url()
     db_path = os.getenv("FIN_DB_PATH", "").strip() or _get_default_db_path()
     log_level = os.getenv("FIN_LOG_LEVEL", "INFO").strip().upper()
+    log_format = os.getenv("FIN_LOG_FORMAT", "simple").strip().lower()
 
     # Don't crash on missing secrets here; CLI will validate only when needed.
     return Config(
         simplefin_access_url=access_url,
         db_path=db_path,
         log_level=log_level,
+        log_format=log_format,
     )

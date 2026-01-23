@@ -277,6 +277,8 @@
 
         .card-body {
             padding: 16px;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
         }
 
         .card-actions {
@@ -2352,6 +2354,305 @@
 
         ::-webkit-scrollbar-thumb:hover {
             background: var(--text-muted);
+        }
+
+        /* =================================================================
+           MOBILE RESPONSIVE STYLES
+           ================================================================= */
+
+        /* Tablet and below (< 1024px) */
+        @media (max-width: 1024px) {
+            .container {
+                padding: 16px;
+            }
+
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        /* Mobile (< 768px) */
+        @media (max-width: 768px) {
+            body {
+                font-size: 15px; /* Slightly larger for readability */
+            }
+
+            .container {
+                padding: 12px;
+            }
+
+            /* Navigation - stack on mobile */
+            .nav {
+                flex-wrap: wrap;
+                padding: 12px 16px;
+                gap: 12px;
+            }
+
+            .nav-brand {
+                font-size: 16px;
+            }
+
+            .nav-links {
+                order: 3;
+                width: 100%;
+                justify-content: flex-start;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                padding-bottom: 4px;
+            }
+
+            .nav-links a {
+                white-space: nowrap;
+                padding: 8px 12px;
+                font-size: 14px;
+            }
+
+            .sync-container {
+                margin-left: auto;
+                gap: 8px;
+            }
+
+            .sync-status {
+                display: none; /* Hide on mobile, show only button */
+            }
+
+            .sync-btn {
+                padding: 8px 12px;
+            }
+
+            .theme-toggle {
+                padding: 8px;
+            }
+
+            /* Stats grid - single column on mobile */
+            .stats-grid {
+                grid-template-columns: 1fr;
+                gap: 12px;
+            }
+
+            /* Financial health banner */
+            .health-banner {
+                padding: 16px;
+            }
+
+            .health-banner h2 {
+                font-size: 18px;
+            }
+
+            .health-stats {
+                flex-direction: column;
+                gap: 12px;
+            }
+
+            /* Cards */
+            .card {
+                padding: 16px;
+                margin-bottom: 16px;
+            }
+
+            .card h2, .card h3 {
+                font-size: 16px;
+            }
+
+            /* Tables - horizontal scroll */
+            .table-container {
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                margin: 0 -12px;
+                padding: 0 12px;
+            }
+
+            table {
+                min-width: 500px;
+            }
+
+            th, td {
+                padding: 10px 8px;
+                font-size: 13px;
+            }
+
+            /* Date controls */
+            .date-controls {
+                flex-direction: column;
+                gap: 12px;
+            }
+
+            .period-selector {
+                width: 100%;
+                justify-content: stretch;
+            }
+
+            .period-btn {
+                flex: 1;
+                text-align: center;
+                padding: 10px 8px;
+            }
+
+            .date-range {
+                width: 100%;
+            }
+
+            .date-range input[type="date"] {
+                flex: 1;
+                min-width: 0;
+            }
+
+            /* Buttons - larger touch targets */
+            button, .btn, .period-btn, .sync-btn {
+                min-height: 44px; /* iOS recommended touch target */
+            }
+
+            /* Alerts section */
+            .alert-item {
+                padding: 12px;
+            }
+
+            /* Categories */
+            .category-row {
+                padding: 12px;
+            }
+
+            .category-details {
+                font-size: 12px;
+            }
+
+            /* Subscriptions */
+            .sub-amount {
+                font-size: 14px;
+            }
+
+            /* Modal adjustments */
+            .modal-content {
+                width: 95%;
+                max-width: none;
+                margin: 10px;
+                max-height: 90vh;
+            }
+
+            /* Account filter */
+            .account-filter {
+                flex-wrap: wrap;
+            }
+
+            .account-chip {
+                padding: 8px 12px;
+                font-size: 13px;
+            }
+
+            /* Drill-down tables */
+            .drill-table {
+                font-size: 13px;
+            }
+
+            .drill-table th,
+            .drill-table td {
+                padding: 8px 6px;
+            }
+        }
+
+        /* Small mobile (< 480px) */
+        @media (max-width: 480px) {
+            .container {
+                padding: 8px;
+            }
+
+            .nav {
+                padding: 10px 12px;
+            }
+
+            .health-banner {
+                padding: 12px;
+            }
+
+            .health-stat-value {
+                font-size: 20px;
+            }
+
+            .card {
+                padding: 12px;
+                border-radius: 8px;
+            }
+
+            /* Stack period buttons vertically on very small screens */
+            .period-selector {
+                flex-direction: column;
+            }
+
+            .period-btn {
+                width: 100%;
+            }
+
+            /* Simplify tables further */
+            table {
+                font-size: 12px;
+            }
+
+            th, td {
+                padding: 8px 6px;
+            }
+
+            /* Hide less important columns on very small screens */
+            .hide-mobile {
+                display: none;
+            }
+        }
+
+        /* Touch-friendly hover states */
+        @media (hover: none) {
+            .nav-links a:hover,
+            .btn:hover,
+            .sync-btn:hover,
+            .theme-toggle:hover,
+            .period-btn:hover {
+                /* Remove hover effects on touch devices */
+                background: inherit;
+            }
+
+            .nav-links a:active,
+            .btn:active,
+            .sync-btn:active,
+            .theme-toggle:active,
+            .period-btn:active {
+                /* Use active state instead */
+                opacity: 0.7;
+            }
+        }
+
+        /* Landscape phone */
+        @media (max-width: 768px) and (orientation: landscape) {
+            .nav {
+                padding: 8px 16px;
+            }
+
+            .health-banner {
+                padding: 12px 16px;
+            }
+
+            .health-stats {
+                flex-direction: row;
+                flex-wrap: wrap;
+            }
+        }
+
+        /* High DPI / Retina adjustments */
+        @media (-webkit-min-device-pixel-ratio: 2), (min-resolution: 192dpi) {
+            body {
+                -webkit-font-smoothing: antialiased;
+                -moz-osx-font-smoothing: grayscale;
+            }
+        }
+
+        /* Safe area insets for notched phones */
+        @supports (padding: max(0px)) {
+            .nav {
+                padding-left: max(16px, env(safe-area-inset-left));
+                padding-right: max(16px, env(safe-area-inset-right));
+            }
+
+            .container {
+                padding-left: max(12px, env(safe-area-inset-left));
+                padding-right: max(12px, env(safe-area-inset-right));
+            }
         }
     </style>
 </head>

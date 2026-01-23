@@ -98,6 +98,22 @@ class TestLookupKnownSubscription:
         result = _match_known_subscription("random unknown merchant xyz")
         assert result is None
 
+    @pytest.mark.parametrize("merchant", [
+        "BURGER KING",           # Should NOT match "ring"
+        "SPRING WATER CO",       # Should NOT match "ring"
+        "CARLO'S BAKERY",        # Should NOT match "arlo"
+        "EARNEST FINANCIAL",     # Should NOT match "nest"
+        "HONEST TEA",            # Should NOT match "nest"
+        "STEAMBOAT SPRINGS",     # Could potentially match "steam" - acceptable
+        "CALMART GROCERY",       # Should NOT match "calm"
+        "ADT AUTO PARTS",        # Should NOT match "adt" (needs "adt security")
+    ])
+    def test_no_false_positives_for_common_words(self, merchant):
+        """Should NOT match merchants that happen to contain subscription keywords."""
+        result = _match_known_subscription(merchant.lower())
+        # These should all return None (no false match)
+        assert result is None, f"False positive: {merchant} matched as {result}"
+
     @pytest.mark.parametrize("merchant,expected_name", [
         ("YOUTUBE TV", "YouTube TV"),
         ("YOUTUBETV", "YouTube TV"),

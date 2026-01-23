@@ -145,7 +145,8 @@ KNOWN_SUBSCRIPTIONS: dict[str, tuple[str, str]] = {
     "safari books": ("O'Reilly", "monthly"),
     "blinkist": ("Blinkist", "monthly"),
     "headspace": ("Headspace", "monthly"),
-    "calm": ("Calm", "monthly"),
+    "calm.com": ("Calm", "monthly"),
+    "calm app": ("Calm", "monthly"),
 
     # === Gaming ===
     "xbox game pass": ("Xbox Game Pass", "monthly"),
@@ -157,7 +158,9 @@ KNOWN_SUBSCRIPTIONS: dict[str, tuple[str, str]] = {
     "psn": ("PlayStation", "monthly"),
     "nintendo online": ("Nintendo Online", "monthly"),
     "nintendo switch online": ("Nintendo Online", "monthly"),
-    "steam": ("Steam", "monthly"),
+    "steampowered": ("Steam", "monthly"),
+    "steam games": ("Steam", "monthly"),
+    "steam purchase": ("Steam", "monthly"),
     "ea play": ("EA Play", "monthly"),
     "ea sports": ("EA Play", "monthly"),
     "ubisoft": ("Ubisoft+", "monthly"),
@@ -237,12 +240,20 @@ KNOWN_SUBSCRIPTIONS: dict[str, tuple[str, str]] = {
     "envato": ("Envato", "monthly"),
     "creative market": ("Creative Market", "monthly"),
 
-    # === Home/Utilities ===
-    "ring": ("Ring", "monthly"),
-    "nest": ("Nest Aware", "monthly"),
-    "arlo": ("Arlo", "monthly"),
+    # === Home Security ===
+    # Note: Use specific patterns to avoid false matches (e.g., "ring" in "Burger King")
+    "ring protect": ("Ring Protect", "monthly"),
+    "ring alarm": ("Ring Protect", "monthly"),
+    "ring.com": ("Ring Protect", "monthly"),
+    "nest aware": ("Nest Aware", "monthly"),
+    "nest cam": ("Nest Aware", "monthly"),
+    "google nest": ("Nest Aware", "monthly"),
+    "arlo secure": ("Arlo Secure", "monthly"),
+    "arlo smart": ("Arlo Secure", "monthly"),
+    "arlo.com": ("Arlo Secure", "monthly"),
     "simplisafe": ("SimpliSafe", "monthly"),
-    "adt": ("ADT", "monthly"),
+    "adt security": ("ADT", "monthly"),
+    "adt pulse": ("ADT", "monthly"),
     "vivint": ("Vivint", "monthly"),
 }
 
