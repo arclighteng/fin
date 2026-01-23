@@ -114,11 +114,14 @@ fin sync --annual-bootstrap
 | `fin drill alerts` | All alerts with details |
 | `fin drill income` | Income sources |
 
-### Export
+### Export & Backup
 
 | Command | Description |
 |---------|-------------|
 | `fin export-csv` | Export all data to CSV files |
+| `fin export-backup -p` | Encrypted backup with passphrase |
+| `fin export-backup -r age1...` | Encrypted backup to recipient key |
+| `fin import-csv FILE` | Import transactions from CSV |
 
 ## Manual Overrides
 
@@ -195,6 +198,55 @@ FIN_DB_PATH=data/fin.db  # Default database location
 - No cloud services beyond SimpleFIN
 - No tracking, no ads
 - You own your data
+
+## Security
+
+Your financial data is sensitive. Here's how to protect it:
+
+### Recommended: Full-Disk Encryption
+
+Enable your OS's built-in encryption for automatic protection:
+
+| OS | Solution |
+|----|----------|
+| Windows | BitLocker (Pro/Enterprise) or VeraCrypt |
+| macOS | FileVault |
+| Linux | LUKS |
+
+This protects your database at rest without any configuration in fin.
+
+### Encrypted Backups
+
+For backups or sharing across devices, use the encrypted export:
+
+```bash
+# Install age encryption tool
+# Windows: winget install FiloSottile.age
+# macOS: brew install age
+# Linux: apt install age
+
+# Create encrypted backup with passphrase
+fin export-backup -p
+
+# Or with age public key (for automated backups)
+fin export-backup -r age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p
+
+# Decrypt later
+age -d -o fin.db fin_backup_20260123.db.age
+```
+
+### Credentials
+
+- **SimpleFIN Access URL**: Contains credentials. Keep `.env` out of version control (it's in `.gitignore`).
+- **Database**: Contains transaction history. Treat `fin.db` as sensitive.
+
+### Why Not SQLCipher?
+
+We chose OS-level encryption + encrypted exports over SQLCipher because:
+1. Zero configuration for users who already have FileVault/BitLocker enabled
+2. No additional dependencies or build complexity
+3. `age` is a modern, audited tool with better key management
+4. You control when encryption happens (backups) vs always-on overhead
 
 ## Troubleshooting
 

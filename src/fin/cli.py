@@ -1870,6 +1870,341 @@ def dashboard_cli(
         conn.close()
 
 
+@app.command("import-csv")
+def import_csv(
+    file: str = typer.Argument(..., help="Path to CSV file to import"),
+    account_id: str = typer.Option("manual-import", help="Account ID to assign to imported transactions"),
+    date_col: str = typer.Option("date", help="Column name for transaction date"),
+    amount_col: str = typer.Option("amount", help="Column name for amount (negative = expense)"),
+    description_col: str = typer.Option("description", help="Column name for description/memo"),
+    merchant_col: str = typer.Option(None, help="Column name for merchant (optional, uses description if not set)"),
+    date_format: str = typer.Option("%Y-%m-%d", help="Date format (e.g., %%Y-%%m-%%d, %%m/%%d/%%Y)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview without importing"),
+):
+    """
+    Import transactions from a CSV file.
+
+    The CSV should have columns for date, amount, and description/merchant.
+    Amount should be negative for expenses, positive for income.
+
+    Examples:
+        fin import-csv transactions.csv
+        fin import-csv bank_export.csv --date-col "Posted Date" --amount-col "Amount" --description-col "Description"
+        fin import-csv export.csv --date-format "%%m/%%d/%%Y"
+        fin import-csv data.csv --dry-run  # Preview only
+
+    Column auto-detection: If your CSV has standard column names (date, amount, description),
+    they'll be detected automatically.
+    """
+    import hashlib
+
+    cfg = load_config()
+    setup_logging(cfg)
+
+    csv_path = Path(file)
+    if not csv_path.exists():
+        console.print(f"[red]Error:[/red] File not found: {csv_path}")
+        raise typer.Exit(1)
+
+    # Read and parse CSV
+    try:
+        with open(csv_path, "r", newline="", encoding="utf-8") as f:
+            # Detect dialect
+            sample = f.read(4096)
+            f.seek(0)
+            try:
+                dialect = csv.Sniffer().sniff(sample)
+            except csv.Error:
+                dialect = csv.excel
+
+            reader = csv.DictReader(f, dialect=dialect)
+            rows = list(reader)
+    except Exception as e:
+        console.print(f"[red]Error reading CSV:[/red] {e}")
+        raise typer.Exit(1)
+
+    if not rows:
+        console.print("[yellow]CSV file is empty or has no data rows.[/yellow]")
+        raise typer.Exit(1)
+
+    # Verify columns exist
+    available_cols = set(rows[0].keys())
+    console.print(f"[dim]Found columns: {', '.join(sorted(available_cols))}[/dim]")
+    console.print()
+
+    # Check required columns
+    missing = []
+    if date_col not in available_cols:
+        missing.append(f"date column '{date_col}'")
+    if amount_col not in available_cols:
+        missing.append(f"amount column '{amount_col}'")
+    if description_col not in available_cols and merchant_col not in available_cols:
+        missing.append(f"description column '{description_col}' or merchant column")
+
+    if missing:
+        console.print(f"[red]Error:[/red] Missing columns: {', '.join(missing)}")
+        console.print()
+        console.print("Available columns:")
+        for col in sorted(available_cols):
+            console.print(f"  - {col}")
+        console.print()
+        console.print("Use --date-col, --amount-col, --description-col to specify your column names.")
+        raise typer.Exit(1)
+
+    # Parse transactions
+    transactions = []
+    parse_errors = []
+
+    for i, row in enumerate(rows, start=2):  # Start at 2 (row 1 is header)
+        try:
+            # Parse date
+            date_str = row.get(date_col, "").strip()
+            try:
+                posted_date = datetime.strptime(date_str, date_format).date()
+            except ValueError:
+                # Try common formats
+                for fmt in ["%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%m-%d-%Y", "%Y/%m/%d"]:
+                    try:
+                        posted_date = datetime.strptime(date_str, fmt).date()
+                        break
+                    except ValueError:
+                        continue
+                else:
+                    raise ValueError(f"Cannot parse date '{date_str}'")
+
+            # Parse amount
+            amount_str = row.get(amount_col, "0").strip()
+            # Remove currency symbols and commas
+            amount_str = amount_str.replace("$", "").replace(",", "").replace(" ", "")
+            # Handle parentheses for negative (accounting format)
+            if amount_str.startswith("(") and amount_str.endswith(")"):
+                amount_str = "-" + amount_str[1:-1]
+            amount = float(amount_str)
+            amount_cents = int(round(amount * 100))
+
+            # Get description/merchant
+            description = row.get(description_col, "").strip() if description_col in available_cols else ""
+            merchant = row.get(merchant_col, "").strip() if merchant_col and merchant_col in available_cols else ""
+
+            if not merchant and not description:
+                raise ValueError("No description or merchant")
+
+            # Generate fingerprint for deduplication
+            fp_data = f"{posted_date.isoformat()}|{amount_cents}|{merchant or description}|{account_id}"
+            fingerprint = hashlib.sha256(fp_data.encode()).hexdigest()[:32]
+
+            transactions.append({
+                "account_id": account_id,
+                "posted_at": posted_date.isoformat(),
+                "amount_cents": amount_cents,
+                "currency": "USD",
+                "description": description,
+                "merchant": merchant if merchant else description,
+                "fingerprint": f"csv_{fingerprint}",
+            })
+
+        except Exception as e:
+            parse_errors.append(f"Row {i}: {e}")
+
+    if parse_errors:
+        console.print(f"[yellow]Parse errors ({len(parse_errors)}):[/yellow]")
+        for err in parse_errors[:10]:
+            console.print(f"  {err}")
+        if len(parse_errors) > 10:
+            console.print(f"  ... and {len(parse_errors) - 10} more")
+        console.print()
+
+    if not transactions:
+        console.print("[red]No valid transactions to import.[/red]")
+        raise typer.Exit(1)
+
+    # Summary
+    income = sum(t["amount_cents"] for t in transactions if t["amount_cents"] > 0)
+    expense = sum(abs(t["amount_cents"]) for t in transactions if t["amount_cents"] < 0)
+    dates = sorted(t["posted_at"] for t in transactions)
+
+    console.print(f"[bold]Import Summary[/bold]")
+    console.print(f"  Transactions: {len(transactions)}")
+    console.print(f"  Date range: {dates[0]} to {dates[-1]}")
+    console.print(f"  Income: [green]${income/100:,.2f}[/green]")
+    console.print(f"  Expenses: [red]${expense/100:,.2f}[/red]")
+    console.print(f"  Net: ${(income - expense)/100:,.2f}")
+    console.print()
+
+    if dry_run:
+        console.print("[yellow]Dry run - no changes made.[/yellow]")
+        console.print()
+        console.print("Sample transactions:")
+        for t in transactions[:5]:
+            direction = "+" if t["amount_cents"] > 0 else ""
+            console.print(f"  {t['posted_at']} | {direction}${t['amount_cents']/100:.2f} | {t['merchant'][:40]}")
+        if len(transactions) > 5:
+            console.print(f"  ... and {len(transactions) - 5} more")
+        return
+
+    # Import to database
+    conn = dbmod.connect(cfg.db_path)
+    dbmod.init_db(conn)
+
+    try:
+        # Ensure account exists
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO accounts (account_id, institution, name, type, currency, last_seen_at)
+            VALUES (?, 'Manual Import', ?, 'checking', 'USD', datetime('now'))
+            """,
+            (account_id, account_id),
+        )
+
+        inserted = 0
+        skipped = 0
+
+        for t in transactions:
+            # Check if already exists (by fingerprint)
+            existing = conn.execute(
+                "SELECT 1 FROM transactions WHERE fingerprint = ?",
+                (t["fingerprint"],)
+            ).fetchone()
+
+            if existing:
+                skipped += 1
+                continue
+
+            conn.execute(
+                """
+                INSERT INTO transactions (
+                    account_id, posted_at, amount_cents, currency,
+                    description, merchant, fingerprint, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+                """,
+                (
+                    t["account_id"],
+                    t["posted_at"],
+                    t["amount_cents"],
+                    t["currency"],
+                    t["description"],
+                    t["merchant"],
+                    t["fingerprint"],
+                ),
+            )
+            inserted += 1
+
+        conn.commit()
+
+        console.print(f"[green]Import complete![/green]")
+        console.print(f"  Inserted: {inserted}")
+        console.print(f"  Skipped (duplicates): {skipped}")
+
+    finally:
+        conn.close()
+
+
+@app.command("export-backup")
+def export_backup(
+    output: str = typer.Option(None, "--output", "-o", help="Output file path (default: fin_backup_YYYYMMDD.db.age)"),
+    recipient: str = typer.Option(None, "--recipient", "-r", help="age public key recipient (age1...)"),
+    passphrase: bool = typer.Option(False, "--passphrase", "-p", help="Encrypt with passphrase (interactive prompt)"),
+):
+    """
+    Export an encrypted backup of the database using age encryption.
+
+    Requires the 'age' CLI tool to be installed:
+    - Windows: winget install FiloSottile.age
+    - macOS: brew install age
+    - Linux: apt install age (or download from https://github.com/FiloSottile/age)
+
+    Examples:
+        fin export-backup -p                    # Passphrase encryption (prompted)
+        fin export-backup -r age1abc123...      # Recipient public key
+        fin export-backup -p -o backup.db.age   # Custom output path
+
+    The backup includes your complete transaction database. Decrypt with:
+        age -d -o fin.db backup.db.age          # For passphrase mode
+        age -d -i key.txt -o fin.db backup.db.age  # For recipient mode
+    """
+    import shutil
+    import subprocess
+
+    cfg = load_config()
+    setup_logging(cfg)
+
+    # Check that age is installed
+    age_path = shutil.which("age")
+    if not age_path:
+        console.print("[red]Error:[/red] 'age' encryption tool not found.")
+        console.print()
+        console.print("Install age:")
+        console.print("  Windows: [cyan]winget install FiloSottile.age[/cyan]")
+        console.print("  macOS:   [cyan]brew install age[/cyan]")
+        console.print("  Linux:   [cyan]apt install age[/cyan] or download from https://github.com/FiloSottile/age")
+        raise typer.Exit(1)
+
+    # Validate options
+    if not passphrase and not recipient:
+        console.print("[red]Error:[/red] Must specify either --passphrase (-p) or --recipient (-r)")
+        console.print()
+        console.print("Examples:")
+        console.print("  fin export-backup -p                # Passphrase encryption")
+        console.print("  fin export-backup -r age1abc123...  # Recipient public key")
+        raise typer.Exit(1)
+
+    if passphrase and recipient:
+        console.print("[red]Error:[/red] Cannot use both --passphrase and --recipient")
+        raise typer.Exit(1)
+
+    # Verify database exists
+    db_path = Path(cfg.db_path)
+    if not db_path.exists():
+        console.print(f"[red]Error:[/red] Database not found at {db_path}")
+        raise typer.Exit(1)
+
+    # Generate output filename if not provided
+    if not output:
+        today_str = date.today().strftime("%Y%m%d")
+        output = f"fin_backup_{today_str}.db.age"
+
+    output_path = Path(output)
+
+    # Build age command
+    cmd = [age_path, "-o", str(output_path)]
+
+    if passphrase:
+        cmd.append("-p")
+    else:
+        cmd.extend(["-r", recipient])
+
+    cmd.append(str(db_path))
+
+    console.print(f"[bold]Encrypting database backup...[/bold]")
+    console.print(f"  Source: {db_path}")
+    console.print(f"  Output: {output_path}")
+    console.print()
+
+    if passphrase:
+        console.print("[yellow]You will be prompted to enter a passphrase.[/yellow]")
+        console.print()
+
+    try:
+        # Run age - for passphrase mode, need to allow stdin/stdout pass-through
+        result = subprocess.run(cmd, check=True)
+
+        console.print()
+        console.print(f"[green]Backup complete![/green] Encrypted to: {output_path}")
+        console.print()
+        console.print("To decrypt:")
+        if passphrase:
+            console.print(f"  [cyan]age -d -o fin.db {output_path}[/cyan]")
+        else:
+            console.print(f"  [cyan]age -d -i your_key.txt -o fin.db {output_path}[/cyan]")
+
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Encryption failed:[/red] age returned exit code {e.returncode}")
+        raise typer.Exit(1)
+    except FileNotFoundError:
+        console.print("[red]Error:[/red] age command not found")
+        raise typer.Exit(1)
+
+
 @app.command()
 def web(
     port: int = typer.Option(8000, help="Port to serve on (mapped from host)."),

@@ -1128,7 +1128,7 @@ def api_sync():
     Simple, trustworthy sync:
     - Always fetches ALL available data (banks typically provide 90-180 days)
     - Upserts everything: new transactions added, existing updated
-    - NEVER deletes data - your history is preserved forever
+    - Append-only by design: sync operations never delete records
     - Idempotent: run it 100 times, same result
 
     No date ranges to think about. No modes. Just sync.
@@ -1363,9 +1363,9 @@ def sync_log_page(
             <h1>Sync Audit Log</h1>
 
             <div class="trust-banner">
-                <h3>Data Integrity Guarantee</h3>
-                <p>Sync <strong>never deletes</strong> your data. Each sync only adds new transactions or updates existing ones.
-                Your complete transaction history is preserved forever.</p>
+                <h3>Data Retention Policy</h3>
+                <p>fin persists all data locally. Sync operations are <strong>append-only</strong>: new records are inserted,
+                existing records may be updated, but nothing is deleted. You control your data retention.</p>
             </div>
 
             <div class="card">
