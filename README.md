@@ -42,7 +42,7 @@ pip install -e .
 
 # 3. Configure credentials (choose one)
 fin credentials set                    # Recommended: uses system keyring
-# OR: cp _env.example .env && edit .env  # Alternative: environment file
+# OR: cp .env.example .env && edit .env  # Alternative: environment file
 
 # 4. Set database path (Windows)
 set FIN_DB_PATH=data/fin.db
@@ -59,7 +59,7 @@ fin web
 
 ```bash
 # 1. Configure
-cp _env.example .env
+cp .env.example .env
 # Edit .env with your SimpleFIN access URL
 
 # 2. Build & run
@@ -200,7 +200,11 @@ The dashboard at `http://127.0.0.1:8000/dashboard` shows:
 - Duplicate charges
 - Unusual amounts (>2x your typical spend)
 - Test charges ($0.01-$1.00)
-- Respects date range selection
+
+### Date Selection
+- **This Month / Last Month**: Quick period toggles
+- **Custom dates**: Date pickers for any range
+- **Account filter**: Focus on specific accounts
 
 ### Subscriptions & Bills
 - **Subscriptions**: Netflix, Spotify, software services
@@ -336,8 +340,8 @@ Click the type badge to toggle.
 ### Suspicious subscription detection
 Run `fin audit-subs` to verify what's being detected.
 
-### Alerts not updating with date range
-Make sure you're selecting a date range, not just changing period type.
+### Alerts not showing expected transactions
+Use the date pickers to select a custom range, or click "This Month" / "Last Month" to reset.
 
 ## Development
 
