@@ -148,11 +148,11 @@ class TestDashboardRoute:
         assert "202" in html  # Year in the period label
 
     def test_dashboard_quarter_period(self, client):
-        """Dashboard should accept quarter period parameter."""
+        """Dashboard should accept quarter period parameter (legacy support)."""
         response = client.get("/dashboard?period=quarter")
         assert response.status_code == 200
-        html = response.text
-        assert "Q" in html  # Quarter label
+        # Quarter period is accepted but UI now uses this_month/last_month
+        # It should not error, just treat as default period
 
     def test_dashboard_year_period(self, client):
         """Dashboard should accept year period parameter."""

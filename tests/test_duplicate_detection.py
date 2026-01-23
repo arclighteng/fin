@@ -235,19 +235,24 @@ class TestGetSubscriptions:
     """Test the get_subscriptions helper function."""
 
     def test_returns_subscriptions_with_flags(self, populated_db):
-        """Should return subscriptions with duplicate flags."""
+        """Should return subscriptions with duplicate flags and extended info."""
         subs = get_subscriptions(populated_db, days=400)
 
         assert len(subs) > 0
         for sub in subs:
-            assert len(sub) == 6
-            merchant, monthly, cadence, first_seen, last_seen, is_dup = sub
+            # New format: (merchant, monthly, cadence, first_seen, last_seen, is_dup, txn_type, is_known, display_name, count)
+            assert len(sub) == 10, f"Expected 10 elements, got {len(sub)}: {sub}"
+            merchant, monthly, cadence, first_seen, last_seen, is_dup, txn_type, is_known, display_name, count = sub
             assert isinstance(merchant, str)
             assert isinstance(monthly, int)
             assert isinstance(cadence, str)
             assert isinstance(first_seen, date)
             assert isinstance(last_seen, date)
             assert isinstance(is_dup, bool)
+            assert isinstance(txn_type, str)
+            assert isinstance(is_known, bool)
+            assert display_name is None or isinstance(display_name, str)
+            assert isinstance(count, int)
 
     def test_subscriptions_sorted_by_cost(self, populated_db):
         """Subscriptions should be sorted by monthly cost descending."""
@@ -267,8 +272,9 @@ class TestGetSubscriptions:
         for group in duplicates:
             dup_merchants.update(group.merchants)
 
-        # Check consistency
-        for merchant, _, _, _, _, is_dup in subs:
+        # Check consistency (merchant is at index 0, is_dup at index 5)
+        for sub in subs:
+            merchant, _, _, _, _, is_dup, *_ = sub
             expected_dup = merchant in dup_merchants
             assert is_dup == expected_dup, \
                 f"Duplicate flag mismatch for {merchant}"
@@ -280,7 +286,8 @@ class TestGetSubscriptions:
         transfer_keywords = [
             "credit card", "payment", "transfer", "zelle", "venmo"
         ]
-        for merchant, _, _, _, _, _ in subs:
+        for sub in subs:
+            merchant = sub[0]
             for keyword in transfer_keywords:
                 assert keyword not in merchant.lower(), \
                     f"Transfer '{merchant}' should not be listed as subscription"
@@ -354,7 +361,8 @@ class TestMonthlyCostCalculation:
         subs = get_subscriptions(conn, days=400)
         conn.close()
 
-        for merchant, monthly, cadence, _, _, _ in subs:
+        for sub in subs:
+            merchant, monthly, cadence = sub[0], sub[1], sub[2]
             if "monthly sub" in merchant.lower():
                 assert cadence == "monthly"
                 assert monthly == 1599, f"Monthly cost should be 1599, got {monthly}"
@@ -374,7 +382,8 @@ class TestMonthlyCostCalculation:
         subs = get_subscriptions(conn, days=800)
         conn.close()
 
-        for merchant, monthly, cadence, _, _, _ in subs:
+        for sub in subs:
+            merchant, monthly, cadence = sub[0], sub[1], sub[2]
             if "annual" in merchant.lower():
                 assert cadence == "annual"
                 assert monthly == 1000, f"Monthly cost should be 1000 (12000/12), got {monthly}"
@@ -393,7 +402,8 @@ class TestMonthlyCostCalculation:
         subs = get_subscriptions(conn, days=400)
         conn.close()
 
-        for merchant, monthly, cadence, _, _, _ in subs:
+        for sub in subs:
+            merchant, monthly, cadence = sub[0], sub[1], sub[2]
             if "weekly" in merchant.lower():
                 assert cadence == "weekly"
                 assert monthly == 4000, f"Monthly cost should be 4000 (1000*4), got {monthly}"
@@ -412,7 +422,8 @@ class TestFinancialAccuracyDuplicates:
             for _, monthly, _ in group.items:
                 assert isinstance(monthly, int)
 
-        for _, monthly, _, _, _, _ in subs:
+        for sub in subs:
+            monthly = sub[1]
             assert isinstance(monthly, int)
 
     def test_no_negative_monthly_costs(self, populated_db):
@@ -425,7 +436,8 @@ class TestFinancialAccuracyDuplicates:
             for _, monthly, _ in group.items:
                 assert monthly > 0
 
-        for _, monthly, _, _, _, _ in subs:
+        for sub in subs:
+            monthly = sub[1]
             assert monthly > 0
 
 
