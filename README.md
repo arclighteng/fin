@@ -1,6 +1,6 @@
 # fin
 
-A local-first personal finance tool. Syncs with your bank accounts via SimpleFIN, analyzes spending patterns, detects subscriptions, and helps you understand: **Are you okay?**
+A local-first personal finance tool. Syncs with your bank accounts via SimpleFIN, analyzes spending patterns, detects subscriptions, and helps you simplify your financial health, securely.
 
 ## Features
 
