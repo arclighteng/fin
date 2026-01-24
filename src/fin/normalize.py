@@ -1,8 +1,19 @@
 # normalize.py
 import hashlib
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 from .models import Transaction
+
+
+def _get_timezone() -> ZoneInfo:
+    """Get configured timezone, defaulting to UTC."""
+    from .config import load_config
+    try:
+        cfg = load_config()
+        return ZoneInfo(cfg.timezone)
+    except Exception:
+        return ZoneInfo("UTC")
 
 
 def _norm_text(s: Optional[str]) -> str:
@@ -107,8 +118,10 @@ def normalize_simplefin_txn(raw: dict, account_id: str) -> Transaction:
         ValueError: If amount cannot be parsed
     """
     # SimpleFIN commonly uses "transacted_at" (epoch seconds). Fall back to ISO keys if present.
+    # Use configured timezone to ensure consistent date extraction regardless of server TZ.
     if "transacted_at" in raw:
-        posted_at = date.fromtimestamp(int(raw["transacted_at"]))
+        tz = _get_timezone()
+        posted_at = datetime.fromtimestamp(int(raw["transacted_at"]), tz=tz).date()
     elif "posted_at" in raw:
         posted_at = date.fromisoformat(raw["posted_at"])
     elif "date" in raw:
