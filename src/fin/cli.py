@@ -2414,9 +2414,14 @@ def export_backup(
 
 @app.command()
 def web(
-    port: int = typer.Option(8000, help="Port to serve on (mapped from host)."),
+    port: int = typer.Option(8000, help="Port to serve on."),
+    host: str = typer.Option("127.0.0.1", help="Host to bind to. Use 0.0.0.0 for LAN access (security risk)."),
 ):
-    """Run the local web UI."""
+    """Run the local web UI.
+
+    By default, binds to localhost (127.0.0.1) only.
+    Use --host 0.0.0.0 to allow LAN access (not recommended without auth).
+    """
     import uvicorn
     from pathlib import Path
 
@@ -2434,10 +2439,15 @@ def web(
             console.print()
             console.print("[dim]No data yet. Try [cyan]fin demo[/cyan] to explore with sample data.[/dim]")
 
-    console.print(f"[dim]Dashboard:[/dim] http://127.0.0.1:{port}/dashboard")
+    # Warn if binding to all interfaces
+    if host == "0.0.0.0":
+        console.print("[yellow]Warning: Binding to all interfaces (0.0.0.0). Your financial data will be accessible on the network.[/yellow]")
+        console.print()
+
+    console.print(f"[dim]Dashboard:[/dim] http://{host if host != '0.0.0.0' else '127.0.0.1'}:{port}/dashboard")
     console.print()
 
-    uvicorn.run("fin.web:app", host="0.0.0.0", port=port, reload=False)
+    uvicorn.run("fin.web:app", host=host, port=port, reload=False)
 
 
 @app.command()
@@ -2569,7 +2579,7 @@ def demo(
         os.environ["FIN_DB_PATH"] = str(demo_db_path)
 
         import uvicorn
-        uvicorn.run("fin.web:app", host="0.0.0.0", port=port, reload=False)
+        uvicorn.run("fin.web:app", host="127.0.0.1", port=port, reload=False)
     else:
         console.print()
         console.print(f"To view the demo, run:")
