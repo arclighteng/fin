@@ -3,16 +3,32 @@
 Transaction classification engine.
 
 Classifies transactions into:
-- income: positive amounts
+- income: positive amounts that represent real income (paychecks, etc.)
+- credit: positive amounts that are NOT income (refunds, rewards, adjustments)
 - recurring: merchants with regular patterns OR high-frequency habitual spending
 - transfer: credit card payments, internal transfers (excluded from expense analysis)
 - one-off: everything else
+
+Classification priority (for positive amounts):
+1. Known transfer patterns (CC payments, internal transfers) → transfer
+2. Credit card positive amounts (payments received on CC) → transfer
+3. User-excluded merchants (marked as not-income) → credit
+4. User-confirmed income sources → income
+5. Known income patterns (payroll, direct deposit) → income
+6. Default positive amounts → income
+
+Classification priority (for negative amounts):
+1. Known transfer patterns → transfer
+2. Recurring patterns → recurring
+3. Default → one-off
 """
 import sqlite3
 import statistics
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+
+from . import db as dbmod
 
 
 # ---------------------------------------------------------------------------
@@ -306,8 +322,9 @@ class ClassifiedTransaction:
     amount_cents: int
     merchant_norm: str
     raw_description: str
-    classification: str  # "income", "recurring", "transfer", "one-off"
+    classification: str  # "income", "credit", "recurring", "transfer", "one-off"
     merchant_pattern: MerchantPattern | None
+    account_id: str | None = None  # For transfer pairing
 
 
 def _normalize_merchant(merchant: str | None, description: str | None) -> str:
@@ -319,7 +336,7 @@ def _normalize_merchant(merchant: str | None, description: str | None) -> str:
 def _is_transfer(merchant_norm: str) -> bool:
     """
     Detect if a transaction is a transfer/payment rather than actual spending.
-    
+
     These are excluded from expense analysis because:
     - Credit card payments: actual spending is on the card, not the payment
     - Internal transfers: moving money between accounts isn't spending
@@ -350,10 +367,282 @@ def _is_transfer(merchant_norm: str) -> bool:
     return any(kw in merchant_norm for kw in transfer_keywords)
 
 
+def _is_credit_card_account(account_name: str) -> bool:
+    """
+    Detect if an account is a credit card based on its name.
+
+    Credit cards have inverted semantics:
+    - Negative amounts = spending (what you owe)
+    - Positive amounts = payments/credits received (reduces what you owe)
+    """
+    name_lower = account_name.lower()
+    cc_keywords = [
+        "credit card",
+        "visa",
+        "mastercard",
+        "amex",
+        "american express",
+        "discover",
+        "chase sapphire",
+        "chase freedom",
+        "capital one",
+        "citi",
+        "barclays",
+        "wells fargo active cash",
+        "rewards",
+    ]
+    # Negative indicators - NOT a credit card
+    not_cc = ["checking", "savings", "money market", "debit", "ira", "401k", "brokerage"]
+    if any(kw in name_lower for kw in not_cc):
+        return False
+    return any(kw in name_lower for kw in cc_keywords)
+
+
+def _is_income_transfer(merchant_norm: str) -> bool:
+    """
+    Detect if a positive amount is a transfer rather than real income.
+
+    These should NOT count as income:
+    - Internal transfers between accounts
+    - Zelle/Venmo/PayPal (person-to-person, ambiguous)
+
+    These ARE real income (not transfers):
+    - Paychecks, direct deposits
+    - Unemployment payments
+    - Tax refunds
+    """
+    # First check for known income patterns (these are NOT transfers)
+    income_patterns = [
+        "unemployment",
+        "direct deposit",
+        "payroll",
+        "paycheck",
+        "salary",
+        "irs",
+        "tax refund",
+    ]
+    if any(p in merchant_norm for p in income_patterns):
+        return False
+
+    # These are likely transfers, not real income
+    transfer_keywords = [
+        "transfer from",
+        "transfer to",
+        "online transfer",
+        "recurring transfer",
+        "ach transfer",
+        "wire transfer",
+        "zelle",
+        "venmo",
+        "cash app",
+        "paypal",
+    ]
+    return any(kw in merchant_norm for kw in transfer_keywords)
+
+
+def _is_cc_payment_expense(merchant_norm: str) -> bool:
+    """
+    Detect if a checking account expense is a credit card payment.
+
+    When you pay your credit card from checking, the checking account shows
+    a negative amount. This is a transfer, not an expense (the actual
+    spending happened on the credit card).
+    """
+    cc_payment_keywords = [
+        "payment to chase",
+        "payment to citi",
+        "payment to amex",
+        "payment to american express",
+        "payment to discover",
+        "payment to capital one",
+        "payment to bank of america",
+        "payment to wells fargo",
+        "payment to usaa",
+        "payment to barclays",
+        "credit card payment",
+        "card payment",
+        "cc payment",
+    ]
+    return any(kw in merchant_norm for kw in cc_payment_keywords)
+
+
+def classify_transaction(
+    amount_cents: int,
+    merchant_norm: str,
+    is_credit_card: bool,
+    pattern: "MerchantPattern | None",
+    income_sources: set[str],
+    excluded_sources: set[str],
+) -> str:
+    """
+    Classify a single transaction.
+
+    This is the SINGLE SOURCE OF TRUTH for classification logic.
+    Both classify_month() and analysis.py should use this function.
+
+    Args:
+        amount_cents: Transaction amount (positive = credit, negative = debit)
+        merchant_norm: Normalized merchant name (lowercase, trimmed)
+        is_credit_card: Whether the account is a credit card
+        pattern: Detected merchant pattern (for recurring detection)
+        income_sources: User-marked income merchants
+        excluded_sources: User-marked not-income merchants
+
+    Returns:
+        Classification: "income", "credit", "recurring", "transfer", "one-off"
+    """
+    # Check user rules (substring match for flexibility)
+    is_user_income = any(src in merchant_norm for src in income_sources)
+    is_user_excluded = any(excl in merchant_norm for excl in excluded_sources)
+
+    if amount_cents > 0:
+        # === POSITIVE AMOUNT ===
+        # Priority order for positive amounts:
+
+        # 1. Credit card positive = payment received (always a transfer)
+        #    CC positives are payments you made TO the card, not income
+        if is_credit_card:
+            return "transfer"
+
+        # 2. Known transfer patterns (internal transfers, P2P)
+        if pattern and pattern.is_transfer:
+            return "transfer"
+        if _is_income_transfer(merchant_norm):
+            return "transfer"
+
+        # 3. User explicitly excluded from income → credit (not transfer)
+        #    These are refunds, rewards, adjustments - not income
+        if is_user_excluded:
+            return "credit"
+
+        # 4. User explicitly marked as income
+        if is_user_income:
+            return "income"
+
+        # 5. Default: positive amount is income
+        return "income"
+
+    else:
+        # === NEGATIVE AMOUNT (spending) ===
+        abs_amount = abs(amount_cents)
+
+        # 1. Credit card payment from checking account = transfer
+        if not is_credit_card and _is_cc_payment_expense(merchant_norm):
+            return "transfer"
+
+        # 2. Known transfer patterns
+        if pattern and pattern.is_transfer:
+            return "transfer"
+        if _is_transfer(merchant_norm):
+            return "transfer"
+
+        # 3. Recurring patterns
+        if pattern and pattern.is_recurring:
+            return "recurring"
+
+        # 4. Default: one-off expense
+        return "one-off"
+
+
+def detect_transfer_pairs(
+    conn: sqlite3.Connection,
+    start_date: date,
+    end_date: date,
+    tolerance_days: int = 3,
+) -> set[str]:
+    """
+    Detect internal transfer pairs across accounts.
+
+    When you transfer $1000 from Savings to Checking:
+    - Savings shows: -$1000 (outflow)
+    - Checking shows: +$1000 (inflow)
+
+    Without pairing, the +$1000 inflow would be counted as income.
+    This function finds matching pairs and returns their fingerprints.
+
+    Args:
+        start_date: Start of date range
+        end_date: End of date range (exclusive)
+        tolerance_days: Maximum days between matching transactions
+
+    Returns:
+        Set of transaction fingerprints that are part of transfer pairs
+    """
+    # Get all transactions in range
+    rows = conn.execute(
+        """
+        SELECT
+            t.fingerprint,
+            t.account_id,
+            t.posted_at,
+            t.amount_cents,
+            TRIM(LOWER(COALESCE(NULLIF(t.merchant,''), NULLIF(t.description,''), ''))) AS merchant_norm
+        FROM transactions t
+        WHERE t.posted_at >= ? AND t.posted_at < ?
+        ORDER BY t.posted_at, ABS(t.amount_cents) DESC
+        """,
+        (start_date.isoformat(), end_date.isoformat()),
+    ).fetchall()
+
+    # Build lookup by date and amount
+    by_amount: dict[int, list[dict]] = defaultdict(list)
+    for r in rows:
+        amt = r["amount_cents"]
+        by_amount[amt].append({
+            "fingerprint": r["fingerprint"],
+            "account_id": r["account_id"],
+            "posted_at": datetime.fromisoformat(r["posted_at"]).date(),
+            "amount_cents": amt,
+            "merchant_norm": r["merchant_norm"],
+        })
+
+    paired_fingerprints: set[str] = set()
+
+    # Find matching pairs (opposite amounts, different accounts, close dates)
+    for amt, txns in by_amount.items():
+        if amt >= 0:
+            continue  # Only look at outflows
+
+        opposite_amt = -amt
+        if opposite_amt not in by_amount:
+            continue
+
+        opposite_txns = by_amount[opposite_amt]
+
+        for outflow in txns:
+            if outflow["fingerprint"] in paired_fingerprints:
+                continue  # Already paired
+
+            for inflow in opposite_txns:
+                if inflow["fingerprint"] in paired_fingerprints:
+                    continue  # Already paired
+                if inflow["account_id"] == outflow["account_id"]:
+                    continue  # Same account - not a transfer
+
+                # Check date proximity
+                days_diff = abs((inflow["posted_at"] - outflow["posted_at"]).days)
+                if days_diff > tolerance_days:
+                    continue
+
+                # Check if merchant looks like a transfer
+                # (transfers often have similar descriptions or generic names)
+                outflow_is_transfer = _is_transfer(outflow["merchant_norm"]) or _is_income_transfer(outflow["merchant_norm"])
+                inflow_is_transfer = _is_transfer(inflow["merchant_norm"]) or _is_income_transfer(inflow["merchant_norm"])
+
+                # At least one side should look like a transfer
+                if outflow_is_transfer or inflow_is_transfer:
+                    paired_fingerprints.add(outflow["fingerprint"])
+                    paired_fingerprints.add(inflow["fingerprint"])
+                    break
+
+    return paired_fingerprints
+
+
 def _detect_patterns(
     conn: sqlite3.Connection,
     lookback_days: int = 400,
     account_filter: list[str] | None = None,
+    anchor_date: date | None = None,
 ) -> dict[str, MerchantPattern]:
     """
     Analyze transaction history to detect recurring merchants.
@@ -363,8 +652,15 @@ def _detect_patterns(
     2. Habitual: 6+ occurrences in the period (groceries, gas, Amazon - frequent but irregular)
 
     Transfers (credit card payments, etc.) are flagged separately.
+
+    Args:
+        anchor_date: Reference date for pattern detection. Defaults to today.
+                     For historical reports, use the end date of the period to
+                     avoid "future" data influencing pattern detection.
     """
-    since = (date.today() - timedelta(days=lookback_days)).isoformat()
+    if anchor_date is None:
+        anchor_date = date.today()
+    since = (anchor_date - timedelta(days=lookback_days)).isoformat()
 
     # Build query with optional account filter
     query = """
@@ -631,56 +927,77 @@ def classify_month(
 ) -> list[ClassifiedTransaction]:
     """
     Classify all transactions in a given month.
-    
-    Returns list of ClassifiedTransaction with income/recurring/transfer/one-off labels.
+
+    Returns list of ClassifiedTransaction with classification labels.
+    Uses the shared classify_transaction() function for consistent logic.
     """
-    if patterns is None:
-        patterns = _detect_patterns(conn)
-    
-    # Get month boundaries
+    # Get month boundaries (end-exclusive)
     start = date(year, month, 1)
     if month == 12:
         end = date(year + 1, 1, 1)
     else:
         end = date(year, month + 1, 1)
-    
+
+    # Detect patterns anchored to the END of the period, not today
+    # This ensures historical reports use patterns that existed at that time
+    if patterns is None:
+        patterns = _detect_patterns(conn, anchor_date=end)
+
+    # Detect transfer pairs (matching outflow/inflow across accounts)
+    paired_fingerprints = detect_transfer_pairs(conn, start, end)
+
+    # Fetch user income rules
+    income_sources, excluded_sources = dbmod.get_income_rules(conn)
+
+    # Get account types for credit card detection
+    account_types: dict[str, bool] = {}  # account_id -> is_credit_card
+    for acc in conn.execute("SELECT account_id, name FROM accounts").fetchall():
+        account_types[acc["account_id"]] = _is_credit_card_account(acc["name"])
+
     rows = conn.execute(
         """
         SELECT
-            posted_at,
-            amount_cents,
-            TRIM(LOWER(COALESCE(NULLIF(merchant,''), NULLIF(description,''), ''))) AS merchant_norm,
-            COALESCE(merchant, '') AS merchant,
-            COALESCE(description, '') AS description
-        FROM transactions
-        WHERE posted_at >= ? AND posted_at < ?
-        ORDER BY posted_at
+            t.fingerprint,
+            t.account_id,
+            t.posted_at,
+            t.amount_cents,
+            TRIM(LOWER(COALESCE(NULLIF(t.merchant,''), NULLIF(t.description,''), ''))) AS merchant_norm,
+            COALESCE(t.merchant, '') AS merchant,
+            COALESCE(t.description, '') AS description
+        FROM transactions t
+        WHERE t.posted_at >= ? AND t.posted_at < ?
+        ORDER BY t.posted_at
         """,
         (start.isoformat(), end.isoformat()),
     ).fetchall()
-    
+
     classified = []
     for r in rows:
+        fingerprint = r["fingerprint"]
         posted_at = datetime.fromisoformat(r["posted_at"]).date()
         amount_cents = r["amount_cents"]
         merchant_norm = r["merchant_norm"]
         raw_desc = r["merchant"] or r["description"] or ""
-        
+        account_id = r["account_id"]
+
         pattern = patterns.get(merchant_norm)
-        
-        # Classification logic
-        if amount_cents > 0:
-            classification = "income"
-        elif pattern and pattern.is_transfer:
-            classification = "transfer"
-        elif pattern and pattern.is_recurring:
-            classification = "recurring"
-        elif _is_transfer(merchant_norm):
-            # Catch transfers not in patterns (e.g., first occurrence)
+        is_cc = account_types.get(account_id, False)
+
+        # Check if this transaction is part of a transfer pair
+        # If so, override classification to "transfer" to prevent distortion
+        if fingerprint in paired_fingerprints:
             classification = "transfer"
         else:
-            classification = "one-off"
-        
+            # Use shared classification logic
+            classification = classify_transaction(
+                amount_cents=amount_cents,
+                merchant_norm=merchant_norm,
+                is_credit_card=is_cc,
+                pattern=pattern,
+                income_sources=income_sources,
+                excluded_sources=excluded_sources,
+            )
+
         classified.append(ClassifiedTransaction(
             posted_at=posted_at,
             amount_cents=amount_cents,
@@ -688,8 +1005,9 @@ def classify_month(
             raw_description=raw_desc,
             classification=classification,
             merchant_pattern=pattern,
+            account_id=account_id,
         ))
-    
+
     return classified
 
 
@@ -699,13 +1017,15 @@ class MonthSummary:
     year: int
     month: int
     income_cents: int
+    credit_cents: int    # Refunds, rewards, adjustments (not income)
     recurring_cents: int
     one_off_cents: int
     transfer_cents: int  # Excluded from analysis but tracked
     baseline_cents: int  # income - recurring
-    net_cents: int       # income - recurring - one_off (transfers excluded)
-    
+    net_cents: int       # income + credits - recurring - one_off (transfers excluded)
+
     income_sources: list[tuple[str, int]]           # (merchant, total_cents)
+    credit_sources: list[tuple[str, int]]           # (merchant, total_cents) - refunds etc.
     recurring_expenses: list[tuple[str, int, str]]  # (merchant, total_cents, cadence)
     one_off_expenses: list[tuple[str, int, int]]    # (merchant, total_cents, count)
     transfers: list[tuple[str, int]]                # (merchant, total_cents)
@@ -736,25 +1056,31 @@ def summarize_month(
     """
     patterns = _detect_patterns(conn)
     classified = classify_month(conn, year, month, patterns)
-    
+
     # Aggregate
     income_cents = 0
+    credit_cents = 0  # Refunds, rewards, adjustments
     recurring_cents = 0
     one_off_cents = 0
     transfer_cents = 0
-    
+
     income_by_source: dict[str, int] = defaultdict(int)
+    credit_by_source: dict[str, int] = defaultdict(int)
     recurring_by_merchant: dict[str, tuple[int, str]] = {}  # merchant -> (cents, cadence)
     one_off_by_merchant: dict[str, tuple[int, int]] = defaultdict(lambda: (0, 0))  # merchant -> (cents, count)
     transfer_by_merchant: dict[str, int] = defaultdict(int)
-    
+
     for tx in classified:
         merchant = tx.merchant_norm or "(unknown)"
-        
+
         if tx.classification == "income":
             income_cents += tx.amount_cents
             income_by_source[merchant] += tx.amount_cents
-            
+
+        elif tx.classification == "credit":
+            credit_cents += tx.amount_cents
+            credit_by_source[merchant] += tx.amount_cents
+
         elif tx.classification == "recurring":
             amt = abs(tx.amount_cents)
             recurring_cents += amt
@@ -764,20 +1090,21 @@ def summarize_month(
                 recurring_by_merchant[merchant] = (existing_amt + amt, existing_cadence)
             else:
                 recurring_by_merchant[merchant] = (amt, cadence)
-        
+
         elif tx.classification == "transfer":
             amt = abs(tx.amount_cents)
             transfer_cents += amt
             transfer_by_merchant[merchant] += amt
-                
+
         else:  # one-off
             amt = abs(tx.amount_cents)
             one_off_cents += amt
             existing_amt, existing_count = one_off_by_merchant[merchant]
             one_off_by_merchant[merchant] = (existing_amt + amt, existing_count + 1)
-    
+
     # Build sorted lists
     income_sources = sorted(income_by_source.items(), key=lambda x: x[1], reverse=True)
+    credit_sources = sorted(credit_by_source.items(), key=lambda x: x[1], reverse=True)
     recurring_expenses = sorted(
         [(m, c, cadence) for m, (c, cadence) in recurring_by_merchant.items()],
         key=lambda x: x[1],
@@ -789,17 +1116,20 @@ def summarize_month(
         reverse=True,
     )
     transfers = sorted(transfer_by_merchant.items(), key=lambda x: x[1], reverse=True)
-    
+
     return MonthSummary(
         year=year,
         month=month,
         income_cents=income_cents,
+        credit_cents=credit_cents,
         recurring_cents=recurring_cents,
         one_off_cents=one_off_cents,
         transfer_cents=transfer_cents,
         baseline_cents=income_cents - recurring_cents,
-        net_cents=income_cents - recurring_cents - one_off_cents,
+        # Net includes credits as they reduce effective spend
+        net_cents=income_cents + credit_cents - recurring_cents - one_off_cents,
         income_sources=income_sources,
+        credit_sources=credit_sources,
         recurring_expenses=recurring_expenses,
         one_off_expenses=one_off_expenses,
         transfers=transfers,
@@ -1056,15 +1386,16 @@ def detect_sketchy(
 
     seen_duplicates: set[tuple[str, int, str, str]] = set()  # (merchant, amount, date1, date2)
 
-    # 1. Duplicate charges: Same merchant + amount within 3 days
+    # 1. Duplicate charges: Same merchant + amount + account within 3 days
+    # Note: Cross-account duplicates are handled separately by detect_cross_account_duplicates
     for i, (d1, m1, a1, desc1, acct1) in enumerate(all_charges):
         if a1 >= 0:  # Only expenses
             continue
         for j, (d2, m2, a2, desc2, acct2) in enumerate(all_charges):
             if j <= i:
                 continue
-            if m1 != m2 or a1 != a2:
-                continue
+            if m1 != m2 or a1 != a2 or acct1 != acct2:
+                continue  # Must be same merchant, amount, AND account
             delta = abs((d2 - d1).days)
             if delta <= 3 and delta > 0:
                 key = (m1, a1, d1.isoformat(), d2.isoformat())
@@ -1294,9 +1625,9 @@ def detect_duplicates(
                 elif p.cadence_label == "bimonthly":
                     monthly = p.median_amount_cents // 2
                 elif p.cadence_label == "weekly":
-                    monthly = p.median_amount_cents * 4
+                    monthly = round(p.median_amount_cents * 52 / 12)  # ~4.33x
                 elif p.cadence_label == "biweekly":
-                    monthly = p.median_amount_cents * 2
+                    monthly = round(p.median_amount_cents * 26 / 12)  # ~2.17x
                 else:
                     monthly = p.median_amount_cents
 
@@ -1650,9 +1981,9 @@ def get_subscriptions(
         elif pattern.cadence_label == "bimonthly":
             monthly = pattern.median_amount_cents // 2
         elif pattern.cadence_label == "weekly":
-            monthly = pattern.median_amount_cents * 4
+            monthly = round(pattern.median_amount_cents * 52 / 12)  # ~4.33x
         elif pattern.cadence_label == "biweekly":
-            monthly = pattern.median_amount_cents * 2
+            monthly = round(pattern.median_amount_cents * 26 / 12)  # ~2.17x
         else:
             monthly = pattern.median_amount_cents
 
@@ -1826,9 +2157,9 @@ def get_bills(
         elif pattern.cadence_label == "bimonthly":
             monthly = pattern.median_amount_cents // 2
         elif pattern.cadence_label == "weekly":
-            monthly = pattern.median_amount_cents * 4
+            monthly = round(pattern.median_amount_cents * 52 / 12)  # ~4.33x
         elif pattern.cadence_label == "biweekly":
-            monthly = pattern.median_amount_cents * 2
+            monthly = round(pattern.median_amount_cents * 26 / 12)  # ~2.17x
         else:
             monthly = pattern.median_amount_cents
 
@@ -1845,3 +2176,120 @@ def get_bills(
     bills.sort(key=lambda x: -x[1])
 
     return bills
+
+
+def detect_price_changes(
+    conn: sqlite3.Connection,
+    days: int = 180,
+    min_change_pct: float = 10.0,
+    max_change_pct: float = 100.0,
+    account_filter: list[str] | None = None,
+) -> list[dict]:
+    """
+    Detect subscription price changes.
+
+    Looks at recurring charges and identifies when the amount changed significantly.
+    Filters out extreme changes (>100%) which are usually detection errors.
+
+    Args:
+        conn: Database connection
+        days: Days of history to analyze
+        min_change_pct: Minimum percentage change to report (default 10%)
+        max_change_pct: Maximum percentage change to report (default 100%)
+        account_filter: Optional list of account IDs to filter
+
+    Returns:
+        List of dicts with: merchant, old_amount, new_amount, change_pct, change_date, display_name
+    """
+    since = (date.today() - timedelta(days=days)).isoformat()
+
+    # Get transaction history grouped by merchant
+    query = """
+        SELECT
+            TRIM(LOWER(COALESCE(NULLIF(merchant,''), NULLIF(description,''), ''))) AS merchant_norm,
+            amount_cents,
+            posted_at
+        FROM transactions
+        WHERE posted_at >= ? AND amount_cents < 0
+    """
+    params: list = [since]
+    if account_filter:
+        placeholders = ",".join("?" * len(account_filter))
+        query += f" AND account_id IN ({placeholders})"
+        params.extend(account_filter)
+    query += " ORDER BY merchant_norm, posted_at"
+
+    rows = conn.execute(query, params).fetchall()
+
+    # Group by merchant
+    merchant_history: dict[str, list[tuple[int, str]]] = {}
+    for merchant, amount, posted_at in rows:
+        if not merchant:
+            continue
+        if merchant not in merchant_history:
+            merchant_history[merchant] = []
+        merchant_history[merchant].append((abs(amount), posted_at))
+
+    price_changes = []
+
+    for merchant, history in merchant_history.items():
+        if len(history) < 3:
+            continue  # Need at least 3 charges to detect a change
+
+        # Sort by date
+        history.sort(key=lambda x: x[1])
+
+        # Look for amount changes
+        # Compare most recent charge to the one before
+        amounts = [h[0] for h in history]
+        dates = [h[1] for h in history]
+
+        # Get the most common "old" amount (excluding last 2 charges)
+        if len(amounts) >= 4:
+            old_amounts = amounts[:-2]
+            old_amount = max(set(old_amounts), key=old_amounts.count)  # Mode
+
+            # Check if the old amounts were consistent (subscription-like)
+            # Skip if old amounts have high variance (habitual spending)
+            if len(old_amounts) >= 2:
+                mean_old = sum(old_amounts) / len(old_amounts)
+                if mean_old > 0:
+                    # Calculate how many amounts match the mode vs total
+                    mode_count = old_amounts.count(old_amount)
+                    consistency_ratio = mode_count / len(old_amounts)
+                    # Require at least 60% of charges to be the same amount
+                    if consistency_ratio < 0.6:
+                        continue  # Too variable, likely not a subscription
+
+            # Get the most recent amount
+            new_amount = amounts[-1]
+
+            # Check if there's a significant change
+            if old_amount > 0 and new_amount != old_amount:
+                change_pct = ((new_amount - old_amount) / old_amount) * 100
+
+                if min_change_pct <= abs(change_pct) <= max_change_pct:
+                    # Find when the change happened
+                    change_date = None
+                    for i, amt in enumerate(amounts):
+                        if amt == new_amount and (i == 0 or amounts[i-1] == old_amount):
+                            change_date = dates[i]
+                            break
+
+                    # Look up display name from known subscriptions
+                    known = _match_known_subscription(merchant)
+                    display_name = known[0] if known else None
+
+                    price_changes.append({
+                        "merchant": merchant,
+                        "display_name": display_name,
+                        "old_amount": old_amount,
+                        "new_amount": new_amount,
+                        "change_pct": change_pct,
+                        "change_date": change_date,
+                    })
+
+    # Sort by change percentage descending (biggest increases first)
+    price_changes.sort(key=lambda x: -x["change_pct"])
+
+    return price_changes

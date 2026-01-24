@@ -1,5 +1,6 @@
 # web.py
 import csv
+import html
 import io
 import sqlite3
 from contextlib import contextmanager
@@ -16,7 +17,7 @@ from pydantic import BaseModel
 from . import db as dbmod
 from .analysis import TimePeriod, analyze_periods, get_current_period
 from .categorize import CATEGORIES, get_category_breakdown
-from .classify import detect_alerts, detect_duplicates, detect_sketchy, get_subscriptions, get_bills, detect_cross_account_duplicates
+from .classify import detect_alerts, detect_duplicates, detect_sketchy, get_subscriptions, get_bills, detect_cross_account_duplicates, detect_price_changes
 from .config import Config, load_config
 from .models import Account
 from .normalize import normalize_simplefin_txn
@@ -135,10 +136,10 @@ def _are_expense_only_accounts(accounts: list, account_filter: list[str] | None)
 
 
 def _rows_to_table(rows, cols) -> str:
-    th = "".join([f"<th>{c}</th>" for c in cols])
+    th = "".join([f"<th>{html.escape(str(c))}</th>" for c in cols])
     trs = []
     for r in rows:
-        tds = "".join([f"<td>{r[c] if r[c] is not None else ''}</td>" for c in cols])
+        tds = "".join([f"<td>{html.escape(str(r[c])) if r[c] is not None else ''}</td>" for c in cols])
         trs.append(f"<tr>{tds}</tr>")
     return f"<table border='1' cellspacing='0' cellpadding='6'><thead><tr>{th}</tr></thead><tbody>{''.join(trs)}</tbody></table>"
 
@@ -196,7 +197,7 @@ def dashboard(
 
     # If no data mode, return empty state
     if show_no_data:
-        return templates.TemplateResponse("dashboard.html", {
+        return templates.TemplateResponse("dashboard_v2.html", {
             "request": request,
             "period_type": period,
             "current_period": None,
@@ -207,6 +208,7 @@ def dashboard(
             "cross_account_dups": [],
             "subscriptions": [],
             "bills": [],
+            "price_changes": [],
             "show_dismissed": show_dismissed,
             "start_date": start_date or "",
             "end_date": end_date or "",
@@ -282,8 +284,9 @@ def dashboard(
         # Filter by date range
         if alert.posted_at < alert_start or alert.posted_at > alert_end:
             continue
-        # Create unique key: pattern_type:merchant:amount:date
-        alert_key = f"{alert.pattern_type}:{alert.merchant_norm}:{alert.amount_cents}:{alert.posted_at.isoformat()}"
+        # Create unique key: pattern_type|merchant|amount|date
+        # Using | as delimiter because merchant names may contain colons (e.g., "BEST:BUY")
+        alert_key = f"{alert.pattern_type}|{alert.merchant_norm}|{alert.amount_cents}|{alert.posted_at.isoformat()}"
         action = alert_actions.get(alert_key)
         # Skip any actioned alerts unless show_dismissed is True
         # Actions include: ack, not_suspicious, confirmed, canceled
@@ -342,17 +345,34 @@ def dashboard(
             params.extend(account_filter)
         pending_count = conn.execute(query, params).fetchone()[0]
 
-    return templates.TemplateResponse("dashboard.html", {
+    # Detect subscription price changes
+    price_changes = detect_price_changes(conn, days=180, account_filter=account_filter)
+
+    # Serialize periods for Chart.js
+    periods_json = [
+        {
+            "period_label": p.period_label,
+            "income_cents": p.income_cents,
+            "credit_cents": p.credit_cents,  # Refunds, rewards, adjustments
+            "recurring_cents": p.recurring_cents,
+            "discretionary_cents": p.discretionary_cents,
+            "net_cents": p.net_cents,
+        }
+        for p in periods
+    ] if periods else []
+
+    return templates.TemplateResponse("dashboard_v2.html", {
         "request": request,
         "period_type": period,
         "current_period": current_period,
-        "periods": periods,
+        "periods": periods_json,
         "alerts": alerts_with_keys,
         "total_alerts": len(alerts_with_keys),
         "duplicates": duplicates,
         "cross_account_dups": cross_account_dups,
         "subscriptions": subscriptions,
         "bills": bills,
+        "price_changes": price_changes,
         "show_dismissed": show_dismissed,
         "start_date": start_date or "",
         "end_date": end_date or "",
@@ -385,7 +405,8 @@ def alert_action(
         )
 
     # Parse alert key to extract merchant and pattern type
-    parts = req.alert_key.split(":", 3)
+    # Format: pattern_type|merchant|amount|date (using | because merchant may contain colons)
+    parts = req.alert_key.split("|", 3)
     pattern_type = parts[0] if len(parts) > 0 else None
     merchant_norm = parts[1] if len(parts) > 1 else None
 
@@ -595,12 +616,18 @@ def search_transactions(
         else:
             other_matches.append(txn)
 
+    # Check if results were truncated by the database LIMIT
+    db_limit = 200
+    is_truncated = len(rows) >= db_limit
+
     return JSONResponse(content={
         "query": q,
         "matches": selected_matches[:50],  # Limit primary results
         "matches_count": len(selected_matches),
         "other_matches_count": len(other_matches),
         "other_matches_preview": other_matches[:5],  # Preview of other matches
+        "is_truncated": is_truncated,  # True if there may be more results beyond the limit
+        "result_limit": db_limit,
     })
 
 
@@ -992,6 +1019,20 @@ def anomalies(days: int = 60, limit: int = 50, conn: sqlite3.Connection = Depend
 # ---------------------------------------------------------------------------
 # CSV Export Routes
 # ---------------------------------------------------------------------------
+def _sanitize_csv_field(value: str) -> str:
+    """
+    Sanitize a string for safe CSV export to prevent formula injection.
+
+    When opened in Excel/Sheets, cells starting with =, +, -, @, tab, or CR
+    can be interpreted as formulas. Prefix with apostrophe to neutralize.
+    """
+    if not value:
+        return value
+    if value[0] in ('=', '+', '-', '@', '\t', '\r'):
+        return "'" + value
+    return value
+
+
 @app.get("/export/sketchy")
 def export_sketchy(conn: sqlite3.Connection = Depends(get_db)):
     """Export sketchy charges as CSV."""
@@ -1004,11 +1045,11 @@ def export_sketchy(conn: sqlite3.Connection = Depends(get_db)):
     for alert in alerts:
         writer.writerow([
             alert.posted_at.isoformat(),
-            alert.merchant_norm,
+            _sanitize_csv_field(alert.merchant_norm),
             f"{alert.amount_cents / 100:.2f}",
             alert.pattern_type,
             alert.severity,
-            alert.detail,
+            _sanitize_csv_field(alert.detail),
         ])
 
     output.seek(0)
@@ -1031,10 +1072,10 @@ def export_duplicates(conn: sqlite3.Connection = Depends(get_db)):
     for dup in duplicates:
         writer.writerow([
             dup.group_type,
-            "; ".join(dup.merchants),
+            _sanitize_csv_field("; ".join(dup.merchants)),
             f"{dup.total_monthly_cents / 100:.2f}",
             dup.severity,
-            dup.detail,
+            _sanitize_csv_field(dup.detail),
         ])
 
     output.seek(0)
@@ -1056,7 +1097,7 @@ def export_subscriptions(conn: sqlite3.Connection = Depends(get_db)):
 
     for sub in subscriptions:
         writer.writerow([
-            sub[0],  # merchant
+            _sanitize_csv_field(sub[0]),  # merchant
             f"{sub[1] / 100:.2f}",  # monthly_cents
             sub[2],  # cadence
             sub[3].isoformat(),  # first_seen
@@ -1093,7 +1134,7 @@ def export_summary(
 
     for p in periods:
         writer.writerow([
-            p.period_label,
+            _sanitize_csv_field(p.period_label),
             p.start_date.isoformat(),
             p.end_date.isoformat(),
             f"{p.income_cents / 100:.2f}",
@@ -1327,7 +1368,7 @@ def sync_log_page(
         """
     ).fetchall()
 
-    html = f"""
+    html_content = f"""
     <!DOCTYPE html>
     <html>
     <head>
@@ -1406,7 +1447,7 @@ def sync_log_page(
 
     for run in runs:
         ran_at = run["ran_at"][:16].replace("T", " ") if run["ran_at"] else "Unknown"
-        html += f"""
+        html_content += f"""
                         <tr>
                             <td>{ran_at}</td>
                             <td>{run['txns_fetched']}</td>
@@ -1415,7 +1456,7 @@ def sync_log_page(
                         </tr>
         """
 
-    html += """
+    html_content += """
                     </tbody>
                 </table>
             </div>
@@ -1440,17 +1481,17 @@ def sync_log_page(
         posted = txn["posted_at"][:10] if txn["posted_at"] else ""
         amount = txn["amount_cents"] / 100
         amount_class = "positive" if amount >= 0 else "negative"
-        html += f"""
+        html_content += f"""
                         <tr>
                             <td class="muted">{created}</td>
                             <td>{posted}</td>
-                            <td>{txn['payee'][:40]}</td>
+                            <td>{html.escape(txn['payee'][:40])}</td>
                             <td class="{amount_class}">${abs(amount):.2f}</td>
-                            <td>{txn['account_name']}</td>
+                            <td>{html.escape(txn['account_name'])}</td>
                         </tr>
         """
 
-    html += """
+    html_content += """
                     </tbody>
                 </table>
             </div>
@@ -1460,7 +1501,7 @@ def sync_log_page(
     """
 
     if recent_updates:
-        html += """
+        html_content += """
                 <table>
                     <thead>
                         <tr>
@@ -1478,30 +1519,30 @@ def sync_log_page(
             posted = txn["posted_at"][:10] if txn["posted_at"] else ""
             amount = txn["amount_cents"] / 100
             amount_class = "positive" if amount >= 0 else "negative"
-            html += f"""
+            html_content += f"""
                         <tr>
                             <td class="muted">{updated}</td>
                             <td>{posted}</td>
-                            <td>{txn['payee'][:40]}</td>
+                            <td>{html.escape(txn['payee'][:40])}</td>
                             <td class="{amount_class}">${abs(amount):.2f}</td>
-                            <td>{txn['account_name']}</td>
+                            <td>{html.escape(txn['account_name'])}</td>
                         </tr>
             """
-        html += """
+        html_content += """
                     </tbody>
                 </table>
         """
     else:
-        html += "<p style='color: #8792a2;'>No transactions have been updated since they were first synced.</p>"
+        html_content += "<p style='color: #8792a2;'>No transactions have been updated since they were first synced.</p>"
 
-    html += """
+    html_content += """
             </div>
         </div>
     </body>
     </html>
     """
 
-    return HTMLResponse(content=html)
+    return HTMLResponse(content=html_content)
 
 
 # ---------------------------------------------------------------------------
