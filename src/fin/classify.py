@@ -1056,15 +1056,16 @@ def detect_sketchy(
 
     seen_duplicates: set[tuple[str, int, str, str]] = set()  # (merchant, amount, date1, date2)
 
-    # 1. Duplicate charges: Same merchant + amount within 3 days
+    # 1. Duplicate charges: Same merchant + amount + account within 3 days
+    # Note: Cross-account duplicates are handled separately by detect_cross_account_duplicates
     for i, (d1, m1, a1, desc1, acct1) in enumerate(all_charges):
         if a1 >= 0:  # Only expenses
             continue
         for j, (d2, m2, a2, desc2, acct2) in enumerate(all_charges):
             if j <= i:
                 continue
-            if m1 != m2 or a1 != a2:
-                continue
+            if m1 != m2 or a1 != a2 or acct1 != acct2:
+                continue  # Must be same merchant, amount, AND account
             delta = abs((d2 - d1).days)
             if delta <= 3 and delta > 0:
                 key = (m1, a1, d1.isoformat(), d2.isoformat())
