@@ -1294,9 +1294,9 @@ def detect_duplicates(
                 elif p.cadence_label == "bimonthly":
                     monthly = p.median_amount_cents // 2
                 elif p.cadence_label == "weekly":
-                    monthly = p.median_amount_cents * 4
+                    monthly = round(p.median_amount_cents * 52 / 12)  # ~4.33x
                 elif p.cadence_label == "biweekly":
-                    monthly = p.median_amount_cents * 2
+                    monthly = round(p.median_amount_cents * 26 / 12)  # ~2.17x
                 else:
                     monthly = p.median_amount_cents
 
@@ -1650,9 +1650,9 @@ def get_subscriptions(
         elif pattern.cadence_label == "bimonthly":
             monthly = pattern.median_amount_cents // 2
         elif pattern.cadence_label == "weekly":
-            monthly = pattern.median_amount_cents * 4
+            monthly = round(pattern.median_amount_cents * 52 / 12)  # ~4.33x
         elif pattern.cadence_label == "biweekly":
-            monthly = pattern.median_amount_cents * 2
+            monthly = round(pattern.median_amount_cents * 26 / 12)  # ~2.17x
         else:
             monthly = pattern.median_amount_cents
 
@@ -1826,9 +1826,9 @@ def get_bills(
         elif pattern.cadence_label == "bimonthly":
             monthly = pattern.median_amount_cents // 2
         elif pattern.cadence_label == "weekly":
-            monthly = pattern.median_amount_cents * 4
+            monthly = round(pattern.median_amount_cents * 52 / 12)  # ~4.33x
         elif pattern.cadence_label == "biweekly":
-            monthly = pattern.median_amount_cents * 2
+            monthly = round(pattern.median_amount_cents * 26 / 12)  # ~2.17x
         else:
             monthly = pattern.median_amount_cents
 
@@ -1845,3 +1845,120 @@ def get_bills(
     bills.sort(key=lambda x: -x[1])
 
     return bills
+
+
+def detect_price_changes(
+    conn: sqlite3.Connection,
+    days: int = 180,
+    min_change_pct: float = 10.0,
+    max_change_pct: float = 100.0,
+    account_filter: list[str] | None = None,
+) -> list[dict]:
+    """
+    Detect subscription price changes.
+
+    Looks at recurring charges and identifies when the amount changed significantly.
+    Filters out extreme changes (>100%) which are usually detection errors.
+
+    Args:
+        conn: Database connection
+        days: Days of history to analyze
+        min_change_pct: Minimum percentage change to report (default 10%)
+        max_change_pct: Maximum percentage change to report (default 100%)
+        account_filter: Optional list of account IDs to filter
+
+    Returns:
+        List of dicts with: merchant, old_amount, new_amount, change_pct, change_date, display_name
+    """
+    since = (date.today() - timedelta(days=days)).isoformat()
+
+    # Get transaction history grouped by merchant
+    query = """
+        SELECT
+            TRIM(LOWER(COALESCE(NULLIF(merchant,''), NULLIF(description,''), ''))) AS merchant_norm,
+            amount_cents,
+            posted_at
+        FROM transactions
+        WHERE posted_at >= ? AND amount_cents < 0
+    """
+    params: list = [since]
+    if account_filter:
+        placeholders = ",".join("?" * len(account_filter))
+        query += f" AND account_id IN ({placeholders})"
+        params.extend(account_filter)
+    query += " ORDER BY merchant_norm, posted_at"
+
+    rows = conn.execute(query, params).fetchall()
+
+    # Group by merchant
+    merchant_history: dict[str, list[tuple[int, str]]] = {}
+    for merchant, amount, posted_at in rows:
+        if not merchant:
+            continue
+        if merchant not in merchant_history:
+            merchant_history[merchant] = []
+        merchant_history[merchant].append((abs(amount), posted_at))
+
+    price_changes = []
+
+    for merchant, history in merchant_history.items():
+        if len(history) < 3:
+            continue  # Need at least 3 charges to detect a change
+
+        # Sort by date
+        history.sort(key=lambda x: x[1])
+
+        # Look for amount changes
+        # Compare most recent charge to the one before
+        amounts = [h[0] for h in history]
+        dates = [h[1] for h in history]
+
+        # Get the most common "old" amount (excluding last 2 charges)
+        if len(amounts) >= 4:
+            old_amounts = amounts[:-2]
+            old_amount = max(set(old_amounts), key=old_amounts.count)  # Mode
+
+            # Check if the old amounts were consistent (subscription-like)
+            # Skip if old amounts have high variance (habitual spending)
+            if len(old_amounts) >= 2:
+                mean_old = sum(old_amounts) / len(old_amounts)
+                if mean_old > 0:
+                    # Calculate how many amounts match the mode vs total
+                    mode_count = old_amounts.count(old_amount)
+                    consistency_ratio = mode_count / len(old_amounts)
+                    # Require at least 60% of charges to be the same amount
+                    if consistency_ratio < 0.6:
+                        continue  # Too variable, likely not a subscription
+
+            # Get the most recent amount
+            new_amount = amounts[-1]
+
+            # Check if there's a significant change
+            if old_amount > 0 and new_amount != old_amount:
+                change_pct = ((new_amount - old_amount) / old_amount) * 100
+
+                if min_change_pct <= abs(change_pct) <= max_change_pct:
+                    # Find when the change happened
+                    change_date = None
+                    for i, amt in enumerate(amounts):
+                        if amt == new_amount and (i == 0 or amounts[i-1] == old_amount):
+                            change_date = dates[i]
+                            break
+
+                    # Look up display name from known subscriptions
+                    known = _match_known_subscription(merchant)
+                    display_name = known[0] if known else None
+
+                    price_changes.append({
+                        "merchant": merchant,
+                        "display_name": display_name,
+                        "old_amount": old_amount,
+                        "new_amount": new_amount,
+                        "change_pct": change_pct,
+                        "change_date": change_date,
+                    })
+
+    # Sort by change percentage descending (biggest increases first)
+    price_changes.sort(key=lambda x: -x["change_pct"])
+
+    return price_changes
