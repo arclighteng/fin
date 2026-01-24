@@ -454,8 +454,9 @@ def analyze_periods(
     if end_date is None:
         end_date = date.today()
 
-    # Detect patterns once for consistency
-    patterns = _detect_patterns(conn, lookback_days=800)
+    # Detect patterns anchored to the reference end_date
+    # This ensures historical reports use patterns that existed at that time
+    patterns = _detect_patterns(conn, lookback_days=800, anchor_date=end_date)
 
     # Get user-marked income rules
     income_sources, excluded_sources = dbmod.get_income_rules(conn)
@@ -590,8 +591,9 @@ def analyze_custom_range(
     # Get user-marked income rules
     income_sources, excluded_sources = dbmod.get_income_rules(conn)
 
-    # Detect patterns for recurring classification
-    patterns = _detect_patterns(conn, lookback_days=800)
+    # Detect patterns anchored to the END of the custom range
+    # This ensures historical reports use patterns that existed at that time
+    patterns = _detect_patterns(conn, lookback_days=800, anchor_date=end)
 
     # Get account info to determine account types
     account_types: dict[str, bool] = {}  # account_id -> is_credit_card

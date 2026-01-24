@@ -548,6 +548,7 @@ def _detect_patterns(
     conn: sqlite3.Connection,
     lookback_days: int = 400,
     account_filter: list[str] | None = None,
+    anchor_date: date | None = None,
 ) -> dict[str, MerchantPattern]:
     """
     Analyze transaction history to detect recurring merchants.
@@ -557,8 +558,15 @@ def _detect_patterns(
     2. Habitual: 6+ occurrences in the period (groceries, gas, Amazon - frequent but irregular)
 
     Transfers (credit card payments, etc.) are flagged separately.
+
+    Args:
+        anchor_date: Reference date for pattern detection. Defaults to today.
+                     For historical reports, use the end date of the period to
+                     avoid "future" data influencing pattern detection.
     """
-    since = (date.today() - timedelta(days=lookback_days)).isoformat()
+    if anchor_date is None:
+        anchor_date = date.today()
+    since = (anchor_date - timedelta(days=lookback_days)).isoformat()
 
     # Build query with optional account filter
     query = """
@@ -829,8 +837,17 @@ def classify_month(
     Returns list of ClassifiedTransaction with classification labels.
     Uses the shared classify_transaction() function for consistent logic.
     """
+    # Get month boundaries (end-exclusive)
+    start = date(year, month, 1)
+    if month == 12:
+        end = date(year + 1, 1, 1)
+    else:
+        end = date(year, month + 1, 1)
+
+    # Detect patterns anchored to the END of the period, not today
+    # This ensures historical reports use patterns that existed at that time
     if patterns is None:
-        patterns = _detect_patterns(conn)
+        patterns = _detect_patterns(conn, anchor_date=end)
 
     # Fetch user income rules
     income_sources, excluded_sources = dbmod.get_income_rules(conn)
@@ -839,13 +856,6 @@ def classify_month(
     account_types: dict[str, bool] = {}  # account_id -> is_credit_card
     for acc in conn.execute("SELECT account_id, name FROM accounts").fetchall():
         account_types[acc["account_id"]] = _is_credit_card_account(acc["name"])
-
-    # Get month boundaries (end-exclusive)
-    start = date(year, month, 1)
-    if month == 12:
-        end = date(year + 1, 1, 1)
-    else:
-        end = date(year, month + 1, 1)
 
     rows = conn.execute(
         """
