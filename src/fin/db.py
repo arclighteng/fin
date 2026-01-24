@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS anomalies (
 -- Alert actions: user feedback on detected alerts
 CREATE TABLE IF NOT EXISTS alert_actions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  alert_key TEXT NOT NULL UNIQUE,  -- Unique identifier: "type:merchant:amount:date"
+  alert_key TEXT NOT NULL UNIQUE,  -- Unique identifier: "type|merchant|amount|date"
   action TEXT NOT NULL,             -- "ack", "not_suspicious", "confirmed", "canceled"
   merchant_norm TEXT,               -- For learning across similar transactions
   pattern_type TEXT,                -- "duplicate_charge", "unusual_amount", etc.

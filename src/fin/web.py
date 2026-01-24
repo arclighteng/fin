@@ -284,8 +284,9 @@ def dashboard(
         # Filter by date range
         if alert.posted_at < alert_start or alert.posted_at > alert_end:
             continue
-        # Create unique key: pattern_type:merchant:amount:date
-        alert_key = f"{alert.pattern_type}:{alert.merchant_norm}:{alert.amount_cents}:{alert.posted_at.isoformat()}"
+        # Create unique key: pattern_type|merchant|amount|date
+        # Using | as delimiter because merchant names may contain colons (e.g., "BEST:BUY")
+        alert_key = f"{alert.pattern_type}|{alert.merchant_norm}|{alert.amount_cents}|{alert.posted_at.isoformat()}"
         action = alert_actions.get(alert_key)
         # Skip any actioned alerts unless show_dismissed is True
         # Actions include: ack, not_suspicious, confirmed, canceled
@@ -403,7 +404,8 @@ def alert_action(
         )
 
     # Parse alert key to extract merchant and pattern type
-    parts = req.alert_key.split(":", 3)
+    # Format: pattern_type|merchant|amount|date (using | because merchant may contain colons)
+    parts = req.alert_key.split("|", 3)
     pattern_type = parts[0] if len(parts) > 0 else None
     merchant_norm = parts[1] if len(parts) > 1 else None
 

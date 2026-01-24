@@ -14,6 +14,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
+from . import db as dbmod
+
 
 # ---------------------------------------------------------------------------
 # Known Subscription Services Registry
@@ -631,19 +633,30 @@ def classify_month(
 ) -> list[ClassifiedTransaction]:
     """
     Classify all transactions in a given month.
-    
+
     Returns list of ClassifiedTransaction with income/recurring/transfer/one-off labels.
+
+    Classification priority:
+    1. Known transfer patterns (CC payments, internal transfers) → transfer
+    2. User-excluded merchants (marked as not-income) → transfer (for refunds/credits)
+    3. User-confirmed income sources → income
+    4. Positive amounts → income
+    5. Recurring patterns → recurring
+    6. Everything else → one-off
     """
     if patterns is None:
         patterns = _detect_patterns(conn)
-    
+
+    # Fetch user income rules
+    income_sources, excluded_sources = dbmod.get_income_rules(conn)
+
     # Get month boundaries
     start = date(year, month, 1)
     if month == 12:
         end = date(year + 1, 1, 1)
     else:
         end = date(year, month + 1, 1)
-    
+
     rows = conn.execute(
         """
         SELECT
@@ -658,29 +671,42 @@ def classify_month(
         """,
         (start.isoformat(), end.isoformat()),
     ).fetchall()
-    
+
     classified = []
     for r in rows:
         posted_at = datetime.fromisoformat(r["posted_at"]).date()
         amount_cents = r["amount_cents"]
         merchant_norm = r["merchant_norm"]
         raw_desc = r["merchant"] or r["description"] or ""
-        
+
         pattern = patterns.get(merchant_norm)
-        
-        # Classification logic
-        if amount_cents > 0:
-            classification = "income"
-        elif pattern and pattern.is_transfer:
+
+        # Check user rules (substring match for flexibility)
+        is_user_excluded = any(excl in merchant_norm for excl in excluded_sources)
+        is_user_income = any(src in merchant_norm for src in income_sources)
+
+        # Classification logic - ORDER MATTERS
+        # 1. Known transfer patterns first (CC payments, internal transfers)
+        if pattern and pattern.is_transfer:
             classification = "transfer"
+        elif _is_transfer(merchant_norm):
+            classification = "transfer"
+        # 2. User excluded from income (refunds, reimbursements, etc.)
+        elif is_user_excluded and amount_cents > 0:
+            classification = "transfer"  # Exclude from income totals
+        # 3. User confirmed as income source
+        elif is_user_income and amount_cents > 0:
+            classification = "income"
+        # 4. Positive amounts are income (unless excluded above)
+        elif amount_cents > 0:
+            classification = "income"
+        # 5. Recurring patterns
         elif pattern and pattern.is_recurring:
             classification = "recurring"
-        elif _is_transfer(merchant_norm):
-            # Catch transfers not in patterns (e.g., first occurrence)
-            classification = "transfer"
+        # 6. Everything else
         else:
             classification = "one-off"
-        
+
         classified.append(ClassifiedTransaction(
             posted_at=posted_at,
             amount_cents=amount_cents,
@@ -689,7 +715,7 @@ def classify_month(
             classification=classification,
             merchant_pattern=pattern,
         ))
-    
+
     return classified
 
 
