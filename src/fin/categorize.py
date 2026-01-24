@@ -228,10 +228,25 @@ def categorize_transactions(
         if override and override in CATEGORIES:
             cat_id = override
         elif amount > 0:
-            # Positive amount: check if it's a one-time deposit or regular income
+            # Positive amount: could be income OR a refund
             cat_id, confidence = categorize_merchant(merchant, description)
-            # If no specific match or matched as expense category, default to income
-            if cat_id not in ("income", "one_time_deposit") or confidence == 0:
+
+            # If merchant categorizes to an expense category (not income/transfer),
+            # treat this as a REFUND and keep it in that category.
+            # This allows category breakdowns to show NET amounts.
+            expense_categories = {
+                "dining", "groceries", "transport", "shopping", "entertainment",
+                "health", "utilities", "travel", "personal", "home", "education",
+                "subscriptions", "insurance", "fees", "gifts", "pets",
+            }
+            if cat_id in expense_categories and confidence > 0:
+                # It's a refund - keep in expense category
+                pass
+            elif cat_id in ("income", "one_time_deposit") and confidence > 0:
+                # Explicitly categorized as income
+                pass
+            else:
+                # Default positive amounts to income
                 cat_id = "income"
         else:
             # Negative amount: categorize as expense
@@ -247,28 +262,38 @@ def get_category_breakdown(
     start_date: str,
     end_date: str,
     account_filter: list[str] | None = None,
-) -> list[tuple[Category, int, int]]:
+) -> list[tuple[Category, int, int, int, int]]:
     """
-    Get spending breakdown by category.
+    Get spending breakdown by category with NET amounts (gross - refunds).
 
-    Returns: list of (Category, total_cents, transaction_count) sorted by total
+    Returns: list of (Category, net_cents, transaction_count, gross_cents, refund_cents)
+             sorted by net_cents descending
+
+    The net amount accounts for refunds/credits, giving a more accurate picture
+    of actual spending per category.
     """
     categorized = categorize_transactions(conn, start_date, end_date, account_filter=account_filter)
 
     breakdown = []
     for cat_id, transactions in categorized.items():
         if cat_id in ("income", "transfer", "one_time_deposit"):
-            continue  # Skip income, transfers, and refunds/credits for expense breakdown
+            continue  # Skip income, transfers for expense breakdown
 
-        # Only count negative amounts (actual expenses)
-        expense_txns = [t for t in transactions if t[1] < 0]
-        total = sum(abs(t[1]) for t in expense_txns)
-        count = len(expense_txns)
+        # Split into expenses (negative) and refunds (positive)
+        expenses = [t for t in transactions if t[1] < 0]
+        refunds = [t for t in transactions if t[1] > 0]
 
-        if total > 0:
-            breakdown.append((CATEGORIES[cat_id], total, count))
+        gross_cents = sum(abs(t[1]) for t in expenses)
+        refund_cents = sum(t[1] for t in refunds)  # Already positive
+        net_cents = gross_cents - refund_cents  # Net spending
 
-    # Sort by total descending
+        # Count all transactions (both expenses and refunds)
+        count = len(expenses) + len(refunds)
+
+        if gross_cents > 0 or refund_cents > 0:
+            breakdown.append((CATEGORIES[cat_id], net_cents, count, gross_cents, refund_cents))
+
+    # Sort by net_cents descending
     breakdown.sort(key=lambda x: -x[1])
     return breakdown
 

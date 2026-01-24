@@ -878,14 +878,19 @@
                 </span>
             </div>
             <div class="category-list">
-                {% for category, total_cents, count in category_breakdown[:6] %}
+                {% for category, net_cents, count, gross_cents, refund_cents in category_breakdown[:6] %}
                 <div class="breakdown-row" style="margin-bottom: 10px; cursor: pointer;" onclick="drillCategory('{{ category.id }}')">
                     <span class="breakdown-label">{{ category.icon }} {{ category.name }}</span>
                     <div class="breakdown-bar-container">
                         {% set max_cat = category_breakdown[0][1] if category_breakdown else 1 %}
-                        <div class="breakdown-bar" style="width: {{ (total_cents / max_cat * 100)|int }}%; background: {{ category.color }};"></div>
+                        <div class="breakdown-bar" style="width: {{ (net_cents / max_cat * 100)|int if max_cat > 0 else 0 }}%; background: {{ category.color }};"></div>
                     </div>
-                    <span class="breakdown-value">${{ "%.0f"|format(total_cents / 100) }}</span>
+                    <span class="breakdown-value">
+                        ${{ "%.0f"|format(net_cents / 100) }}
+                        {% if refund_cents > 0 %}
+                        <span style="color: #22c55e; font-size: 11px; margin-left: 4px;" title="Includes ${{ "%.0f"|format(refund_cents / 100) }} in refunds">*</span>
+                        {% endif %}
+                    </span>
                 </div>
                 {% endfor %}
             </div>
