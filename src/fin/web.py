@@ -1,5 +1,6 @@
 # web.py
 import csv
+import html
 import io
 import sqlite3
 from contextlib import contextmanager
@@ -135,7 +136,6 @@ def _are_expense_only_accounts(accounts: list, account_filter: list[str] | None)
 
 
 def _rows_to_table(rows, cols) -> str:
-    import html
     th = "".join([f"<th>{html.escape(str(c))}</th>" for c in cols])
     trs = []
     for r in rows:
@@ -1345,7 +1345,7 @@ def sync_log_page(
         """
     ).fetchall()
 
-    html = f"""
+    html_content = f"""
     <!DOCTYPE html>
     <html>
     <head>
@@ -1424,7 +1424,7 @@ def sync_log_page(
 
     for run in runs:
         ran_at = run["ran_at"][:16].replace("T", " ") if run["ran_at"] else "Unknown"
-        html += f"""
+        html_content += f"""
                         <tr>
                             <td>{ran_at}</td>
                             <td>{run['txns_fetched']}</td>
@@ -1433,7 +1433,7 @@ def sync_log_page(
                         </tr>
         """
 
-    html += """
+    html_content += """
                     </tbody>
                 </table>
             </div>
@@ -1458,17 +1458,17 @@ def sync_log_page(
         posted = txn["posted_at"][:10] if txn["posted_at"] else ""
         amount = txn["amount_cents"] / 100
         amount_class = "positive" if amount >= 0 else "negative"
-        html += f"""
+        html_content += f"""
                         <tr>
                             <td class="muted">{created}</td>
                             <td>{posted}</td>
-                            <td>{txn['payee'][:40]}</td>
+                            <td>{html.escape(txn['payee'][:40])}</td>
                             <td class="{amount_class}">${abs(amount):.2f}</td>
-                            <td>{txn['account_name']}</td>
+                            <td>{html.escape(txn['account_name'])}</td>
                         </tr>
         """
 
-    html += """
+    html_content += """
                     </tbody>
                 </table>
             </div>
@@ -1478,7 +1478,7 @@ def sync_log_page(
     """
 
     if recent_updates:
-        html += """
+        html_content += """
                 <table>
                     <thead>
                         <tr>
@@ -1496,30 +1496,30 @@ def sync_log_page(
             posted = txn["posted_at"][:10] if txn["posted_at"] else ""
             amount = txn["amount_cents"] / 100
             amount_class = "positive" if amount >= 0 else "negative"
-            html += f"""
+            html_content += f"""
                         <tr>
                             <td class="muted">{updated}</td>
                             <td>{posted}</td>
-                            <td>{txn['payee'][:40]}</td>
+                            <td>{html.escape(txn['payee'][:40])}</td>
                             <td class="{amount_class}">${abs(amount):.2f}</td>
-                            <td>{txn['account_name']}</td>
+                            <td>{html.escape(txn['account_name'])}</td>
                         </tr>
             """
-        html += """
+        html_content += """
                     </tbody>
                 </table>
         """
     else:
-        html += "<p style='color: #8792a2;'>No transactions have been updated since they were first synced.</p>"
+        html_content += "<p style='color: #8792a2;'>No transactions have been updated since they were first synced.</p>"
 
-    html += """
+    html_content += """
             </div>
         </div>
     </body>
     </html>
     """
 
-    return HTMLResponse(content=html)
+    return HTMLResponse(content=html_content)
 
 
 # ---------------------------------------------------------------------------
