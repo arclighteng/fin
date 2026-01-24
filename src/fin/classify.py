@@ -544,6 +544,100 @@ def classify_transaction(
         return "one-off"
 
 
+def detect_transfer_pairs(
+    conn: sqlite3.Connection,
+    start_date: date,
+    end_date: date,
+    tolerance_days: int = 3,
+) -> set[str]:
+    """
+    Detect internal transfer pairs across accounts.
+
+    When you transfer $1000 from Savings to Checking:
+    - Savings shows: -$1000 (outflow)
+    - Checking shows: +$1000 (inflow)
+
+    Without pairing, the +$1000 inflow would be counted as income.
+    This function finds matching pairs and returns their fingerprints.
+
+    Args:
+        start_date: Start of date range
+        end_date: End of date range (exclusive)
+        tolerance_days: Maximum days between matching transactions
+
+    Returns:
+        Set of transaction fingerprints that are part of transfer pairs
+    """
+    # Get all transactions in range
+    rows = conn.execute(
+        """
+        SELECT
+            t.fingerprint,
+            t.account_id,
+            t.posted_at,
+            t.amount_cents,
+            TRIM(LOWER(COALESCE(NULLIF(t.merchant,''), NULLIF(t.description,''), ''))) AS merchant_norm
+        FROM transactions t
+        WHERE t.posted_at >= ? AND t.posted_at < ?
+        ORDER BY t.posted_at, ABS(t.amount_cents) DESC
+        """,
+        (start_date.isoformat(), end_date.isoformat()),
+    ).fetchall()
+
+    # Build lookup by date and amount
+    by_amount: dict[int, list[dict]] = defaultdict(list)
+    for r in rows:
+        amt = r["amount_cents"]
+        by_amount[amt].append({
+            "fingerprint": r["fingerprint"],
+            "account_id": r["account_id"],
+            "posted_at": datetime.fromisoformat(r["posted_at"]).date(),
+            "amount_cents": amt,
+            "merchant_norm": r["merchant_norm"],
+        })
+
+    paired_fingerprints: set[str] = set()
+
+    # Find matching pairs (opposite amounts, different accounts, close dates)
+    for amt, txns in by_amount.items():
+        if amt >= 0:
+            continue  # Only look at outflows
+
+        opposite_amt = -amt
+        if opposite_amt not in by_amount:
+            continue
+
+        opposite_txns = by_amount[opposite_amt]
+
+        for outflow in txns:
+            if outflow["fingerprint"] in paired_fingerprints:
+                continue  # Already paired
+
+            for inflow in opposite_txns:
+                if inflow["fingerprint"] in paired_fingerprints:
+                    continue  # Already paired
+                if inflow["account_id"] == outflow["account_id"]:
+                    continue  # Same account - not a transfer
+
+                # Check date proximity
+                days_diff = abs((inflow["posted_at"] - outflow["posted_at"]).days)
+                if days_diff > tolerance_days:
+                    continue
+
+                # Check if merchant looks like a transfer
+                # (transfers often have similar descriptions or generic names)
+                outflow_is_transfer = _is_transfer(outflow["merchant_norm"]) or _is_income_transfer(outflow["merchant_norm"])
+                inflow_is_transfer = _is_transfer(inflow["merchant_norm"]) or _is_income_transfer(inflow["merchant_norm"])
+
+                # At least one side should look like a transfer
+                if outflow_is_transfer or inflow_is_transfer:
+                    paired_fingerprints.add(outflow["fingerprint"])
+                    paired_fingerprints.add(inflow["fingerprint"])
+                    break
+
+    return paired_fingerprints
+
+
 def _detect_patterns(
     conn: sqlite3.Connection,
     lookback_days: int = 400,
@@ -849,6 +943,9 @@ def classify_month(
     if patterns is None:
         patterns = _detect_patterns(conn, anchor_date=end)
 
+    # Detect transfer pairs (matching outflow/inflow across accounts)
+    paired_fingerprints = detect_transfer_pairs(conn, start, end)
+
     # Fetch user income rules
     income_sources, excluded_sources = dbmod.get_income_rules(conn)
 
@@ -860,6 +957,7 @@ def classify_month(
     rows = conn.execute(
         """
         SELECT
+            t.fingerprint,
             t.account_id,
             t.posted_at,
             t.amount_cents,
@@ -875,6 +973,7 @@ def classify_month(
 
     classified = []
     for r in rows:
+        fingerprint = r["fingerprint"]
         posted_at = datetime.fromisoformat(r["posted_at"]).date()
         amount_cents = r["amount_cents"]
         merchant_norm = r["merchant_norm"]
@@ -884,15 +983,20 @@ def classify_month(
         pattern = patterns.get(merchant_norm)
         is_cc = account_types.get(account_id, False)
 
-        # Use shared classification logic
-        classification = classify_transaction(
-            amount_cents=amount_cents,
-            merchant_norm=merchant_norm,
-            is_credit_card=is_cc,
-            pattern=pattern,
-            income_sources=income_sources,
-            excluded_sources=excluded_sources,
-        )
+        # Check if this transaction is part of a transfer pair
+        # If so, override classification to "transfer" to prevent distortion
+        if fingerprint in paired_fingerprints:
+            classification = "transfer"
+        else:
+            # Use shared classification logic
+            classification = classify_transaction(
+                amount_cents=amount_cents,
+                merchant_norm=merchant_norm,
+                is_credit_card=is_cc,
+                pattern=pattern,
+                income_sources=income_sources,
+                excluded_sources=excluded_sources,
+            )
 
         classified.append(ClassifiedTransaction(
             posted_at=posted_at,

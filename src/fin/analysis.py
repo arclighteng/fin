@@ -21,6 +21,7 @@ from .classify import (
     _is_income_transfer,
     _is_cc_payment_expense,
     classify_transaction,
+    detect_transfer_pairs,
 )
 
 
@@ -308,6 +309,9 @@ def _analyze_single_period(
     income_sources = income_sources or set()
     excluded_sources = excluded_sources or set()
 
+    # Detect transfer pairs (matching outflow/inflow across accounts)
+    paired_fingerprints = detect_transfer_pairs(conn, start, end)
+
     # Get account info to determine account types
     account_types: dict[str, bool] = {}  # account_id -> is_credit_card
     for acc in conn.execute("SELECT account_id, name FROM accounts").fetchall():
@@ -316,6 +320,7 @@ def _analyze_single_period(
     # Build query with optional account filter (end-exclusive for period bounds)
     query = """
         SELECT
+            t.fingerprint,
             t.account_id,
             t.posted_at,
             t.amount_cents,
@@ -349,21 +354,27 @@ def _analyze_single_period(
     transfer_items: list[tuple[str, int]] = []
 
     for r in rows:
+        fingerprint = r["fingerprint"]
         amount = r["amount_cents"]
         merchant_norm = r["merchant_norm"]
         account_id = r["account_id"]
         is_cc = account_types.get(account_id, False)
         pattern = patterns.get(merchant_norm)
 
-        # Use shared classification function
-        classification = classify_transaction(
-            amount_cents=amount,
-            merchant_norm=merchant_norm,
-            is_credit_card=is_cc,
-            pattern=pattern,
-            income_sources=income_sources,
-            excluded_sources=excluded_sources,
-        )
+        # Check if this transaction is part of a transfer pair
+        # If so, override classification to "transfer" to prevent distortion
+        if fingerprint in paired_fingerprints:
+            classification = "transfer"
+        else:
+            # Use shared classification function
+            classification = classify_transaction(
+                amount_cents=amount,
+                merchant_norm=merchant_norm,
+                is_credit_card=is_cc,
+                pattern=pattern,
+                income_sources=income_sources,
+                excluded_sources=excluded_sources,
+            )
 
         if classification == "income":
             income_cents += amount
@@ -595,6 +606,9 @@ def analyze_custom_range(
     # This ensures historical reports use patterns that existed at that time
     patterns = _detect_patterns(conn, lookback_days=800, anchor_date=end)
 
+    # Detect transfer pairs (end + 1 day because detect_transfer_pairs is end-exclusive)
+    paired_fingerprints = detect_transfer_pairs(conn, start, end + timedelta(days=1))
+
     # Get account info to determine account types
     account_types: dict[str, bool] = {}  # account_id -> is_credit_card
     for acc in conn.execute("SELECT account_id, name FROM accounts").fetchall():
@@ -603,6 +617,7 @@ def analyze_custom_range(
     # Build query with optional account filter (end-INCLUSIVE for custom ranges)
     query = """
         SELECT
+            t.fingerprint,
             t.account_id,
             t.posted_at,
             t.amount_cents,
@@ -638,21 +653,26 @@ def analyze_custom_range(
     transfer_items: list[tuple[str, int]] = []
 
     for r in rows:
+        fingerprint = r["fingerprint"]
         amount = r["amount_cents"]
         merchant_norm = r["merchant_norm"]
         account_id = r["account_id"]
         is_cc = account_types.get(account_id, False)
         pattern = patterns.get(merchant_norm)
 
-        # Use shared classification function
-        classification = classify_transaction(
-            amount_cents=amount,
-            merchant_norm=merchant_norm,
-            is_credit_card=is_cc,
-            pattern=pattern,
-            income_sources=income_sources,
-            excluded_sources=excluded_sources,
-        )
+        # Check if this transaction is part of a transfer pair
+        if fingerprint in paired_fingerprints:
+            classification = "transfer"
+        else:
+            # Use shared classification function
+            classification = classify_transaction(
+                amount_cents=amount,
+                merchant_norm=merchant_norm,
+                is_credit_card=is_cc,
+                pattern=pattern,
+                income_sources=income_sources,
+                excluded_sources=excluded_sources,
+            )
 
         if classification == "income":
             income_cents += amount
