@@ -3,10 +3,24 @@
 Transaction classification engine.
 
 Classifies transactions into:
-- income: positive amounts
+- income: positive amounts that represent real income (paychecks, etc.)
+- credit: positive amounts that are NOT income (refunds, rewards, adjustments)
 - recurring: merchants with regular patterns OR high-frequency habitual spending
 - transfer: credit card payments, internal transfers (excluded from expense analysis)
 - one-off: everything else
+
+Classification priority (for positive amounts):
+1. Known transfer patterns (CC payments, internal transfers) → transfer
+2. Credit card positive amounts (payments received on CC) → transfer
+3. User-excluded merchants (marked as not-income) → credit
+4. User-confirmed income sources → income
+5. Known income patterns (payroll, direct deposit) → income
+6. Default positive amounts → income
+
+Classification priority (for negative amounts):
+1. Known transfer patterns → transfer
+2. Recurring patterns → recurring
+3. Default → one-off
 """
 import sqlite3
 import statistics
@@ -308,8 +322,9 @@ class ClassifiedTransaction:
     amount_cents: int
     merchant_norm: str
     raw_description: str
-    classification: str  # "income", "recurring", "transfer", "one-off"
+    classification: str  # "income", "credit", "recurring", "transfer", "one-off"
     merchant_pattern: MerchantPattern | None
+    account_id: str | None = None  # For transfer pairing
 
 
 def _normalize_merchant(merchant: str | None, description: str | None) -> str:
@@ -321,7 +336,7 @@ def _normalize_merchant(merchant: str | None, description: str | None) -> str:
 def _is_transfer(merchant_norm: str) -> bool:
     """
     Detect if a transaction is a transfer/payment rather than actual spending.
-    
+
     These are excluded from expense analysis because:
     - Credit card payments: actual spending is on the card, not the payment
     - Internal transfers: moving money between accounts isn't spending
@@ -350,6 +365,183 @@ def _is_transfer(merchant_norm: str) -> bool:
         "cash app",
     ]
     return any(kw in merchant_norm for kw in transfer_keywords)
+
+
+def _is_credit_card_account(account_name: str) -> bool:
+    """
+    Detect if an account is a credit card based on its name.
+
+    Credit cards have inverted semantics:
+    - Negative amounts = spending (what you owe)
+    - Positive amounts = payments/credits received (reduces what you owe)
+    """
+    name_lower = account_name.lower()
+    cc_keywords = [
+        "credit card",
+        "visa",
+        "mastercard",
+        "amex",
+        "american express",
+        "discover",
+        "chase sapphire",
+        "chase freedom",
+        "capital one",
+        "citi",
+        "barclays",
+        "wells fargo active cash",
+        "rewards",
+    ]
+    # Negative indicators - NOT a credit card
+    not_cc = ["checking", "savings", "money market", "debit", "ira", "401k", "brokerage"]
+    if any(kw in name_lower for kw in not_cc):
+        return False
+    return any(kw in name_lower for kw in cc_keywords)
+
+
+def _is_income_transfer(merchant_norm: str) -> bool:
+    """
+    Detect if a positive amount is a transfer rather than real income.
+
+    These should NOT count as income:
+    - Internal transfers between accounts
+    - Zelle/Venmo/PayPal (person-to-person, ambiguous)
+
+    These ARE real income (not transfers):
+    - Paychecks, direct deposits
+    - Unemployment payments
+    - Tax refunds
+    """
+    # First check for known income patterns (these are NOT transfers)
+    income_patterns = [
+        "unemployment",
+        "direct deposit",
+        "payroll",
+        "paycheck",
+        "salary",
+        "irs",
+        "tax refund",
+    ]
+    if any(p in merchant_norm for p in income_patterns):
+        return False
+
+    # These are likely transfers, not real income
+    transfer_keywords = [
+        "transfer from",
+        "transfer to",
+        "online transfer",
+        "recurring transfer",
+        "ach transfer",
+        "wire transfer",
+        "zelle",
+        "venmo",
+        "cash app",
+        "paypal",
+    ]
+    return any(kw in merchant_norm for kw in transfer_keywords)
+
+
+def _is_cc_payment_expense(merchant_norm: str) -> bool:
+    """
+    Detect if a checking account expense is a credit card payment.
+
+    When you pay your credit card from checking, the checking account shows
+    a negative amount. This is a transfer, not an expense (the actual
+    spending happened on the credit card).
+    """
+    cc_payment_keywords = [
+        "payment to chase",
+        "payment to citi",
+        "payment to amex",
+        "payment to american express",
+        "payment to discover",
+        "payment to capital one",
+        "payment to bank of america",
+        "payment to wells fargo",
+        "payment to usaa",
+        "payment to barclays",
+        "credit card payment",
+        "card payment",
+        "cc payment",
+    ]
+    return any(kw in merchant_norm for kw in cc_payment_keywords)
+
+
+def classify_transaction(
+    amount_cents: int,
+    merchant_norm: str,
+    is_credit_card: bool,
+    pattern: "MerchantPattern | None",
+    income_sources: set[str],
+    excluded_sources: set[str],
+) -> str:
+    """
+    Classify a single transaction.
+
+    This is the SINGLE SOURCE OF TRUTH for classification logic.
+    Both classify_month() and analysis.py should use this function.
+
+    Args:
+        amount_cents: Transaction amount (positive = credit, negative = debit)
+        merchant_norm: Normalized merchant name (lowercase, trimmed)
+        is_credit_card: Whether the account is a credit card
+        pattern: Detected merchant pattern (for recurring detection)
+        income_sources: User-marked income merchants
+        excluded_sources: User-marked not-income merchants
+
+    Returns:
+        Classification: "income", "credit", "recurring", "transfer", "one-off"
+    """
+    # Check user rules (substring match for flexibility)
+    is_user_income = any(src in merchant_norm for src in income_sources)
+    is_user_excluded = any(excl in merchant_norm for excl in excluded_sources)
+
+    if amount_cents > 0:
+        # === POSITIVE AMOUNT ===
+        # Priority order for positive amounts:
+
+        # 1. Credit card positive = payment received (always a transfer)
+        #    CC positives are payments you made TO the card, not income
+        if is_credit_card:
+            return "transfer"
+
+        # 2. Known transfer patterns (internal transfers, P2P)
+        if pattern and pattern.is_transfer:
+            return "transfer"
+        if _is_income_transfer(merchant_norm):
+            return "transfer"
+
+        # 3. User explicitly excluded from income → credit (not transfer)
+        #    These are refunds, rewards, adjustments - not income
+        if is_user_excluded:
+            return "credit"
+
+        # 4. User explicitly marked as income
+        if is_user_income:
+            return "income"
+
+        # 5. Default: positive amount is income
+        return "income"
+
+    else:
+        # === NEGATIVE AMOUNT (spending) ===
+        abs_amount = abs(amount_cents)
+
+        # 1. Credit card payment from checking account = transfer
+        if not is_credit_card and _is_cc_payment_expense(merchant_norm):
+            return "transfer"
+
+        # 2. Known transfer patterns
+        if pattern and pattern.is_transfer:
+            return "transfer"
+        if _is_transfer(merchant_norm):
+            return "transfer"
+
+        # 3. Recurring patterns
+        if pattern and pattern.is_recurring:
+            return "recurring"
+
+        # 4. Default: one-off expense
+        return "one-off"
 
 
 def _detect_patterns(
@@ -634,15 +826,8 @@ def classify_month(
     """
     Classify all transactions in a given month.
 
-    Returns list of ClassifiedTransaction with income/recurring/transfer/one-off labels.
-
-    Classification priority:
-    1. Known transfer patterns (CC payments, internal transfers) → transfer
-    2. User-excluded merchants (marked as not-income) → transfer (for refunds/credits)
-    3. User-confirmed income sources → income
-    4. Positive amounts → income
-    5. Recurring patterns → recurring
-    6. Everything else → one-off
+    Returns list of ClassifiedTransaction with classification labels.
+    Uses the shared classify_transaction() function for consistent logic.
     """
     if patterns is None:
         patterns = _detect_patterns(conn)
@@ -650,7 +835,12 @@ def classify_month(
     # Fetch user income rules
     income_sources, excluded_sources = dbmod.get_income_rules(conn)
 
-    # Get month boundaries
+    # Get account types for credit card detection
+    account_types: dict[str, bool] = {}  # account_id -> is_credit_card
+    for acc in conn.execute("SELECT account_id, name FROM accounts").fetchall():
+        account_types[acc["account_id"]] = _is_credit_card_account(acc["name"])
+
+    # Get month boundaries (end-exclusive)
     start = date(year, month, 1)
     if month == 12:
         end = date(year + 1, 1, 1)
@@ -660,14 +850,15 @@ def classify_month(
     rows = conn.execute(
         """
         SELECT
-            posted_at,
-            amount_cents,
-            TRIM(LOWER(COALESCE(NULLIF(merchant,''), NULLIF(description,''), ''))) AS merchant_norm,
-            COALESCE(merchant, '') AS merchant,
-            COALESCE(description, '') AS description
-        FROM transactions
-        WHERE posted_at >= ? AND posted_at < ?
-        ORDER BY posted_at
+            t.account_id,
+            t.posted_at,
+            t.amount_cents,
+            TRIM(LOWER(COALESCE(NULLIF(t.merchant,''), NULLIF(t.description,''), ''))) AS merchant_norm,
+            COALESCE(t.merchant, '') AS merchant,
+            COALESCE(t.description, '') AS description
+        FROM transactions t
+        WHERE t.posted_at >= ? AND t.posted_at < ?
+        ORDER BY t.posted_at
         """,
         (start.isoformat(), end.isoformat()),
     ).fetchall()
@@ -678,34 +869,20 @@ def classify_month(
         amount_cents = r["amount_cents"]
         merchant_norm = r["merchant_norm"]
         raw_desc = r["merchant"] or r["description"] or ""
+        account_id = r["account_id"]
 
         pattern = patterns.get(merchant_norm)
+        is_cc = account_types.get(account_id, False)
 
-        # Check user rules (substring match for flexibility)
-        is_user_excluded = any(excl in merchant_norm for excl in excluded_sources)
-        is_user_income = any(src in merchant_norm for src in income_sources)
-
-        # Classification logic - ORDER MATTERS
-        # 1. Known transfer patterns first (CC payments, internal transfers)
-        if pattern and pattern.is_transfer:
-            classification = "transfer"
-        elif _is_transfer(merchant_norm):
-            classification = "transfer"
-        # 2. User excluded from income (refunds, reimbursements, etc.)
-        elif is_user_excluded and amount_cents > 0:
-            classification = "transfer"  # Exclude from income totals
-        # 3. User confirmed as income source
-        elif is_user_income and amount_cents > 0:
-            classification = "income"
-        # 4. Positive amounts are income (unless excluded above)
-        elif amount_cents > 0:
-            classification = "income"
-        # 5. Recurring patterns
-        elif pattern and pattern.is_recurring:
-            classification = "recurring"
-        # 6. Everything else
-        else:
-            classification = "one-off"
+        # Use shared classification logic
+        classification = classify_transaction(
+            amount_cents=amount_cents,
+            merchant_norm=merchant_norm,
+            is_credit_card=is_cc,
+            pattern=pattern,
+            income_sources=income_sources,
+            excluded_sources=excluded_sources,
+        )
 
         classified.append(ClassifiedTransaction(
             posted_at=posted_at,
@@ -714,6 +891,7 @@ def classify_month(
             raw_description=raw_desc,
             classification=classification,
             merchant_pattern=pattern,
+            account_id=account_id,
         ))
 
     return classified
@@ -725,13 +903,15 @@ class MonthSummary:
     year: int
     month: int
     income_cents: int
+    credit_cents: int    # Refunds, rewards, adjustments (not income)
     recurring_cents: int
     one_off_cents: int
     transfer_cents: int  # Excluded from analysis but tracked
     baseline_cents: int  # income - recurring
-    net_cents: int       # income - recurring - one_off (transfers excluded)
-    
+    net_cents: int       # income + credits - recurring - one_off (transfers excluded)
+
     income_sources: list[tuple[str, int]]           # (merchant, total_cents)
+    credit_sources: list[tuple[str, int]]           # (merchant, total_cents) - refunds etc.
     recurring_expenses: list[tuple[str, int, str]]  # (merchant, total_cents, cadence)
     one_off_expenses: list[tuple[str, int, int]]    # (merchant, total_cents, count)
     transfers: list[tuple[str, int]]                # (merchant, total_cents)
@@ -762,25 +942,31 @@ def summarize_month(
     """
     patterns = _detect_patterns(conn)
     classified = classify_month(conn, year, month, patterns)
-    
+
     # Aggregate
     income_cents = 0
+    credit_cents = 0  # Refunds, rewards, adjustments
     recurring_cents = 0
     one_off_cents = 0
     transfer_cents = 0
-    
+
     income_by_source: dict[str, int] = defaultdict(int)
+    credit_by_source: dict[str, int] = defaultdict(int)
     recurring_by_merchant: dict[str, tuple[int, str]] = {}  # merchant -> (cents, cadence)
     one_off_by_merchant: dict[str, tuple[int, int]] = defaultdict(lambda: (0, 0))  # merchant -> (cents, count)
     transfer_by_merchant: dict[str, int] = defaultdict(int)
-    
+
     for tx in classified:
         merchant = tx.merchant_norm or "(unknown)"
-        
+
         if tx.classification == "income":
             income_cents += tx.amount_cents
             income_by_source[merchant] += tx.amount_cents
-            
+
+        elif tx.classification == "credit":
+            credit_cents += tx.amount_cents
+            credit_by_source[merchant] += tx.amount_cents
+
         elif tx.classification == "recurring":
             amt = abs(tx.amount_cents)
             recurring_cents += amt
@@ -790,20 +976,21 @@ def summarize_month(
                 recurring_by_merchant[merchant] = (existing_amt + amt, existing_cadence)
             else:
                 recurring_by_merchant[merchant] = (amt, cadence)
-        
+
         elif tx.classification == "transfer":
             amt = abs(tx.amount_cents)
             transfer_cents += amt
             transfer_by_merchant[merchant] += amt
-                
+
         else:  # one-off
             amt = abs(tx.amount_cents)
             one_off_cents += amt
             existing_amt, existing_count = one_off_by_merchant[merchant]
             one_off_by_merchant[merchant] = (existing_amt + amt, existing_count + 1)
-    
+
     # Build sorted lists
     income_sources = sorted(income_by_source.items(), key=lambda x: x[1], reverse=True)
+    credit_sources = sorted(credit_by_source.items(), key=lambda x: x[1], reverse=True)
     recurring_expenses = sorted(
         [(m, c, cadence) for m, (c, cadence) in recurring_by_merchant.items()],
         key=lambda x: x[1],
@@ -815,17 +1002,20 @@ def summarize_month(
         reverse=True,
     )
     transfers = sorted(transfer_by_merchant.items(), key=lambda x: x[1], reverse=True)
-    
+
     return MonthSummary(
         year=year,
         month=month,
         income_cents=income_cents,
+        credit_cents=credit_cents,
         recurring_cents=recurring_cents,
         one_off_cents=one_off_cents,
         transfer_cents=transfer_cents,
         baseline_cents=income_cents - recurring_cents,
-        net_cents=income_cents - recurring_cents - one_off_cents,
+        # Net includes credits as they reduce effective spend
+        net_cents=income_cents + credit_cents - recurring_cents - one_off_cents,
         income_sources=income_sources,
+        credit_sources=credit_sources,
         recurring_expenses=recurring_expenses,
         one_off_expenses=one_off_expenses,
         transfers=transfers,

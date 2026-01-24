@@ -353,6 +353,7 @@ def dashboard(
         {
             "period_label": p.period_label,
             "income_cents": p.income_cents,
+            "credit_cents": p.credit_cents,  # Refunds, rewards, adjustments
             "recurring_cents": p.recurring_cents,
             "discretionary_cents": p.discretionary_cents,
             "net_cents": p.net_cents,
