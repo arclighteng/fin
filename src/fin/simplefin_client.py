@@ -85,6 +85,8 @@ class SimpleFinClient:
         u = urlsplit(self.cfg.simplefin_access_url)
         if not u.scheme or not u.hostname:
             raise ValueError("SIMPLEFIN_ACCESS_URL is not a valid URL")
+        if u.scheme != "https":
+            raise ValueError("SIMPLEFIN_ACCESS_URL must use HTTPS (credentials would be sent in plaintext over HTTP)")
         if not u.username or not u.password:
             raise ValueError("SIMPLEFIN_ACCESS_URL must include embedded credentials (userinfo)")
 
