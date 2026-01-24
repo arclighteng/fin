@@ -1010,6 +1010,20 @@ def anomalies(days: int = 60, limit: int = 50, conn: sqlite3.Connection = Depend
 # ---------------------------------------------------------------------------
 # CSV Export Routes
 # ---------------------------------------------------------------------------
+def _sanitize_csv_field(value: str) -> str:
+    """
+    Sanitize a string for safe CSV export to prevent formula injection.
+
+    When opened in Excel/Sheets, cells starting with =, +, -, @, tab, or CR
+    can be interpreted as formulas. Prefix with apostrophe to neutralize.
+    """
+    if not value:
+        return value
+    if value[0] in ('=', '+', '-', '@', '\t', '\r'):
+        return "'" + value
+    return value
+
+
 @app.get("/export/sketchy")
 def export_sketchy(conn: sqlite3.Connection = Depends(get_db)):
     """Export sketchy charges as CSV."""
@@ -1022,11 +1036,11 @@ def export_sketchy(conn: sqlite3.Connection = Depends(get_db)):
     for alert in alerts:
         writer.writerow([
             alert.posted_at.isoformat(),
-            alert.merchant_norm,
+            _sanitize_csv_field(alert.merchant_norm),
             f"{alert.amount_cents / 100:.2f}",
             alert.pattern_type,
             alert.severity,
-            alert.detail,
+            _sanitize_csv_field(alert.detail),
         ])
 
     output.seek(0)
@@ -1049,10 +1063,10 @@ def export_duplicates(conn: sqlite3.Connection = Depends(get_db)):
     for dup in duplicates:
         writer.writerow([
             dup.group_type,
-            "; ".join(dup.merchants),
+            _sanitize_csv_field("; ".join(dup.merchants)),
             f"{dup.total_monthly_cents / 100:.2f}",
             dup.severity,
-            dup.detail,
+            _sanitize_csv_field(dup.detail),
         ])
 
     output.seek(0)
@@ -1074,7 +1088,7 @@ def export_subscriptions(conn: sqlite3.Connection = Depends(get_db)):
 
     for sub in subscriptions:
         writer.writerow([
-            sub[0],  # merchant
+            _sanitize_csv_field(sub[0]),  # merchant
             f"{sub[1] / 100:.2f}",  # monthly_cents
             sub[2],  # cadence
             sub[3].isoformat(),  # first_seen
@@ -1111,7 +1125,7 @@ def export_summary(
 
     for p in periods:
         writer.writerow([
-            p.period_label,
+            _sanitize_csv_field(p.period_label),
             p.start_date.isoformat(),
             p.end_date.isoformat(),
             f"{p.income_cents / 100:.2f}",
