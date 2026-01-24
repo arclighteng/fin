@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from . import db as dbmod
 from .analysis import TimePeriod, analyze_periods, get_current_period
 from .categorize import CATEGORIES, get_category_breakdown
-from .classify import detect_alerts, detect_duplicates, detect_sketchy, get_subscriptions, get_bills, detect_cross_account_duplicates
+from .classify import detect_alerts, detect_duplicates, detect_sketchy, get_subscriptions, get_bills, detect_cross_account_duplicates, detect_price_changes
 from .config import Config, load_config
 from .models import Account
 from .normalize import normalize_simplefin_txn
@@ -135,10 +135,11 @@ def _are_expense_only_accounts(accounts: list, account_filter: list[str] | None)
 
 
 def _rows_to_table(rows, cols) -> str:
-    th = "".join([f"<th>{c}</th>" for c in cols])
+    import html
+    th = "".join([f"<th>{html.escape(str(c))}</th>" for c in cols])
     trs = []
     for r in rows:
-        tds = "".join([f"<td>{r[c] if r[c] is not None else ''}</td>" for c in cols])
+        tds = "".join([f"<td>{html.escape(str(r[c])) if r[c] is not None else ''}</td>" for c in cols])
         trs.append(f"<tr>{tds}</tr>")
     return f"<table border='1' cellspacing='0' cellpadding='6'><thead><tr>{th}</tr></thead><tbody>{''.join(trs)}</tbody></table>"
 
@@ -196,7 +197,7 @@ def dashboard(
 
     # If no data mode, return empty state
     if show_no_data:
-        return templates.TemplateResponse("dashboard.html", {
+        return templates.TemplateResponse("dashboard_v2.html", {
             "request": request,
             "period_type": period,
             "current_period": None,
@@ -207,6 +208,7 @@ def dashboard(
             "cross_account_dups": [],
             "subscriptions": [],
             "bills": [],
+            "price_changes": [],
             "show_dismissed": show_dismissed,
             "start_date": start_date or "",
             "end_date": end_date or "",
@@ -342,17 +344,33 @@ def dashboard(
             params.extend(account_filter)
         pending_count = conn.execute(query, params).fetchone()[0]
 
-    return templates.TemplateResponse("dashboard.html", {
+    # Detect subscription price changes
+    price_changes = detect_price_changes(conn, days=180, account_filter=account_filter)
+
+    # Serialize periods for Chart.js
+    periods_json = [
+        {
+            "period_label": p.period_label,
+            "income_cents": p.income_cents,
+            "recurring_cents": p.recurring_cents,
+            "discretionary_cents": p.discretionary_cents,
+            "net_cents": p.net_cents,
+        }
+        for p in periods
+    ] if periods else []
+
+    return templates.TemplateResponse("dashboard_v2.html", {
         "request": request,
         "period_type": period,
         "current_period": current_period,
-        "periods": periods,
+        "periods": periods_json,
         "alerts": alerts_with_keys,
         "total_alerts": len(alerts_with_keys),
         "duplicates": duplicates,
         "cross_account_dups": cross_account_dups,
         "subscriptions": subscriptions,
         "bills": bills,
+        "price_changes": price_changes,
         "show_dismissed": show_dismissed,
         "start_date": start_date or "",
         "end_date": end_date or "",
