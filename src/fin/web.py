@@ -613,12 +613,18 @@ def search_transactions(
         else:
             other_matches.append(txn)
 
+    # Check if results were truncated by the database LIMIT
+    db_limit = 200
+    is_truncated = len(rows) >= db_limit
+
     return JSONResponse(content={
         "query": q,
         "matches": selected_matches[:50],  # Limit primary results
         "matches_count": len(selected_matches),
         "other_matches_count": len(other_matches),
         "other_matches_preview": other_matches[:5],  # Preview of other matches
+        "is_truncated": is_truncated,  # True if there may be more results beyond the limit
+        "result_limit": db_limit,
     })
 
 
