@@ -43,9 +43,15 @@ def claim_access_url(setup_token: str) -> str:
         raise ValueError(f"Invalid setup token - must be base64 encoded: {e}")
 
     if not claim_url.startswith("http"):
-        raise ValueError(f"Invalid setup token - decoded URL doesn't look right: {claim_url[:50]}...")
+        raise ValueError("Invalid setup token - decoded value doesn't appear to be a URL")
 
-    log.info(f"Claiming access URL from: {claim_url}")
+    # Only log the hostname, never credentials
+    try:
+        from urllib.parse import urlsplit
+        claim_host = urlsplit(claim_url).hostname or "unknown"
+    except Exception:
+        claim_host = "unknown"
+    log.info(f"Claiming access URL from: {claim_host}")
 
     # POST to the claim URL (empty body)
     with httpx.Client(timeout=30.0) as client:
@@ -58,9 +64,9 @@ def claim_access_url(setup_token: str) -> str:
 
         access_url = response.text.strip()
 
-        # Validate the access URL looks correct
+        # Validate the access URL looks correct (don't leak content in error)
         if not access_url.startswith("https://") or "@" not in access_url:
-            raise ValueError(f"Unexpected response from claim endpoint: {access_url[:50]}...")
+            raise ValueError("Unexpected response from claim endpoint - expected HTTPS URL with credentials")
 
         return access_url
 
