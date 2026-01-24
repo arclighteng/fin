@@ -1,0 +1,1036 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - fin{% endblock %}
+
+{% block content %}
+<style>
+/* ============================================
+   DASHBOARD V2 - Modern Bento Grid Layout
+   Mobile-first, accessible, 2026 design
+   ============================================ */
+
+/* CSS Custom Properties for dashboard */
+.dashboard {
+    --card-bg: var(--bg-secondary);
+    --card-radius: 16px;
+    --card-padding: 24px;
+    --card-gap: 16px;
+    --hero-size: 3rem;
+    --transition-fast: 150ms ease;
+    --transition-med: 250ms ease;
+}
+
+/* Bento Grid Container */
+.bento-grid {
+    display: grid;
+    gap: var(--card-gap);
+    grid-template-columns: 1fr;
+    margin-bottom: 24px;
+}
+
+/* Desktop: 2-column bento */
+@media (min-width: 1024px) {
+    .bento-grid {
+        grid-template-columns: 1.5fr 1fr;
+    }
+    .bento-grid .card-hero {
+        grid-row: span 2;
+    }
+}
+
+/* Card Base - Modern, minimal */
+.card-v2 {
+    background: var(--card-bg);
+    border-radius: var(--card-radius);
+    padding: var(--card-padding);
+    position: relative;
+    overflow: hidden;
+}
+
+/* Subtle card differentiation (accessibility) */
+@media (prefers-color-scheme: light) {
+    .card-v2 {
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.06);
+    }
+}
+
+/* Card Header */
+.card-v2-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.card-v2-title {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    margin: 0;
+}
+
+.card-v2-action {
+    font-size: 13px;
+    color: var(--accent-blue);
+    text-decoration: none;
+    padding: 4px 8px;
+    border-radius: 6px;
+    transition: background var(--transition-fast);
+}
+
+.card-v2-action:hover {
+    background: var(--bg-hover);
+}
+
+/* ============================================
+   HERO CARD - Primary Financial Summary
+   ============================================ */
+
+.hero-number {
+    font-size: var(--hero-size);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+    margin-bottom: 8px;
+}
+
+.hero-number.positive { color: var(--accent-green); }
+.hero-number.negative { color: var(--accent-red); }
+
+.hero-label {
+    font-size: 15px;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+}
+
+.hero-comparison {
+    font-size: 14px;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.hero-comparison .trend-up { color: var(--accent-green); }
+.hero-comparison .trend-down { color: var(--accent-red); }
+
+/* Financial Breakdown - Horizontal bar style */
+.breakdown {
+    margin-top: 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.breakdown-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.breakdown-label {
+    font-size: 14px;
+    color: var(--text-secondary);
+    min-width: 100px;
+}
+
+.breakdown-bar-container {
+    flex: 1;
+    height: 8px;
+    background: var(--bg-tertiary);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.breakdown-bar {
+    height: 100%;
+    border-radius: 4px;
+    transition: width var(--transition-med);
+}
+
+.breakdown-bar.income { background: var(--accent-green); }
+.breakdown-bar.recurring { background: var(--accent-blue); }
+.breakdown-bar.discretionary { background: var(--accent-purple); }
+
+.breakdown-value {
+    font-size: 14px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    min-width: 80px;
+    text-align: right;
+}
+
+/* ============================================
+   SPENDING TREND CHART
+   ============================================ */
+
+.trend-chart-container {
+    position: relative;
+    height: 200px;
+    margin-top: 8px;
+}
+
+/* Accessible: Text summary for screen readers */
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+/* Category change pills */
+.category-changes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 16px;
+}
+
+.category-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: var(--bg-tertiary);
+    border-radius: 20px;
+    font-size: 13px;
+}
+
+.category-pill .change {
+    font-weight: 600;
+}
+
+.category-pill .change.up { color: var(--accent-red); }
+.category-pill .change.down { color: var(--accent-green); }
+
+/* ============================================
+   ALERTS CARD
+   ============================================ */
+
+.alert-list-v2 {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.alert-item-v2 {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px;
+    background: var(--bg-tertiary);
+    border-radius: 10px;
+    transition: background var(--transition-fast);
+}
+
+.alert-item-v2:hover {
+    background: var(--bg-hover);
+}
+
+.alert-icon-v2 {
+    font-size: 18px;
+    line-height: 1;
+    flex-shrink: 0;
+    width: 24px;
+    text-align: center;
+}
+
+.alert-content-v2 {
+    flex: 1;
+    min-width: 0;
+}
+
+.alert-title-v2 {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+    margin-bottom: 2px;
+}
+
+.alert-detail-v2 {
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+.alert-amount-v2 {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
+}
+
+.alert-actions-v2 {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.alert-btn {
+    padding: 6px 10px;
+    font-size: 12px;
+    border-radius: 6px;
+    border: none;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+}
+
+.alert-btn:hover {
+    background: var(--accent-blue);
+    color: white;
+}
+
+.alert-btn.danger:hover {
+    background: var(--accent-red);
+}
+
+/* ============================================
+   RECURRING CHARGES - Compact List
+   ============================================ */
+
+.recurring-summary {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+}
+
+.recurring-total {
+    font-size: 24px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.recurring-total small {
+    font-size: 14px;
+    font-weight: 400;
+    color: var(--text-muted);
+}
+
+.recurring-section {
+    margin-bottom: 20px;
+}
+
+.recurring-section:last-child {
+    margin-bottom: 0;
+}
+
+.recurring-section-header {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+    display: flex;
+    justify-content: space-between;
+}
+
+.recurring-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.recurring-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.recurring-item:last-child {
+    border-bottom: none;
+}
+
+.recurring-name {
+    font-size: 14px;
+    color: var(--text-primary);
+}
+
+.recurring-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.recurring-amount {
+    font-size: 14px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.recurring-badge {
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: 500;
+}
+
+.recurring-badge.price-up {
+    background: var(--accent-red-dim);
+    color: var(--accent-red);
+}
+
+.recurring-badge.price-down {
+    background: var(--accent-green-dim);
+    color: var(--accent-green);
+}
+
+.recurring-badge.known {
+    background: var(--accent-green-dim);
+    color: var(--accent-green);
+}
+
+/* Price change alert styling */
+.alert-amount-v2.price-up {
+    color: var(--accent-red);
+}
+
+.alert-amount-v2.price-down {
+    color: var(--accent-green);
+}
+
+.price-change-alert {
+    border-left: 3px solid var(--accent-blue);
+}
+
+.more-link {
+    font-size: 13px;
+    color: var(--accent-blue);
+    text-decoration: none;
+    display: inline-block;
+    margin-top: 8px;
+}
+
+/* ============================================
+   PERIOD CONTROLS - Top of page
+   ============================================ */
+
+.period-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 20px;
+    padding: 16px;
+    background: var(--card-bg);
+    border-radius: var(--card-radius);
+}
+
+.period-tabs {
+    display: flex;
+    background: var(--bg-tertiary);
+    border-radius: 8px;
+    padding: 4px;
+}
+
+.period-tab {
+    padding: 8px 16px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: none;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    text-decoration: none;
+    transition: all var(--transition-fast);
+}
+
+.period-tab:hover {
+    color: var(--text-primary);
+}
+
+.period-tab.active {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.date-inputs {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+}
+
+.date-inputs label {
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+.date-inputs input[type="date"] {
+    padding: 8px 12px;
+    font-size: 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
+
+/* Account filter chips */
+.account-chips-v2 {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.account-chip-v2 {
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 12px;
+    font-size: 13px;
+    background: var(--bg-tertiary);
+    border-radius: 20px;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    border: 2px solid transparent;
+}
+
+.account-chip-v2.selected {
+    background: var(--accent-blue);
+    color: white;
+}
+
+.account-chip-v2:hover:not(.selected) {
+    border-color: var(--accent-blue);
+}
+
+/* ============================================
+   EMPTY STATES
+   ============================================ */
+
+.empty-state-v2 {
+    text-align: center;
+    padding: 32px 16px;
+    color: var(--text-muted);
+}
+
+.empty-state-v2 .icon {
+    font-size: 48px;
+    margin-bottom: 12px;
+    opacity: 0.5;
+}
+
+/* ============================================
+   REDUCED MOTION
+   ============================================ */
+
+@media (prefers-reduced-motion: reduce) {
+    * {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+    }
+}
+
+/* ============================================
+   MOBILE ADJUSTMENTS
+   ============================================ */
+
+@media (max-width: 640px) {
+    .dashboard {
+        --card-padding: 16px;
+        --hero-size: 2.25rem;
+    }
+
+    .period-controls {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .date-inputs {
+        margin-left: 0;
+        flex-wrap: wrap;
+    }
+
+    .breakdown-label {
+        min-width: 80px;
+        font-size: 13px;
+    }
+
+    .alert-item-v2 {
+        flex-wrap: wrap;
+    }
+
+    .alert-actions-v2 {
+        width: 100%;
+        margin-top: 8px;
+    }
+}
+</style>
+
+<div class="dashboard">
+    <!-- Period Controls -->
+    <div class="period-controls">
+        <div class="period-tabs">
+            <a href="?period=this_month{% if selected_accounts %}&accounts={{ selected_accounts|join(',') }}{% endif %}"
+               class="period-tab {% if period_type == 'this_month' and not start_date %}active{% endif %}">This Month</a>
+            <a href="?period=last_month{% if selected_accounts %}&accounts={{ selected_accounts|join(',') }}{% endif %}"
+               class="period-tab {% if period_type == 'last_month' and not start_date %}active{% endif %}">Last Month</a>
+        </div>
+
+        <form class="date-inputs" method="get" action="/dashboard" id="dashboardForm">
+            <input type="hidden" name="period" value="{{ period_type }}">
+            <label>From</label>
+            <input type="date" name="start_date" value="{{ start_date }}" onchange="this.form.submit()">
+            <label>to</label>
+            <input type="date" name="end_date" value="{{ end_date }}" onchange="this.form.submit()">
+            {% if start_date and end_date %}
+            <a href="?period={{ period_type }}{% if selected_accounts %}&accounts={{ selected_accounts|join(',') }}{% endif %}" class="period-tab">Clear</a>
+            {% endif %}
+        </form>
+
+        {% if all_accounts and all_accounts|length > 1 %}
+        <div class="account-chips-v2">
+            {# "All" chip - shown when filtering, clears to show all accounts #}
+            {% set all_selected = not selected_accounts or selected_accounts|length == all_accounts|length %}
+            <label class="account-chip-v2 {% if all_selected %}selected{% endif %}" onclick="selectAllAccounts()">
+                All
+            </label>
+            {% for acc in all_accounts %}
+            {% set is_selected = (acc['account_id'] in selected_accounts) if selected_accounts else true %}
+            <label class="account-chip-v2 {% if is_selected %}selected{% endif %}">
+                <input type="checkbox" value="{{ acc['account_id'] }}" {% if is_selected %}checked{% endif %}
+                       onchange="updateAccountFilter()" style="display:none;">
+                {{ acc['name'] }}
+            </label>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+
+    {% if current_period %}
+    <!-- Bento Grid -->
+    <div class="bento-grid">
+
+        <!-- HERO CARD: This Month at a Glance -->
+        <div class="card-v2 card-hero">
+            <div class="card-v2-header">
+                <h2 class="card-v2-title">{{ current_period.period_label }}</h2>
+            </div>
+
+            {% if not expense_only_view %}
+            <!-- Full view with income -->
+            <div class="hero-label">
+                {% if current_period.net_cents >= 0 %}You saved{% else %}You overspent{% endif %}
+            </div>
+            <div class="hero-number {{ 'positive' if current_period.net_cents >= 0 else 'negative' }}">
+                ${{ "%.0f"|format((current_period.net_cents if current_period.net_cents >= 0 else -current_period.net_cents) / 100) }}
+            </div>
+
+            {% set avg_net = current_period.avg_income_cents - current_period.avg_recurring_cents - current_period.avg_discretionary_cents %}
+            {% if avg_net != 0 %}
+            {% set diff = current_period.net_cents - avg_net %}
+            <div class="hero-comparison">
+                {% if diff > 0 %}
+                <span class="trend-up">+${{ "%.0f"|format(diff / 100) }}</span> vs 3-month avg
+                {% elif diff < 0 %}
+                <span class="trend-down">-${{ "%.0f"|format((-diff) / 100) }}</span> vs 3-month avg
+                {% else %}
+                Same as your average
+                {% endif %}
+            </div>
+            {% endif %}
+
+            <!-- Financial Breakdown -->
+            {% set max_val = [current_period.income_cents, current_period.recurring_cents, current_period.discretionary_cents]|max %}
+            <div class="breakdown">
+                <div class="breakdown-row">
+                    <span class="breakdown-label">Income</span>
+                    <div class="breakdown-bar-container">
+                        <div class="breakdown-bar income" style="width: {{ (current_period.income_cents / max_val * 100)|int if max_val else 0 }}%"></div>
+                    </div>
+                    <span class="breakdown-value" style="color: var(--accent-green)">+${{ "%.0f"|format(current_period.income_cents / 100) }}</span>
+                </div>
+                <div class="breakdown-row">
+                    <span class="breakdown-label">Recurring</span>
+                    <div class="breakdown-bar-container">
+                        <div class="breakdown-bar recurring" style="width: {{ (current_period.recurring_cents / max_val * 100)|int if max_val else 0 }}%"></div>
+                    </div>
+                    <span class="breakdown-value">-${{ "%.0f"|format(current_period.recurring_cents / 100) }}</span>
+                </div>
+                <div class="breakdown-row">
+                    <span class="breakdown-label">One-time</span>
+                    <div class="breakdown-bar-container">
+                        <div class="breakdown-bar discretionary" style="width: {{ (current_period.discretionary_cents / max_val * 100)|int if max_val else 0 }}%"></div>
+                    </div>
+                    <span class="breakdown-value">-${{ "%.0f"|format(current_period.discretionary_cents / 100) }}</span>
+                </div>
+            </div>
+
+            {% else %}
+            <!-- Credit card only view -->
+            <div class="hero-label">Total Spending</div>
+            <div class="hero-number">
+                ${{ "%.0f"|format((current_period.recurring_cents + current_period.discretionary_cents) / 100) }}
+            </div>
+            <div class="hero-comparison">
+                {{ current_period.transaction_count }} transactions
+            </div>
+            {% endif %}
+
+            <!-- Checksum indicator - warn if data integrity issue -->
+            {% if current_period.checksum_valid is defined and not current_period.checksum_valid %}
+            <div class="checksum-warning" style="margin-top: 12px; padding: 8px 12px; background: var(--accent-red-dim); color: var(--accent-red); border-radius: 6px; font-size: 13px;">
+                ⚠️ Data mismatch detected - totals may be inaccurate
+            </div>
+            {% endif %}
+
+            <!-- Screen reader summary -->
+            <p class="sr-only">
+                Financial summary for {{ current_period.period_label }}:
+                Income ${{ "%.0f"|format(current_period.income_cents / 100) }},
+                Recurring expenses ${{ "%.0f"|format(current_period.recurring_cents / 100) }},
+                One-time spending ${{ "%.0f"|format(current_period.discretionary_cents / 100) }},
+                Net {{ 'savings' if current_period.net_cents >= 0 else 'loss' }} ${{ "%.0f"|format((current_period.net_cents if current_period.net_cents >= 0 else -current_period.net_cents) / 100) }}.
+            </p>
+        </div>
+
+        <!-- ALERTS CARD -->
+        <div class="card-v2">
+            <div class="card-v2-header">
+                {% set total_alert_count = alerts|length + price_changes|length %}
+                <h2 class="card-v2-title">Alerts ({{ total_alert_count }})</h2>
+                {% if alerts %}
+                <a href="/export/sketchy" class="card-v2-action">Export</a>
+                {% endif %}
+            </div>
+
+            {% if alerts or price_changes %}
+            <div class="alert-list-v2">
+                {# Price changes first - these are actionable #}
+                {% for pc in price_changes[:3] %}
+                <div class="alert-item-v2 price-change-alert">
+                    <span class="alert-icon-v2">{% if pc.change_pct > 0 %}&#128200;{% else %}&#128201;{% endif %}</span>
+                    <div class="alert-content-v2">
+                        <div class="alert-title-v2">
+                            Price {% if pc.change_pct > 0 %}increase{% else %}decrease{% endif %}
+                            <span class="alert-amount-v2 {% if pc.change_pct > 0 %}price-up{% else %}price-down{% endif %}">
+                                {% if pc.change_pct > 0 %}+{% endif %}{{ "%.0f"|format(pc.change_pct) }}%
+                            </span>
+                        </div>
+                        <div class="alert-detail-v2">
+                            {{ pc.display_name or pc.merchant }}
+                            &middot; ${{ "%.2f"|format(pc.old_amount / 100) }} &rarr; ${{ "%.2f"|format(pc.new_amount / 100) }}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+
+                {# Regular alerts #}
+                {% for item in alerts[:5] %}
+                <div class="alert-item-v2" data-alert-key="{{ item.key }}">
+                    <span class="alert-icon-v2">
+                        {% if item.alert.severity == 'high' %}&#128308;{% elif item.alert.severity == 'medium' %}&#128993;{% else %}&#9898;{% endif %}
+                    </span>
+                    <div class="alert-content-v2">
+                        <div class="alert-title-v2">
+                            {{ item.alert.pattern_type|replace('_', ' ')|title }}
+                            <span class="alert-amount-v2">${{ "%.2f"|format(item.alert.amount_cents / 100) }}</span>
+                        </div>
+                        <div class="alert-detail-v2">{{ item.alert.merchant_norm }} &middot; {{ item.alert.posted_at.strftime('%b %d') }}</div>
+                    </div>
+                    {% if not item.action %}
+                    <div class="alert-actions-v2">
+                        <button class="alert-btn" onclick="alertAction('{{ item.key }}', 'not_suspicious')" title="Not suspicious">OK</button>
+                        <button class="alert-btn danger" onclick="alertAction('{{ item.key }}', 'confirmed')" title="Confirmed issue">Flag</button>
+                    </div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+            {% set extra_alerts = [alerts|length - 5, 0]|max %}
+            {% set extra_price = [price_changes|length - 3, 0]|max %}
+            {% if extra_alerts + extra_price > 0 %}
+            <a href="/subs" class="more-link">+ {{ extra_alerts + extra_price }} more</a>
+            {% endif %}
+            {% else %}
+            <div class="empty-state-v2">
+                <div class="icon">&#10004;</div>
+                <p>No issues detected</p>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- RECURRING CHARGES CARD -->
+        <div class="card-v2">
+            <div class="card-v2-header">
+                <h2 class="card-v2-title">Recurring</h2>
+                <a href="/subs" class="card-v2-action">View All</a>
+            </div>
+
+            {% set total_recurring = subscriptions|sum(attribute='1') + bills|sum(attribute='1') %}
+            <div class="recurring-summary">
+                <span class="recurring-total">${{ "%.0f"|format(total_recurring / 100) }}<small>/mo</small></span>
+            </div>
+
+            {% if subscriptions %}
+            <div class="recurring-section">
+                <div class="recurring-section-header">
+                    <span>Subscriptions ({{ subscriptions|length }})</span>
+                    <span>${{ "%.0f"|format(subscriptions|sum(attribute='1') / 100) }}/mo</span>
+                </div>
+                <div class="recurring-list">
+                    {% for sub in subscriptions[:4] %}
+                    {% set display_name = sub[8] or sub[0] %}
+                    {% set merchant = sub[0] %}
+                    {% set is_known = sub[7] %}
+                    {# Check if this subscription has a price change #}
+                    {% set price_change = namespace(found=none) %}
+                    {% for pc in price_changes %}
+                        {% if pc.merchant == merchant %}
+                            {% set price_change.found = pc %}
+                        {% endif %}
+                    {% endfor %}
+                    <div class="recurring-item">
+                        <span class="recurring-name">{{ display_name }}</span>
+                        <div class="recurring-meta">
+                            {% if price_change.found %}
+                            <span class="recurring-badge {% if price_change.found.change_pct > 0 %}price-up{% else %}price-down{% endif %}" title="${{ '%.2f'|format(price_change.found.old_amount / 100) }} → ${{ '%.2f'|format(price_change.found.new_amount / 100) }}">
+                                {% if price_change.found.change_pct > 0 %}+{% endif %}{{ "%.0f"|format(price_change.found.change_pct) }}%
+                            </span>
+                            {% elif is_known %}
+                            <span class="recurring-badge known">Known</span>
+                            {% endif %}
+                            <span class="recurring-amount">${{ "%.2f"|format(sub[9] / 100) }}</span>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% if subscriptions|length > 4 %}
+                <a href="/subs" class="more-link">+ {{ subscriptions|length - 4 }} more</a>
+                {% endif %}
+            </div>
+            {% endif %}
+
+            {% if bills %}
+            <div class="recurring-section">
+                <div class="recurring-section-header">
+                    <span>Bills ({{ bills|length }})</span>
+                    <span>${{ "%.0f"|format(bills|sum(attribute='1') / 100) }}/mo</span>
+                </div>
+                <div class="recurring-list">
+                    {% for bill in bills[:3] %}
+                    <div class="recurring-item">
+                        <span class="recurring-name">{{ bill[0] }}</span>
+                        <span class="recurring-amount">${{ "%.2f"|format(bill[1] / 100) }}</span>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% if bills|length > 3 %}
+                <a href="/subs" class="more-link">+ {{ bills|length - 3 }} more</a>
+                {% endif %}
+            </div>
+            {% endif %}
+
+            {% if not subscriptions and not bills %}
+            <div class="empty-state-v2">
+                <p>No recurring charges detected yet</p>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- SPENDING TREND CARD -->
+        <div class="card-v2">
+            <div class="card-v2-header">
+                <h2 class="card-v2-title">Spending Trend</h2>
+                <a href="/export/summary" class="card-v2-action">Export</a>
+            </div>
+
+            {% if periods|length > 1 %}
+            <div class="trend-chart-container">
+                <canvas id="spendingTrendChart" aria-label="Monthly spending trend chart" role="img"></canvas>
+            </div>
+
+            <!-- Screen reader text alternative -->
+            <p class="sr-only">
+                Spending trend:
+                {% for p in periods[:4]|reverse %}
+                {{ p.period_label }}: ${{ "%.0f"|format((p.recurring_cents + p.discretionary_cents) / 100) }}{% if not loop.last %}, {% endif %}
+                {% endfor %}
+            </p>
+            {% else %}
+            <div class="empty-state-v2">
+                <p>More data needed for trends</p>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- CATEGORY BREAKDOWN CARD -->
+        {% if category_breakdown %}
+        <div class="card-v2">
+            <div class="card-v2-header">
+                <h2 class="card-v2-title">By Category</h2>
+                <span style="color: var(--text-muted); font-size: 13px;">
+                    {{ category_breakdown|length }} categories
+                </span>
+            </div>
+            <div class="category-list">
+                {% for category, total_cents, count in category_breakdown[:6] %}
+                <div class="breakdown-row" style="margin-bottom: 10px; cursor: pointer;" onclick="drillCategory('{{ category.id }}')">
+                    <span class="breakdown-label">{{ category.icon }} {{ category.name }}</span>
+                    <div class="breakdown-bar-container">
+                        {% set max_cat = category_breakdown[0][1] if category_breakdown else 1 %}
+                        <div class="breakdown-bar" style="width: {{ (total_cents / max_cat * 100)|int }}%; background: {{ category.color }};"></div>
+                    </div>
+                    <span class="breakdown-value">${{ "%.0f"|format(total_cents / 100) }}</span>
+                </div>
+                {% endfor %}
+            </div>
+            {% if category_breakdown|length > 6 %}
+            <a href="/categories" class="more-link">+ {{ category_breakdown|length - 6 }} more</a>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+
+    {% else %}
+    <!-- No data state -->
+    <div class="card-v2">
+        <div class="empty-state-v2" style="padding: 64px 16px;">
+            <div class="icon">&#128202;</div>
+            <p style="font-size: 16px; margin-bottom: 8px;">No data for this period</p>
+            <p>Try syncing your transactions or selecting a different date range.</p>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<script>
+// Select all accounts (clear filter)
+function selectAllAccounts() {
+    const url = new URL(window.location);
+    url.searchParams.delete('accounts');
+    window.location = url;
+}
+
+// Account filter update
+function updateAccountFilter() {
+    const checkboxes = document.querySelectorAll('.account-chip-v2 input[type="checkbox"]');
+    const selected = Array.from(checkboxes).filter(cb => cb.checked).map(cb => cb.value);
+
+    const url = new URL(window.location);
+    if (selected.length === checkboxes.length) {
+        url.searchParams.delete('accounts');
+    } else if (selected.length === 0) {
+        url.searchParams.set('accounts', 'none');
+    } else {
+        url.searchParams.set('accounts', selected.join(','));
+    }
+    window.location = url;
+}
+
+// Alert action handler
+async function alertAction(alertKey, action) {
+    try {
+        const response = await fetch('/api/alert-action', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ alert_key: alertKey, action: action })
+        });
+        if (response.ok) {
+            const alertEl = document.querySelector(`[data-alert-key="${alertKey}"]`);
+            if (alertEl) {
+                alertEl.style.opacity = '0.5';
+                alertEl.querySelector('.alert-actions-v2')?.remove();
+            }
+        }
+    } catch (e) {
+        console.error('Failed to save alert action:', e);
+    }
+}
+
+// Category drill-down (placeholder - would need implementation)
+function drillCategory(categoryId) {
+    window.location = `/dashboard?drill=category&id=${categoryId}`;
+}
+
+// Initialize Chart.js spending trend
+document.addEventListener('DOMContentLoaded', function() {
+    const canvas = document.getElementById('spendingTrendChart');
+    if (!canvas || typeof Chart === 'undefined') return;
+
+    const periods = {{ periods|tojson|safe if periods else '[]' }};
+    if (periods.length < 2) return;
+
+    // Get last 6 months, reversed for chronological order
+    const chartData = periods.slice(0, 6).reverse();
+
+    const labels = chartData.map(p => p.period_label);
+    const spending = chartData.map(p => (p.recurring_cents + p.discretionary_cents) / 100);
+    const income = chartData.map(p => p.income_cents / 100);
+
+    // Get CSS variable colors
+    const styles = getComputedStyle(document.documentElement);
+    const blueColor = styles.getPropertyValue('--accent-blue').trim() || '#2563eb';
+    const greenColor = styles.getPropertyValue('--accent-green').trim() || '#0e6245';
+    const mutedColor = styles.getPropertyValue('--text-muted').trim() || '#8792a2';
+    const bgColor = styles.getPropertyValue('--bg-tertiary').trim() || '#f9fafb';
+
+    new Chart(canvas, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Spending',
+                data: spending,
+                backgroundColor: blueColor,
+                borderRadius: 6,
+                barPercentage: 0.7,
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    backgroundColor: 'rgba(0,0,0,0.8)',
+                    titleFont: { size: 13 },
+                    bodyFont: { size: 12 },
+                    padding: 10,
+                    cornerRadius: 8,
+                    callbacks: {
+                        label: ctx => `$${ctx.raw.toLocaleString()}`
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    grid: { display: false },
+                    ticks: {
+                        color: mutedColor,
+                        font: { size: 12 }
+                    }
+                },
+                y: {
+                    grid: { color: bgColor },
+                    ticks: {
+                        color: mutedColor,
+                        font: { size: 12 },
+                        callback: val => '$' + (val / 1000).toFixed(0) + 'k'
+                    },
+                    beginAtZero: true
+                }
+            },
+            animation: {
+                duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 500
+            }
+        }
+    });
+});
+</script>
+
+{% endblock %}
