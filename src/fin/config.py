@@ -13,6 +13,7 @@ class Config:
     db_path: str
     log_level: str
     log_format: str = "simple"
+    timezone: str = "UTC"  # IANA timezone name (e.g., "America/Chicago")
 
 
 def _get_default_db_path() -> str:
@@ -59,6 +60,7 @@ def load_config() -> Config:
     db_path = os.getenv("FIN_DB_PATH", "").strip() or _get_default_db_path()
     log_level = os.getenv("FIN_LOG_LEVEL", "INFO").strip().upper()
     log_format = os.getenv("FIN_LOG_FORMAT", "simple").strip().lower()
+    timezone = os.getenv("FIN_TZ", "UTC").strip()
 
     # Don't crash on missing secrets here; CLI will validate only when needed.
     return Config(
@@ -66,4 +68,5 @@ def load_config() -> Config:
         db_path=db_path,
         log_level=log_level,
         log_format=log_format,
+        timezone=timezone,
     )

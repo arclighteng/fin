@@ -84,10 +84,11 @@ CATEGORIZATION_RULES: list[tuple[str, str, float]] = [
 
     # Dining
     (r"(restaurant|cafe|coffee|starbucks|dunkin|mcdonald|burger|pizza|taco|chipotle|subway|panera|chick-fil-a|wendy)", "dining", 0.9),
-    (r"(doordash|uber eats|grubhub|postmates|seamless|caviar)", "dining", 0.85),
+    # Food delivery - higher confidence to beat transport rule for "uber eats"
+    (r"(doordash|uber eats|ubereats|grubhub|postmates|seamless|caviar)", "dining", 0.95),
     (r"(bar|pub|brewery|tavern|grill)", "dining", 0.8),
 
-    # Transportation
+    # Transportation (ride-share, transit, gas)
     (r"(uber|lyft|taxi|cab|transit|metro|bus|train|amtrak|parking)", "transport", 0.9),
     (r"(gas station|shell|chevron|exxon|mobil|bp\b|arco|76 gas|76 station|speedway|wawa)", "transport", 0.9),
     (r"(car wash|auto|tire|oil change|mechanic|jiffy lube)", "transport", 0.85),
