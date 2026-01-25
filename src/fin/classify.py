@@ -398,6 +398,37 @@ def _is_credit_card_account(account_name: str) -> bool:
     return any(kw in name_lower for kw in cc_keywords)
 
 
+def _is_strong_income(merchant_norm: str) -> bool:
+    """
+    Detect if a positive amount is DEFINITELY real income.
+
+    Only return True for strong income signals:
+    - Payroll / direct deposit patterns
+    - Employer names with payroll keywords
+    - Government payments (unemployment, tax refunds)
+
+    This is used to distinguish real income from credits/refunds.
+    """
+    income_patterns = [
+        "payroll",
+        "paycheck",
+        "direct deposit",
+        "direct dep",
+        "salary",
+        "wages",
+        "unemployment",
+        "irs",
+        "tax refund",
+        "ssa ",  # Social Security
+        "social security",
+        "pension",
+        "disability",
+        "edd ",  # Employment Development Dept
+        "employer",
+    ]
+    return any(p in merchant_norm for p in income_patterns)
+
+
 def _is_income_transfer(merchant_norm: str) -> bool:
     """
     Detect if a positive amount is a transfer rather than real income.
@@ -406,24 +437,8 @@ def _is_income_transfer(merchant_norm: str) -> bool:
     - Internal transfers between accounts
     - Zelle/Venmo/PayPal (person-to-person, ambiguous)
 
-    These ARE real income (not transfers):
-    - Paychecks, direct deposits
-    - Unemployment payments
-    - Tax refunds
+    Note: This does NOT check for income patterns - that's _is_strong_income().
     """
-    # First check for known income patterns (these are NOT transfers)
-    income_patterns = [
-        "unemployment",
-        "direct deposit",
-        "payroll",
-        "paycheck",
-        "salary",
-        "irs",
-        "tax refund",
-    ]
-    if any(p in merchant_norm for p in income_patterns):
-        return False
-
     # These are likely transfers, not real income
     transfer_keywords = [
         "transfer from",
@@ -497,30 +512,34 @@ def classify_transaction(
 
     if amount_cents > 0:
         # === POSITIVE AMOUNT ===
-        # Priority order for positive amounts:
+        # Default assumption: positive amounts are CREDITS (refunds, rewards, adjustments)
+        # Only classify as "income" when there's strong evidence.
+        #
+        # Priority order (user rules take precedence):
 
-        # 1. Credit card positive = payment received (always a transfer)
-        #    CC positives are payments you made TO the card, not income
-        if is_credit_card:
-            return "transfer"
+        # 1. User explicitly excluded from income → credit
+        if is_user_excluded:
+            return "credit"
 
-        # 2. Known transfer patterns (internal transfers, P2P)
+        # 2. User explicitly marked as income → income (overrides transfer patterns)
+        if is_user_income:
+            return "income"
+
+        # 3. Known transfer patterns (internal transfers, P2P) → transfer
+        #    Note: Transfer pairing also overrides this at the caller level
         if pattern and pattern.is_transfer:
             return "transfer"
         if _is_income_transfer(merchant_norm):
             return "transfer"
 
-        # 3. User explicitly excluded from income → credit (not transfer)
-        #    These are refunds, rewards, adjustments - not income
-        if is_user_excluded:
-            return "credit"
-
-        # 4. User explicitly marked as income
-        if is_user_income:
+        # 4. Strong income heuristic (payroll, direct deposit, etc.) → income
+        if _is_strong_income(merchant_norm):
             return "income"
 
-        # 5. Default: positive amount is income
-        return "income"
+        # 5. DEFAULT: Positive amount is a CREDIT (refund, reward, adjustment)
+        #    This is the conservative default - we don't assume positive = income
+        #    CC refunds, merchant credits, rewards all fall here
+        return "credit"
 
     else:
         # === NEGATIVE AMOUNT (spending) ===
@@ -549,6 +568,7 @@ def detect_transfer_pairs(
     start_date: date,
     end_date: date,
     tolerance_days: int = 3,
+    tolerance_cents: int = 100,  # Allow ~$1 difference for ACH fees
 ) -> set[str]:
     """
     Detect internal transfer pairs across accounts.
@@ -563,12 +583,13 @@ def detect_transfer_pairs(
     Args:
         start_date: Start of date range
         end_date: End of date range (exclusive)
-        tolerance_days: Maximum days between matching transactions
+        tolerance_days: Maximum days between matching transactions (default 3)
+        tolerance_cents: Maximum cents difference for ACH fee tolerance (default 100 = $1)
 
     Returns:
         Set of transaction fingerprints that are part of transfer pairs
     """
-    # Get all transactions in range
+    # Get all posted (non-pending) transactions in range
     rows = conn.execute(
         """
         SELECT
@@ -579,61 +600,66 @@ def detect_transfer_pairs(
             TRIM(LOWER(COALESCE(NULLIF(t.merchant,''), NULLIF(t.description,''), ''))) AS merchant_norm
         FROM transactions t
         WHERE t.posted_at >= ? AND t.posted_at < ?
+          AND COALESCE(t.pending, 0) = 0
         ORDER BY t.posted_at, ABS(t.amount_cents) DESC
         """,
         (start_date.isoformat(), end_date.isoformat()),
     ).fetchall()
 
-    # Build lookup by date and amount
-    by_amount: dict[int, list[dict]] = defaultdict(list)
+    # Separate inflows and outflows for pairing
+    outflows: list[dict] = []  # Negative amounts
+    inflows: list[dict] = []   # Positive amounts
+
     for r in rows:
-        amt = r["amount_cents"]
-        by_amount[amt].append({
+        txn = {
             "fingerprint": r["fingerprint"],
             "account_id": r["account_id"],
             "posted_at": datetime.fromisoformat(r["posted_at"]).date(),
-            "amount_cents": amt,
+            "amount_cents": r["amount_cents"],
             "merchant_norm": r["merchant_norm"],
-        })
+        }
+        if r["amount_cents"] < 0:
+            outflows.append(txn)
+        elif r["amount_cents"] > 0:
+            inflows.append(txn)
 
     paired_fingerprints: set[str] = set()
 
-    # Find matching pairs (opposite amounts, different accounts, close dates)
-    for amt, txns in by_amount.items():
-        if amt >= 0:
-            continue  # Only look at outflows
+    # Find matching pairs (opposite amounts within tolerance, different accounts, close dates)
+    for outflow in outflows:
+        if outflow["fingerprint"] in paired_fingerprints:
+            continue  # Already paired
 
-        opposite_amt = -amt
-        if opposite_amt not in by_amount:
-            continue
+        outflow_abs = abs(outflow["amount_cents"])
 
-        opposite_txns = by_amount[opposite_amt]
-
-        for outflow in txns:
-            if outflow["fingerprint"] in paired_fingerprints:
+        for inflow in inflows:
+            if inflow["fingerprint"] in paired_fingerprints:
                 continue  # Already paired
+            if inflow["account_id"] == outflow["account_id"]:
+                continue  # Same account - not a transfer
 
-            for inflow in opposite_txns:
-                if inflow["fingerprint"] in paired_fingerprints:
-                    continue  # Already paired
-                if inflow["account_id"] == outflow["account_id"]:
-                    continue  # Same account - not a transfer
+            inflow_amt = inflow["amount_cents"]
 
-                # Check date proximity
-                days_diff = abs((inflow["posted_at"] - outflow["posted_at"]).days)
-                if days_diff > tolerance_days:
-                    continue
+            # Check amount match (with tolerance for ACH fees)
+            amount_diff = abs(outflow_abs - inflow_amt)
+            if amount_diff > tolerance_cents:
+                continue
 
-                # Check if merchant looks like a transfer
-                # (transfers often have similar descriptions or generic names)
-                outflow_is_transfer = _is_transfer(outflow["merchant_norm"]) or _is_income_transfer(outflow["merchant_norm"])
-                inflow_is_transfer = _is_transfer(inflow["merchant_norm"]) or _is_income_transfer(inflow["merchant_norm"])
+            # Check date proximity
+            days_diff = abs((inflow["posted_at"] - outflow["posted_at"]).days)
+            if days_diff > tolerance_days:
+                continue
 
-                # At least one side should look like a transfer
-                if outflow_is_transfer or inflow_is_transfer:
-                    paired_fingerprints.add(outflow["fingerprint"])
-                    paired_fingerprints.add(inflow["fingerprint"])
-                    break
+            # Check if merchant looks like a transfer
+            # (transfers often have similar descriptions or generic names)
+            outflow_is_transfer = _is_transfer(outflow["merchant_norm"]) or _is_income_transfer(outflow["merchant_norm"])
+            inflow_is_transfer = _is_transfer(inflow["merchant_norm"]) or _is_income_transfer(inflow["merchant_norm"])
+
+            # At least one side should look like a transfer
+            if outflow_is_transfer or inflow_is_transfer:
+                paired_fingerprints.add(outflow["fingerprint"])
+                paired_fingerprints.add(inflow["fingerprint"])
+                break
 
     return paired_fingerprints
 
@@ -661,19 +687,24 @@ def _detect_patterns(
     if anchor_date is None:
         anchor_date = date.today()
     since = (anchor_date - timedelta(days=lookback_days)).isoformat()
+    # Cap at anchor_date to prevent future data leakage in historical reports
+    anchor_exclusive = (anchor_date + timedelta(days=1)).isoformat()
 
     # Build query with optional account filter
+    # CRITICAL: Both lower AND upper bounds prevent future-data leakage
+    # Exclude pending transactions from pattern detection
     query = """
         SELECT
             posted_at,
             amount_cents,
             TRIM(LOWER(COALESCE(NULLIF(merchant,''), NULLIF(description,''), ''))) AS merchant_norm
         FROM transactions
-        WHERE posted_at >= ?
+        WHERE posted_at >= ? AND posted_at < ?
           AND amount_cents < 0
           AND merchant_norm <> ''
+          AND COALESCE(pending, 0) = 0
     """
-    params: list = [since]
+    params: list = [since, anchor_exclusive]
 
     if account_filter:
         placeholders = ",".join("?" * len(account_filter))
@@ -742,7 +773,10 @@ def _detect_patterns(
             is_habitual = True
             cadence_label = "habitual"
         
-        is_recurring = is_subscription_recurring or is_habitual
+        # CRITICAL: is_recurring means subscription-like only (predictable cadence)
+        # Habitual spending (groceries, Amazon) is tracked separately and treated
+        # as discretionary, NOT as recurring obligations
+        is_recurring = is_subscription_recurring
         
         # Calculate amount variance (coefficient of variation)
         amount_cv = 0.0
@@ -966,6 +1000,7 @@ def classify_month(
             COALESCE(t.description, '') AS description
         FROM transactions t
         WHERE t.posted_at >= ? AND t.posted_at < ?
+          AND COALESCE(t.pending, 0) = 0
         ORDER BY t.posted_at
         """,
         (start.isoformat(), end.isoformat()),
@@ -1054,8 +1089,9 @@ def summarize_month(
     """
     Generate a complete financial summary for a month.
     """
-    patterns = _detect_patterns(conn)
-    classified = classify_month(conn, year, month, patterns)
+    # Let classify_month() compute patterns with proper anchoring to month end
+    # This ensures historical reports are reproducible
+    classified = classify_month(conn, year, month, patterns=None)
 
     # Aggregate
     income_cents = 0
@@ -1357,9 +1393,8 @@ def detect_sketchy(
     """
     params: list = [since]
 
-    if account_filter is not None:
-        if not account_filter:  # Empty list = no accounts
-            return []
+    # account_filter: None or [] = all accounts, non-empty list = filter to those accounts
+    if account_filter:
         placeholders = ",".join("?" * len(account_filter))
         sql += f" AND t.account_id IN ({placeholders})"
         params.extend(account_filter)

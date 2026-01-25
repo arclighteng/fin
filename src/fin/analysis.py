@@ -305,7 +305,29 @@ def _analyze_single_period(
     Analyze a single period and return raw values.
 
     Uses the shared classify_transaction() function for consistent classification.
+
+    Args:
+        account_filter: None = all accounts, [] = no accounts (return empty), list = filter
     """
+    # Empty list means "no accounts selected" - return empty results
+    if account_filter is not None and len(account_filter) == 0:
+        return {
+            "income_cents": 0,
+            "credit_cents": 0,
+            "recurring_cents": 0,
+            "discretionary_cents": 0,
+            "transfer_cents": 0,
+            "incoming_transfer_cents": 0,
+            "net_cents": 0,
+            "transaction_count": 0,
+            "income_items": [],
+            "credit_items": [],
+            "transfer_items": [],
+            "raw_sum_cents": 0,
+            "classification_sum_cents": 0,
+            "checksum_valid": True,
+        }
+
     income_sources = income_sources or set()
     excluded_sources = excluded_sources or set()
 
@@ -318,6 +340,7 @@ def _analyze_single_period(
         account_types[acc["account_id"]] = _is_credit_card_account(acc["name"])
 
     # Build query with optional account filter (end-exclusive for period bounds)
+    # Exclude pending transactions by default
     query = """
         SELECT
             t.fingerprint,
@@ -327,6 +350,7 @@ def _analyze_single_period(
             TRIM(LOWER(COALESCE(NULLIF(t.merchant,''), NULLIF(t.description,''), ''))) AS merchant_norm
         FROM transactions t
         WHERE t.posted_at >= ? AND t.posted_at < ?
+          AND COALESCE(t.pending, 0) = 0
     """
     params: list = [start.isoformat(), end.isoformat()]
 
@@ -465,12 +489,12 @@ def analyze_periods(
     if end_date is None:
         end_date = date.today()
 
-    # Detect patterns anchored to the reference end_date
-    # This ensures historical reports use patterns that existed at that time
-    patterns = _detect_patterns(conn, lookback_days=800, anchor_date=end_date)
-
     # Get user-marked income rules
     income_sources, excluded_sources = dbmod.get_income_rules(conn)
+
+    # Cache patterns by anchor_date to avoid recomputation
+    # (optimization for when multiple periods share the same anchor)
+    pattern_cache: dict[date, dict] = {}
 
     # Collect period data
     period_data: list[tuple[date, date, str, dict]] = []
@@ -481,6 +505,15 @@ def analyze_periods(
 
     for _ in range(periods_needed):
         label = _get_period_label(period_type, current_start)
+
+        # CRITICAL: Detect patterns anchored to THIS period's end date
+        # This ensures each period only sees patterns from data up to that point
+        if current_end not in pattern_cache:
+            pattern_cache[current_end] = _detect_patterns(
+                conn, lookback_days=800, anchor_date=current_end
+            )
+        patterns = pattern_cache[current_end]
+
         data = _analyze_single_period(
             conn, period_type, current_start, current_end, patterns,
             income_sources, excluded_sources, account_filter
@@ -588,33 +621,68 @@ def analyze_custom_range(
     Analyze income vs spend for a custom date range.
 
     Uses the shared classify_transaction() function for consistent classification.
-    Note: Uses end-INCLUSIVE semantics for user-specified date ranges.
 
     Args:
         start: Start date (inclusive)
-        end: End date (inclusive)
-        account_filter: Optional list of account_ids to filter by
+        end: End date (inclusive, converted to exclusive internally)
+        account_filter: None = all accounts, [] = no accounts (return empty), list = filter
 
     Returns a PeriodAnalysis with income_items for drill-down.
     """
+    # Empty list means "no accounts selected" - return empty results
+    if account_filter is not None and len(account_filter) == 0:
+        return PeriodAnalysis(
+            period_type=None,
+            period_label=f"{start.isoformat()} to {end.isoformat()}",
+            start_date=start,
+            end_date=end,
+            income_cents=0,
+            credit_cents=0,
+            recurring_cents=0,
+            discretionary_cents=0,
+            transfer_cents=0,
+            incoming_transfer_cents=0,
+            net_cents=0,
+            prev_income_cents=None,
+            prev_recurring_cents=None,
+            prev_discretionary_cents=None,
+            income_trend="stable",
+            recurring_trend="stable",
+            discretionary_trend="stable",
+            avg_income_cents=0,
+            avg_recurring_cents=0,
+            avg_discretionary_cents=0,
+            transaction_count=0,
+            income_items=[],
+            credit_items=[],
+            transfer_items=[],
+            raw_sum_cents=0,
+            classification_sum_cents=0,
+            checksum_valid=True,
+        )
+
     from . import db as dbmod
 
     # Get user-marked income rules
     income_sources, excluded_sources = dbmod.get_income_rules(conn)
 
+    # Convert inclusive end to exclusive (add 1 day)
+    end_exclusive = end + timedelta(days=1)
+
     # Detect patterns anchored to the END of the custom range
     # This ensures historical reports use patterns that existed at that time
     patterns = _detect_patterns(conn, lookback_days=800, anchor_date=end)
 
-    # Detect transfer pairs (end + 1 day because detect_transfer_pairs is end-exclusive)
-    paired_fingerprints = detect_transfer_pairs(conn, start, end + timedelta(days=1))
+    # Detect transfer pairs (end-exclusive)
+    paired_fingerprints = detect_transfer_pairs(conn, start, end_exclusive)
 
     # Get account info to determine account types
     account_types: dict[str, bool] = {}  # account_id -> is_credit_card
     for acc in conn.execute("SELECT account_id, name FROM accounts").fetchall():
         account_types[acc["account_id"]] = _is_credit_card_account(acc["name"])
 
-    # Build query with optional account filter (end-INCLUSIVE for custom ranges)
+    # Build query with optional account filter (end-exclusive internally)
+    # Exclude pending transactions by default
     query = """
         SELECT
             t.fingerprint,
@@ -625,9 +693,10 @@ def analyze_custom_range(
             a.name AS account_name
         FROM transactions t
         JOIN accounts a ON t.account_id = a.account_id
-        WHERE t.posted_at >= ? AND t.posted_at <= ?
+        WHERE t.posted_at >= ? AND t.posted_at < ?
+          AND COALESCE(t.pending, 0) = 0
     """
-    params: list = [start.isoformat(), end.isoformat()]
+    params: list = [start.isoformat(), end_exclusive.isoformat()]
 
     if account_filter:
         placeholders = ",".join("?" * len(account_filter))

@@ -184,16 +184,25 @@ def categorize_transactions(
     """
     Categorize all transactions in a date range.
 
+    Args:
+        start_date: Start date YYYY-MM-DD (inclusive)
+        end_date: End date YYYY-MM-DD (inclusive, converted to exclusive internally)
+
     Manual overrides take precedence over ML/rule-based categorization.
 
     Returns: dict mapping category_id to list of (merchant, amount_cents, date)
     """
+    from datetime import date, timedelta
+
     # Get manual overrides if not provided
     if overrides is None:
         from . import db as dbmod
         overrides = dbmod.get_category_overrides(conn)
 
-    # Build query with optional account filter
+    # Convert inclusive end to exclusive (add 1 day)
+    end_exclusive = (date.fromisoformat(end_date) + timedelta(days=1)).isoformat()
+
+    # Build query with optional account filter (end-exclusive internally)
     sql = """
         SELECT
             posted_at,
@@ -201,13 +210,12 @@ def categorize_transactions(
             TRIM(LOWER(COALESCE(NULLIF(merchant,''), NULLIF(description,''), ''))) AS merchant_norm,
             COALESCE(description, '') AS description
         FROM transactions
-        WHERE posted_at >= ? AND posted_at <= ?
+        WHERE posted_at >= ? AND posted_at < ?
     """
-    params: list = [start_date, end_date]
+    params: list = [start_date, end_exclusive]
 
-    if account_filter is not None:
-        if not account_filter:  # Empty list = no accounts
-            return {cat: [] for cat in CATEGORIES}
+    # account_filter: None or [] = all accounts, non-empty list = filter to those accounts
+    if account_filter:
         placeholders = ",".join("?" * len(account_filter))
         sql += f" AND account_id IN ({placeholders})"
         params.extend(account_filter)
@@ -228,7 +236,9 @@ def categorize_transactions(
         if override and override in CATEGORIES:
             cat_id = override
         elif amount > 0:
-            # Positive amount: could be income OR a refund
+            # Positive amount: could be income OR a refund/credit
+            # IMPORTANT: Default to "one_time_deposit" NOT "income"
+            # This aligns with classify_transaction() which treats unknown positives as credits
             cat_id, confidence = categorize_merchant(merchant, description)
 
             # If merchant categorizes to an expense category (not income/transfer),
@@ -242,12 +252,16 @@ def categorize_transactions(
             if cat_id in expense_categories and confidence > 0:
                 # It's a refund - keep in expense category
                 pass
-            elif cat_id in ("income", "one_time_deposit") and confidence > 0:
-                # Explicitly categorized as income
+            elif cat_id == "income" and confidence > 0.5:
+                # Only use "income" when confidence is high (explicit income patterns)
+                pass
+            elif cat_id == "one_time_deposit" and confidence > 0:
+                # Explicitly categorized as one-time deposit
                 pass
             else:
-                # Default positive amounts to income
-                cat_id = "income"
+                # Default positive amounts to one_time_deposit (NOT income)
+                # This is the conservative default - we don't assume positive = income
+                cat_id = "one_time_deposit"
         else:
             # Negative amount: categorize as expense
             cat_id, _ = categorize_merchant(merchant, description)

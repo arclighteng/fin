@@ -176,13 +176,13 @@ def dashboard(
     from .analysis import analyze_custom_range
     from calendar import monthrange
 
-    # Parse account filter - "none" means show no data
+    # Parse account filter - "none" means show no data (early return)
+    # None or [] = all accounts, non-empty list = filter to those accounts
     account_filter: list[str] | None = None
     show_no_data = False
     if accounts:
         if accounts.lower() == "none":
-            show_no_data = True
-            account_filter = []  # Empty list means no accounts
+            show_no_data = True  # Causes early return below
         else:
             account_filter = [a.strip() for a in accounts.split(",") if a.strip()]
 
@@ -334,11 +334,13 @@ def dashboard(
     # Count pending transactions in current period
     pending_count = 0
     if current_period:
+        # Convert inclusive end to exclusive (add 1 day)
+        end_exclusive = (current_period.end_date + timedelta(days=1)).isoformat()
         query = """
             SELECT COUNT(*) FROM transactions
-            WHERE posted_at >= ? AND posted_at <= ? AND pending = 1
+            WHERE posted_at >= ? AND posted_at < ? AND pending = 1
         """
-        params = [current_period.start_date.isoformat(), current_period.end_date.isoformat()]
+        params = [current_period.start_date.isoformat(), end_exclusive]
         if account_filter:
             placeholders = ",".join("?" * len(account_filter))
             query += f" AND account_id IN ({placeholders})"
@@ -763,7 +765,10 @@ def get_transactions_by_type(
     for acc in conn.execute("SELECT account_id, name FROM accounts").fetchall():
         account_types[acc["account_id"]] = (_is_credit_card_account(acc["name"]), acc["name"])
 
-    # Build query
+    # Convert inclusive end to exclusive (add 1 day)
+    end_exclusive = (date.fromisoformat(end_date) + timedelta(days=1)).isoformat()
+
+    # Build query (end-exclusive internally)
     query = """
         SELECT
             t.posted_at,
@@ -773,9 +778,9 @@ def get_transactions_by_type(
             COALESCE(t.description, t.merchant, '') AS raw_description,
             COALESCE(t.pending, 0) AS pending
         FROM transactions t
-        WHERE t.posted_at >= ? AND t.posted_at <= ?
+        WHERE t.posted_at >= ? AND t.posted_at < ?
     """
-    params: list = [start_date, end_date]
+    params: list = [start_date, end_exclusive]
 
     if account_filter:
         placeholders = ",".join("?" * len(account_filter))
@@ -854,13 +859,13 @@ def subs(
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """Recurring charges page with styled layout and drill-down."""
-    # Parse account filter - "none" means show no data
+    # Parse account filter - "none" means show no data (early return)
+    # None or [] = all accounts, non-empty list = filter to those accounts
     account_filter: list[str] | None = None
     show_no_data = False
     if accounts:
         if accounts.lower() == "none":
-            show_no_data = True
-            account_filter = []
+            show_no_data = True  # Causes early return below
         else:
             account_filter = [a.strip() for a in accounts.split(",") if a.strip()]
 
@@ -1019,18 +1024,7 @@ def anomalies(days: int = 60, limit: int = 50, conn: sqlite3.Connection = Depend
 # ---------------------------------------------------------------------------
 # CSV Export Routes
 # ---------------------------------------------------------------------------
-def _sanitize_csv_field(value: str) -> str:
-    """
-    Sanitize a string for safe CSV export to prevent formula injection.
-
-    When opened in Excel/Sheets, cells starting with =, +, -, @, tab, or CR
-    can be interpreted as formulas. Prefix with apostrophe to neutralize.
-    """
-    if not value:
-        return value
-    if value[0] in ('=', '+', '-', '@', '\t', '\r'):
-        return "'" + value
-    return value
+from .normalize import sanitize_csv_field as _sanitize_csv_field
 
 
 @app.get("/export/sketchy")
