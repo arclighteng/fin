@@ -118,6 +118,9 @@ Issues discovered and fixed during implementation:
 | High | Pending in totals | No pending filter | Added COALESCE(pending, 0) = 0 | test_pending_excluded |
 | High | Float rounding errors | Using float for money | Decimal with ROUND_HALF_UP | test_money_rounding |
 | Medium | Empty account filter = all | `if account_filter:` | Check for empty list explicitly | test_empty_filter |
+| Medium | "purchase" matched "chase" | Substring match for banks | Use word-boundary regex | test_bank_keywords |
+| Medium | "amazon.com" didn't match "amazon" | Split only on spaces | Split on spaces and punctuation | test_first_word_match |
+| Low | Refund keyword in merchant name | "unknown credit" → REFUND | Correct behavior, test updated | test_resolution_tasks |
 
 ## Invariants (Checked at Runtime)
 
