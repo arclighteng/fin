@@ -49,6 +49,14 @@ class DuplicateDismissRequest(BaseModel):
     dismiss: bool  # True to dismiss, False to restore warning
 
 
+class TxnTypeOverrideRequest(BaseModel):
+    """Request to override transaction classification type."""
+    fingerprint: str | None = None  # Specific transaction
+    merchant_pattern: str | None = None  # Merchant pattern match
+    target_type: str  # INCOME, EXPENSE, TRANSFER, REFUND, CREDIT_OTHER
+    reason: str | None = None  # Optional user note
+
+
 app = FastAPI()
 
 # Setup Jinja2 templates
@@ -500,6 +508,91 @@ def dismiss_duplicate(
         "status": "ok",
         "merchant": req.merchant,
         "dismissed": req.dismiss,
+    })
+
+
+@app.post("/api/txn-type-override")
+def set_txn_type_override(
+    req: TxnTypeOverrideRequest,
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """
+    Set transaction type override.
+
+    Override classification for a specific transaction (by fingerprint) or
+    all transactions matching a merchant pattern.
+
+    target_type: INCOME, EXPENSE, TRANSFER, REFUND, CREDIT_OTHER
+    """
+    valid_types = {"INCOME", "EXPENSE", "TRANSFER", "REFUND", "CREDIT_OTHER"}
+    if req.target_type not in valid_types:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Invalid target_type. Must be one of: {', '.join(valid_types)}"},
+        )
+
+    if not req.fingerprint and not req.merchant_pattern:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Must specify either fingerprint or merchant_pattern"},
+        )
+
+    if req.fingerprint and req.merchant_pattern:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Specify either fingerprint or merchant_pattern, not both"},
+        )
+
+    if req.fingerprint:
+        dbmod.set_txn_type_override_fingerprint(
+            conn, req.fingerprint, req.target_type, req.reason
+        )
+        return JSONResponse(content={
+            "status": "ok",
+            "fingerprint": req.fingerprint,
+            "target_type": req.target_type,
+        })
+    else:
+        dbmod.set_txn_type_override_merchant(
+            conn, req.merchant_pattern, req.target_type, req.reason
+        )
+        return JSONResponse(content={
+            "status": "ok",
+            "merchant_pattern": req.merchant_pattern,
+            "target_type": req.target_type,
+        })
+
+
+@app.delete("/api/txn-type-override")
+def remove_txn_type_override_endpoint(
+    fingerprint: str | None = None,
+    merchant_pattern: str | None = None,
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Remove a transaction type override."""
+    if not fingerprint and not merchant_pattern:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Must specify either fingerprint or merchant_pattern"},
+        )
+
+    dbmod.remove_txn_type_override(conn, fingerprint, merchant_pattern)
+    return JSONResponse(content={"status": "ok"})
+
+
+@app.get("/api/txn-type-overrides")
+def get_txn_type_overrides_endpoint(conn: sqlite3.Connection = Depends(get_db)):
+    """Get all transaction type overrides."""
+    fp_overrides, merchant_overrides = dbmod.get_txn_type_overrides(conn)
+    return JSONResponse(content={
+        "fingerprint_overrides": [
+            {"fingerprint": fp, "target_type": t}
+            for fp, t in fp_overrides.items()
+        ],
+        "merchant_overrides": [
+            {"merchant_pattern": p, "target_type": t}
+            for p, t in merchant_overrides.items()
+        ],
     })
 
 
