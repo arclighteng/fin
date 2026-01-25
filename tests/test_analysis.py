@@ -233,10 +233,11 @@ class TestAnalyzePeriods:
         assert isinstance(p.transaction_count, int)
 
     def test_net_cents_calculation(self, populated_db):
-        """Net should be income - recurring - discretionary."""
+        """Net should be income + credits - recurring - discretionary."""
         periods = analyze_periods(populated_db, TimePeriod.MONTH, num_periods=1)
         p = periods[0]
-        expected_net = p.income_cents - p.recurring_cents - p.discretionary_cents
+        # Net includes credits (refunds, rewards) as they reduce effective spend
+        expected_net = p.income_cents + p.credit_cents - p.recurring_cents - p.discretionary_cents
         assert p.net_cents == expected_net
 
     def test_transfers_excluded_from_expenses(self, populated_db):
@@ -245,8 +246,8 @@ class TestAnalyzePeriods:
         p = periods[0]
         # Transfer cents should be tracked but not affect net calculation
         assert p.transfer_cents >= 0
-        # Net should NOT subtract transfers
-        expected_net = p.income_cents - p.recurring_cents - p.discretionary_cents
+        # Net should NOT subtract transfers, but should include credits
+        expected_net = p.income_cents + p.credit_cents - p.recurring_cents - p.discretionary_cents
         assert p.net_cents == expected_net
 
     def test_quarterly_analysis(self, populated_db):
