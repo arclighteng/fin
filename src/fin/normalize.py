@@ -1,6 +1,7 @@
 # normalize.py
 import hashlib
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 from .models import Transaction
@@ -34,21 +35,24 @@ def fingerprint_txn(account_id: str, posted_at: date, amount_cents: int, merchan
 
 def parse_amount_to_cents(amount: Any) -> int:
     """
-    Convert a dollar amount to cents.
-    
+    Convert a dollar amount to cents using Decimal for precision.
+
     SimpleFIN returns amounts as floats representing dollars (e.g., -12.99 for
     a $12.99 charge). This function converts to integer cents for storage.
-    
+
+    Uses Decimal to avoid floating-point precision errors (e.g., 12.99 * 100
+    becoming 1298.9999999... instead of 1299).
+
     Args:
         amount: Dollar amount as int, float, or string (e.g., -12.99, "-12.99", -12)
-    
+
     Returns:
         Integer cents (e.g., -1299)
-    
+
     Raises:
         ValueError: If amount is None or an unsupported type
         ValueError: If amount exceeds sanity bounds (> $1M or < -$1M)
-    
+
     Examples:
         >>> parse_amount_to_cents(-12.99)
         -1299
@@ -59,18 +63,21 @@ def parse_amount_to_cents(amount: Any) -> int:
     """
     if amount is None:
         raise ValueError("Amount cannot be None")
-    
-    # Convert to float first for uniform handling
+
+    # Convert to Decimal for precise calculation (avoid float rounding errors)
     try:
         if isinstance(amount, str):
-            dollars = float(amount.strip().replace(",", ""))
-        elif isinstance(amount, (int, float)):
-            dollars = float(amount)
+            dollars = Decimal(amount.strip().replace(",", ""))
+        elif isinstance(amount, float):
+            # Convert float to string first to avoid float precision issues
+            dollars = Decimal(str(amount))
+        elif isinstance(amount, int):
+            dollars = Decimal(amount)
         else:
             raise ValueError(f"Unsupported amount type: {type(amount).__name__}")
-    except (ValueError, AttributeError) as e:
+    except (InvalidOperation, AttributeError) as e:
         raise ValueError(f"Cannot parse amount '{amount}': {e}") from e
-    
+
     # Sanity check: flag suspiciously large amounts (likely already in cents)
     if abs(dollars) > 1_000_000:
         raise ValueError(
@@ -78,28 +85,37 @@ def parse_amount_to_cents(amount: Any) -> int:
             f"If this is intentional, use parse_amount_to_cents_unchecked(). "
             f"If the source provides cents, divide by 100 before calling."
         )
-    
-    return int(round(dollars * 100))
+
+    # Multiply by 100 and round using ROUND_HALF_UP (standard financial rounding)
+    # This avoids banker's rounding (HALF_EVEN) which can cause 1¢ surprises
+    cents = (dollars * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    return int(cents)
 
 
 def parse_amount_to_cents_unchecked(amount: Any) -> int:
     """
     Convert dollar amount to cents without sanity bounds checking.
-    
-    Use only when you've verified the source provides dollar amounts
-    and values over $1M are expected (e.g., business accounts, real estate).
+
+    Uses Decimal for precision. Use only when you've verified the source
+    provides dollar amounts and values over $1M are expected (e.g., business
+    accounts, real estate).
     """
     if amount is None:
         raise ValueError("Amount cannot be None")
-    
+
+    # Convert to Decimal for precise calculation
     if isinstance(amount, str):
-        dollars = float(amount.strip().replace(",", ""))
-    elif isinstance(amount, (int, float)):
-        dollars = float(amount)
+        dollars = Decimal(amount.strip().replace(",", ""))
+    elif isinstance(amount, float):
+        dollars = Decimal(str(amount))
+    elif isinstance(amount, int):
+        dollars = Decimal(amount)
     else:
         raise ValueError(f"Unsupported amount type: {type(amount).__name__}")
-    
-    return int(round(dollars * 100))
+
+    # Use ROUND_HALF_UP for standard financial rounding
+    cents = (dollars * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    return int(cents)
 
 
 def normalize_simplefin_txn(raw: dict, account_id: str) -> Transaction:
@@ -165,3 +181,24 @@ def normalize_simplefin_txn(raw: dict, account_id: str) -> Transaction:
         fingerprint=fp,
         pending=pending,
     )
+
+
+def sanitize_csv_field(value: Any) -> str:
+    """
+    Sanitize a value for safe CSV export to prevent formula injection.
+
+    When opened in Excel/Sheets, cells starting with =, +, -, @, tab, or CR
+    can be interpreted as formulas. Prefix with apostrophe to neutralize.
+
+    Args:
+        value: Any value to sanitize (will be converted to string)
+
+    Returns:
+        Sanitized string safe for CSV export
+    """
+    if value is None:
+        return ""
+    s = str(value)
+    if s and s[0] in ('=', '+', '-', '@', '\t', '\r'):
+        return "'" + s
+    return s

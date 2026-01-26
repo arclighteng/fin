@@ -13,7 +13,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from . import db as dbmod
-from .classify import detect_alerts, summarize_month, MonthSummary
+from .legacy_classify import detect_alerts, summarize_month, MonthSummary
 from .config import load_config
 from .log import setup_logging
 

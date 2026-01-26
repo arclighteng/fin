@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS anomalies (
 -- Alert actions: user feedback on detected alerts
 CREATE TABLE IF NOT EXISTS alert_actions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  alert_key TEXT NOT NULL UNIQUE,  -- Unique identifier: "type:merchant:amount:date"
+  alert_key TEXT NOT NULL UNIQUE,  -- Unique identifier: "type|merchant|amount|date"
   action TEXT NOT NULL,             -- "ack", "not_suspicious", "confirmed", "canceled"
   merchant_norm TEXT,               -- For learning across similar transactions
   pattern_type TEXT,                -- "duplicate_charge", "unusual_amount", etc.
@@ -113,6 +113,29 @@ CREATE TABLE IF NOT EXISTS category_overrides (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+-- Transaction type overrides (INCOME, EXPENSE, TRANSFER, REFUND, CREDIT_OTHER)
+-- Supports both fingerprint-specific and merchant pattern overrides
+CREATE TABLE IF NOT EXISTS txn_type_overrides (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  fingerprint TEXT,                    -- Specific transaction (NULL for merchant pattern)
+  merchant_pattern TEXT,               -- Merchant substring (NULL for fingerprint)
+  target_type TEXT NOT NULL,           -- INCOME, EXPENSE, TRANSFER, REFUND, CREDIT_OTHER
+  reason TEXT,                         -- User note explaining override
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(fingerprint),
+  UNIQUE(merchant_pattern)
+);
+
+-- Index for fast fingerprint lookup
+CREATE INDEX IF NOT EXISTS idx_txn_type_overrides_fp ON txn_type_overrides(fingerprint);
+
+-- Performance indexes for common query patterns
+CREATE INDEX IF NOT EXISTS idx_txn_posted_at ON transactions(posted_at);
+CREATE INDEX IF NOT EXISTS idx_txn_account_posted ON transactions(account_id, posted_at);
+CREATE INDEX IF NOT EXISTS idx_txn_pending ON transactions(pending) WHERE pending = 1;
+CREATE INDEX IF NOT EXISTS idx_txn_amount ON transactions(amount_cents);
 """
 
 
@@ -545,3 +568,161 @@ def get_dismissed_duplicates(conn: sqlite3.Connection) -> set[str]:
         "SELECT merchant_pattern FROM merchant_rules WHERE rule_type = 'ignore_duplicates'"
     ).fetchall()
     return {r["merchant_pattern"] for r in rows}
+
+
+# ---------------------------------------------------------------------------
+# Transaction Type Overrides
+# ---------------------------------------------------------------------------
+# Valid transaction types (from reporting_models.TransactionType)
+VALID_TXN_TYPES = frozenset(["INCOME", "EXPENSE", "TRANSFER", "REFUND", "CREDIT_OTHER"])
+
+
+def set_txn_type_override_fingerprint(
+    conn: sqlite3.Connection,
+    fingerprint: str,
+    target_type: str,
+    reason: str | None = None,
+) -> None:
+    """
+    Set transaction type override for a specific transaction by fingerprint.
+
+    Args:
+        fingerprint: Transaction fingerprint
+        target_type: One of INCOME, EXPENSE, TRANSFER, REFUND, CREDIT_OTHER
+        reason: Optional user note
+    """
+    if target_type not in VALID_TXN_TYPES:
+        raise ValueError(f"Invalid target_type: {target_type}. Must be one of {VALID_TXN_TYPES}")
+
+    now = _utcnow_iso()
+    conn.execute(
+        """
+        INSERT INTO txn_type_overrides(fingerprint, merchant_pattern, target_type, reason, created_at, updated_at)
+        VALUES (?, NULL, ?, ?, ?, ?)
+        ON CONFLICT(fingerprint) DO UPDATE SET
+          target_type=excluded.target_type,
+          reason=excluded.reason,
+          updated_at=excluded.updated_at
+        """,
+        (fingerprint, target_type, reason, now, now),
+    )
+    conn.commit()
+
+
+def set_txn_type_override_merchant(
+    conn: sqlite3.Connection,
+    merchant_pattern: str,
+    target_type: str,
+    reason: str | None = None,
+) -> None:
+    """
+    Set transaction type override for all transactions matching merchant pattern.
+
+    Args:
+        merchant_pattern: Merchant substring to match
+        target_type: One of INCOME, EXPENSE, TRANSFER, REFUND, CREDIT_OTHER
+        reason: Optional user note
+    """
+    if target_type not in VALID_TXN_TYPES:
+        raise ValueError(f"Invalid target_type: {target_type}. Must be one of {VALID_TXN_TYPES}")
+
+    now = _utcnow_iso()
+    pattern = merchant_pattern.lower().strip()
+    conn.execute(
+        """
+        INSERT INTO txn_type_overrides(fingerprint, merchant_pattern, target_type, reason, created_at, updated_at)
+        VALUES (NULL, ?, ?, ?, ?, ?)
+        ON CONFLICT(merchant_pattern) DO UPDATE SET
+          target_type=excluded.target_type,
+          reason=excluded.reason,
+          updated_at=excluded.updated_at
+        """,
+        (pattern, target_type, reason, now, now),
+    )
+    conn.commit()
+
+
+def remove_txn_type_override(
+    conn: sqlite3.Connection,
+    fingerprint: str | None = None,
+    merchant_pattern: str | None = None,
+) -> None:
+    """
+    Remove a transaction type override.
+
+    Specify either fingerprint OR merchant_pattern, not both.
+    """
+    if fingerprint and merchant_pattern:
+        raise ValueError("Specify either fingerprint or merchant_pattern, not both")
+
+    if fingerprint:
+        conn.execute(
+            "DELETE FROM txn_type_overrides WHERE fingerprint = ?",
+            (fingerprint,),
+        )
+    elif merchant_pattern:
+        pattern = merchant_pattern.lower().strip()
+        conn.execute(
+            "DELETE FROM txn_type_overrides WHERE merchant_pattern = ?",
+            (pattern,),
+        )
+    conn.commit()
+
+
+def get_txn_type_overrides(
+    conn: sqlite3.Connection,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """
+    Get all transaction type overrides.
+
+    Returns:
+        Tuple of (fingerprint_overrides, merchant_overrides)
+        Each is a dict mapping fingerprint/pattern -> target_type
+    """
+    rows = conn.execute(
+        "SELECT fingerprint, merchant_pattern, target_type FROM txn_type_overrides"
+    ).fetchall()
+
+    fp_overrides: dict[str, str] = {}
+    merchant_overrides: dict[str, str] = {}
+
+    for row in rows:
+        if row["fingerprint"]:
+            fp_overrides[row["fingerprint"]] = row["target_type"]
+        elif row["merchant_pattern"]:
+            merchant_overrides[row["merchant_pattern"]] = row["target_type"]
+
+    return fp_overrides, merchant_overrides
+
+
+def get_txn_type_override(
+    conn: sqlite3.Connection,
+    fingerprint: str,
+    merchant_norm: str,
+) -> str | None:
+    """
+    Get the effective transaction type override for a transaction.
+
+    Checks fingerprint first, then merchant patterns.
+
+    Returns:
+        Target type string, or None if no override
+    """
+    # Check fingerprint override first
+    row = conn.execute(
+        "SELECT target_type FROM txn_type_overrides WHERE fingerprint = ?",
+        (fingerprint,),
+    ).fetchone()
+    if row:
+        return row["target_type"]
+
+    # Check merchant patterns
+    rows = conn.execute(
+        "SELECT merchant_pattern, target_type FROM txn_type_overrides WHERE merchant_pattern IS NOT NULL"
+    ).fetchall()
+
+    for row in rows:
+        if row["merchant_pattern"] in merchant_norm:
+            return row["target_type"]
+
+    return None

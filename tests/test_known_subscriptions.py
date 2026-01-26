@@ -12,7 +12,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from fin.classify import (
+from fin.legacy_classify import (
     KNOWN_SUBSCRIPTIONS,
     _SORTED_SUBSCRIPTION_PATTERNS,
     _match_known_subscription,

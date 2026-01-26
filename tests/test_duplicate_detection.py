@@ -12,7 +12,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from fin.classify import (
+from fin.legacy_classify import (
     DuplicateGroup,
     detect_duplicates,
     get_subscriptions,
@@ -406,7 +406,9 @@ class TestMonthlyCostCalculation:
             merchant, monthly, cadence = sub[0], sub[1], sub[2]
             if "weekly" in merchant.lower():
                 assert cadence == "weekly"
-                assert monthly == 4000, f"Monthly cost should be 4000 (1000*4), got {monthly}"
+                # Weekly * 52/12 = accurate monthly (not 4x which undercounts)
+                expected_monthly = int(1000 * 52 / 12)  # 4333
+                assert monthly == expected_monthly, f"Monthly cost should be {expected_monthly} (1000*52/12), got {monthly}"
 
 
 class TestFinancialAccuracyDuplicates:

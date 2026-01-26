@@ -15,12 +15,43 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from . import db as dbmod
-from .analysis import TimePeriod, analyze_periods, get_current_period
+from .dates import TimePeriod  # Use canonical TimePeriod from dates module
 from .categorize import CATEGORIES, get_category_breakdown
-from .classify import detect_alerts, detect_duplicates, detect_sketchy, get_subscriptions, get_bills, detect_cross_account_duplicates, detect_price_changes
+from .legacy_classify import detect_alerts, detect_duplicates, detect_sketchy, get_subscriptions, get_bills, detect_cross_account_duplicates, detect_price_changes
+from .legacy_analysis import analyze_periods  # Still needed for export_summary until fully migrated
+from .report_service import ReportService
+from .view_models import PeriodViewModel, reports_to_json
 from .config import Config, load_config
 from .models import Account
 from .normalize import normalize_simplefin_txn
+from .reconciliation import (
+    reconcile_account,
+    save_reconciliation,
+    resolve_reconciliation,
+    get_reconciliation_history,
+    get_pending_reconciliations,
+    analyze_reconciliation_patterns,
+    get_missing_transaction_candidates,
+)
+from .audit import (
+    get_audit_log,
+    get_entity_history,
+    export_report_snapshot,
+    get_version_info,
+    AuditEventType,
+)
+from .planner import (
+    analyze_spending_buckets,
+    get_bucket_detail,
+    project_monthly_budget,
+)
+from .projections import (
+    project_cash_flow,
+    detect_cash_flow_alerts,
+)
+from .cache import get_cache_stats, invalidate_pattern_cache, invalidate_report_cache
+from .reporting_models import SpendingBucket
+from .security import verify_auth_token
 from .simplefin_client import SimpleFinClient
 
 
@@ -47,6 +78,28 @@ class CategoryOverrideRequest(BaseModel):
 class DuplicateDismissRequest(BaseModel):
     merchant: str
     dismiss: bool  # True to dismiss, False to restore warning
+
+
+class TxnTypeOverrideRequest(BaseModel):
+    """Request to override transaction classification type."""
+    fingerprint: str | None = None  # Specific transaction
+    merchant_pattern: str | None = None  # Merchant pattern match
+    target_type: str  # INCOME, EXPENSE, TRANSFER, REFUND, CREDIT_OTHER
+    reason: str | None = None  # Optional user note
+
+
+class ReconcileRequest(BaseModel):
+    """Request to reconcile an account against a statement."""
+    account_id: str
+    statement_date: str  # YYYY-MM-DD
+    statement_balance: str  # Dollar amount (can be negative)
+
+
+class ResolveReconciliationRequest(BaseModel):
+    """Request to mark a reconciliation as resolved."""
+    account_id: str
+    statement_date: str  # YYYY-MM-DD
+    notes: str | None = None
 
 
 app = FastAPI()
@@ -173,16 +226,15 @@ def dashboard(
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """Main dashboard with financial health overview."""
-    from .analysis import analyze_custom_range
     from calendar import monthrange
 
-    # Parse account filter - "none" means show no data
+    # Parse account filter - "none" means show no data (early return)
+    # None or [] = all accounts, non-empty list = filter to those accounts
     account_filter: list[str] | None = None
     show_no_data = False
     if accounts:
         if accounts.lower() == "none":
-            show_no_data = True
-            account_filter = []  # Empty list means no accounts
+            show_no_data = True  # Causes early return below
         else:
             account_filter = [a.strip() for a in accounts.split(",") if a.strip()]
 
@@ -226,25 +278,38 @@ def dashboard(
             "timedelta": timedelta,
         })
 
+    # Initialize ReportService - THE canonical source of truth
+    report_service = ReportService(conn)
+
     # Compute date range based on period type
     today = date.today()
     custom_start = None
     custom_end = None
-    custom_analysis = None
+    current_period = None
 
     if start_date and end_date:
         # Explicit date range provided
         try:
             custom_start = date.fromisoformat(start_date)
             custom_end = date.fromisoformat(end_date)
-            custom_analysis = analyze_custom_range(conn, custom_start, custom_end, account_filter=account_filter)
+            # end_date is inclusive in UI, convert to exclusive for report_period
+            report = report_service.report_period(
+                custom_start, custom_end + timedelta(days=1),
+                account_filter=account_filter
+            )
+            current_period = PeriodViewModel.from_report(report)
         except ValueError:
             pass  # Invalid dates, ignore
     elif period == "this_month":
         # Current calendar month (1st of month through today)
         custom_start = date(today.year, today.month, 1)
         custom_end = today
-        custom_analysis = analyze_custom_range(conn, custom_start, custom_end, account_filter=account_filter)
+        # end_date is inclusive, add 1 day for exclusive
+        report = report_service.report_period(
+            custom_start, custom_end + timedelta(days=1),
+            account_filter=account_filter
+        )
+        current_period = PeriodViewModel.from_report(report)
     elif period == "last_month":
         # Previous complete calendar month
         if today.month == 1:
@@ -256,12 +321,22 @@ def dashboard(
         custom_start = date(last_month_year, last_month, 1)
         _, last_day = monthrange(last_month_year, last_month)
         custom_end = date(last_month_year, last_month, last_day)
-        custom_analysis = analyze_custom_range(conn, custom_start, custom_end, account_filter=account_filter)
+        report = report_service.report_period(
+            custom_start, custom_end + timedelta(days=1),
+            account_filter=account_filter
+        )
+        current_period = PeriodViewModel.from_report(report)
 
     # Get period analysis for historical comparison (use MONTH for trend data)
-    period_type = _period_type_from_str("month")
-    periods = analyze_periods(conn, period_type, num_periods=6, avg_window=3, account_filter=account_filter)
-    current_period = custom_analysis if custom_analysis else (periods[0] if periods else None)
+    # Using ReportService for canonical numbers
+    reports = report_service.report_periods(
+        TimePeriod.MONTH, num_periods=6, account_filter=account_filter
+    )
+    periods_json = reports_to_json(reports)
+
+    # Use current_period from custom range, or first historical period
+    if current_period is None and reports:
+        current_period = PeriodViewModel.from_report(reports[0])
 
     # Get alerts (sketchy charges) - fetch enough history to cover any selected range
     all_alerts = detect_sketchy(conn, days=400, account_filter=account_filter)
@@ -284,8 +359,9 @@ def dashboard(
         # Filter by date range
         if alert.posted_at < alert_start or alert.posted_at > alert_end:
             continue
-        # Create unique key: pattern_type:merchant:amount:date
-        alert_key = f"{alert.pattern_type}:{alert.merchant_norm}:{alert.amount_cents}:{alert.posted_at.isoformat()}"
+        # Create unique key: pattern_type|merchant|amount|date
+        # Using | as delimiter because merchant names may contain colons (e.g., "BEST:BUY")
+        alert_key = f"{alert.pattern_type}|{alert.merchant_norm}|{alert.amount_cents}|{alert.posted_at.isoformat()}"
         action = alert_actions.get(alert_key)
         # Skip any actioned alerts unless show_dismissed is True
         # Actions include: ack, not_suspicious, confirmed, canceled
@@ -333,11 +409,13 @@ def dashboard(
     # Count pending transactions in current period
     pending_count = 0
     if current_period:
+        # Convert inclusive end to exclusive (add 1 day)
+        end_exclusive = (current_period.end_date + timedelta(days=1)).isoformat()
         query = """
             SELECT COUNT(*) FROM transactions
-            WHERE posted_at >= ? AND posted_at <= ? AND pending = 1
+            WHERE posted_at >= ? AND posted_at < ? AND pending = 1
         """
-        params = [current_period.start_date.isoformat(), current_period.end_date.isoformat()]
+        params = [current_period.start_date.isoformat(), end_exclusive]
         if account_filter:
             placeholders = ",".join("?" * len(account_filter))
             query += f" AND account_id IN ({placeholders})"
@@ -347,17 +425,7 @@ def dashboard(
     # Detect subscription price changes
     price_changes = detect_price_changes(conn, days=180, account_filter=account_filter)
 
-    # Serialize periods for Chart.js
-    periods_json = [
-        {
-            "period_label": p.period_label,
-            "income_cents": p.income_cents,
-            "recurring_cents": p.recurring_cents,
-            "discretionary_cents": p.discretionary_cents,
-            "net_cents": p.net_cents,
-        }
-        for p in periods
-    ] if periods else []
+    # periods_json already computed above using ReportService
 
     return templates.TemplateResponse("dashboard_v2.html", {
         "request": request,
@@ -393,6 +461,7 @@ def dashboard(
 def alert_action(
     req: AlertActionRequest,
     conn: sqlite3.Connection = Depends(get_db),
+    _auth: bool = Depends(verify_auth_token),
 ):
     """Record an action on an alert and learn from it."""
     valid_actions = {"ack", "not_suspicious", "confirmed", "canceled"}
@@ -403,7 +472,8 @@ def alert_action(
         )
 
     # Parse alert key to extract merchant and pattern type
-    parts = req.alert_key.split(":", 3)
+    # Format: pattern_type|merchant|amount|date (using | because merchant may contain colons)
+    parts = req.alert_key.split("|", 3)
     pattern_type = parts[0] if len(parts) > 0 else None
     merchant_norm = parts[1] if len(parts) > 1 else None
 
@@ -426,6 +496,7 @@ def alert_action(
 def income_source(
     req: IncomeSourceRequest,
     conn: sqlite3.Connection = Depends(get_db),
+    _auth: bool = Depends(verify_auth_token),
 ):
     """Mark a merchant as income or not-income."""
     dbmod.mark_income_source(conn, req.merchant, req.is_income)
@@ -443,6 +514,7 @@ def get_income_sources(conn: sqlite3.Connection = Depends(get_db)):
 def set_type_override(
     req: TypeOverrideRequest,
     conn: sqlite3.Connection = Depends(get_db),
+    _auth: bool = Depends(verify_auth_token),
 ):
     """Set manual type override for a recurring charge (subscription vs bill vs ignore)."""
     valid_types = {"subscription", "bill", "ignore", "auto"}
@@ -464,6 +536,7 @@ def set_type_override(
 def set_category_override(
     req: CategoryOverrideRequest,
     conn: sqlite3.Connection = Depends(get_db),
+    _auth: bool = Depends(verify_auth_token),
 ):
     """Set manual category override for a merchant."""
     # Validate category_id (allow "auto" to reset)
@@ -485,6 +558,7 @@ def set_category_override(
 def dismiss_duplicate(
     req: DuplicateDismissRequest,
     conn: sqlite3.Connection = Depends(get_db),
+    _auth: bool = Depends(verify_auth_token),
 ):
     """Dismiss or restore duplicate warning for a merchant."""
     if req.dismiss:
@@ -495,6 +569,93 @@ def dismiss_duplicate(
         "status": "ok",
         "merchant": req.merchant,
         "dismissed": req.dismiss,
+    })
+
+
+@app.post("/api/txn-type-override")
+def set_txn_type_override(
+    req: TxnTypeOverrideRequest,
+    conn: sqlite3.Connection = Depends(get_db),
+    _auth: bool = Depends(verify_auth_token),
+):
+    """
+    Set transaction type override.
+
+    Override classification for a specific transaction (by fingerprint) or
+    all transactions matching a merchant pattern.
+
+    target_type: INCOME, EXPENSE, TRANSFER, REFUND, CREDIT_OTHER
+    """
+    valid_types = {"INCOME", "EXPENSE", "TRANSFER", "REFUND", "CREDIT_OTHER"}
+    if req.target_type not in valid_types:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Invalid target_type. Must be one of: {', '.join(valid_types)}"},
+        )
+
+    if not req.fingerprint and not req.merchant_pattern:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Must specify either fingerprint or merchant_pattern"},
+        )
+
+    if req.fingerprint and req.merchant_pattern:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Specify either fingerprint or merchant_pattern, not both"},
+        )
+
+    if req.fingerprint:
+        dbmod.set_txn_type_override_fingerprint(
+            conn, req.fingerprint, req.target_type, req.reason
+        )
+        return JSONResponse(content={
+            "status": "ok",
+            "fingerprint": req.fingerprint,
+            "target_type": req.target_type,
+        })
+    else:
+        dbmod.set_txn_type_override_merchant(
+            conn, req.merchant_pattern, req.target_type, req.reason
+        )
+        return JSONResponse(content={
+            "status": "ok",
+            "merchant_pattern": req.merchant_pattern,
+            "target_type": req.target_type,
+        })
+
+
+@app.delete("/api/txn-type-override")
+def remove_txn_type_override_endpoint(
+    fingerprint: str | None = None,
+    merchant_pattern: str | None = None,
+    conn: sqlite3.Connection = Depends(get_db),
+    _auth: bool = Depends(verify_auth_token),
+):
+    """Remove a transaction type override."""
+    if not fingerprint and not merchant_pattern:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Must specify either fingerprint or merchant_pattern"},
+        )
+
+    dbmod.remove_txn_type_override(conn, fingerprint, merchant_pattern)
+    return JSONResponse(content={"status": "ok"})
+
+
+@app.get("/api/txn-type-overrides")
+def get_txn_type_overrides_endpoint(conn: sqlite3.Connection = Depends(get_db)):
+    """Get all transaction type overrides."""
+    fp_overrides, merchant_overrides = dbmod.get_txn_type_overrides(conn)
+    return JSONResponse(content={
+        "fingerprint_overrides": [
+            {"fingerprint": fp, "target_type": t}
+            for fp, t in fp_overrides.items()
+        ],
+        "merchant_overrides": [
+            {"merchant_pattern": p, "target_type": t}
+            for p, t in merchant_overrides.items()
+        ],
     })
 
 
@@ -737,8 +898,8 @@ def get_transactions_by_type(
     This re-runs the same classification logic used in analysis to ensure
     the drill-down matches exactly what the user sees in the totals.
     """
-    from .analysis import _is_credit_card_account, _is_cc_payment_expense, _is_income_transfer
-    from .classify import _detect_patterns, _is_transfer
+    from .legacy_analysis import _is_credit_card_account, _is_cc_payment_expense, _is_income_transfer
+    from .legacy_classify import _detect_patterns, _is_transfer
 
     valid_types = {"income", "recurring", "discretionary", "transfer"}
     if txn_type not in valid_types:
@@ -760,7 +921,10 @@ def get_transactions_by_type(
     for acc in conn.execute("SELECT account_id, name FROM accounts").fetchall():
         account_types[acc["account_id"]] = (_is_credit_card_account(acc["name"]), acc["name"])
 
-    # Build query
+    # Convert inclusive end to exclusive (add 1 day)
+    end_exclusive = (date.fromisoformat(end_date) + timedelta(days=1)).isoformat()
+
+    # Build query (end-exclusive internally)
     query = """
         SELECT
             t.posted_at,
@@ -770,9 +934,9 @@ def get_transactions_by_type(
             COALESCE(t.description, t.merchant, '') AS raw_description,
             COALESCE(t.pending, 0) AS pending
         FROM transactions t
-        WHERE t.posted_at >= ? AND t.posted_at <= ?
+        WHERE t.posted_at >= ? AND t.posted_at < ?
     """
-    params: list = [start_date, end_date]
+    params: list = [start_date, end_exclusive]
 
     if account_filter:
         placeholders = ",".join("?" * len(account_filter))
@@ -851,13 +1015,13 @@ def subs(
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """Recurring charges page with styled layout and drill-down."""
-    # Parse account filter - "none" means show no data
+    # Parse account filter - "none" means show no data (early return)
+    # None or [] = all accounts, non-empty list = filter to those accounts
     account_filter: list[str] | None = None
     show_no_data = False
     if accounts:
         if accounts.lower() == "none":
-            show_no_data = True
-            account_filter = []
+            show_no_data = True  # Causes early return below
         else:
             account_filter = [a.strip() for a in accounts.split(",") if a.strip()]
 
@@ -910,7 +1074,7 @@ def get_payee_transactions(
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """Get transactions for a specific payee (drill-down) with enhanced details."""
-    from .classify import _match_known_subscription
+    from .legacy_classify import _match_known_subscription
 
     since = (date.today() - timedelta(days=days)).isoformat()
 
@@ -1016,18 +1180,7 @@ def anomalies(days: int = 60, limit: int = 50, conn: sqlite3.Connection = Depend
 # ---------------------------------------------------------------------------
 # CSV Export Routes
 # ---------------------------------------------------------------------------
-def _sanitize_csv_field(value: str) -> str:
-    """
-    Sanitize a string for safe CSV export to prevent formula injection.
-
-    When opened in Excel/Sheets, cells starting with =, +, -, @, tab, or CR
-    can be interpreted as formulas. Prefix with apostrophe to neutralize.
-    """
-    if not value:
-        return value
-    if value[0] in ('=', '+', '-', '@', '\t', '\r'):
-        return "'" + value
-    return value
+from .normalize import sanitize_csv_field as _sanitize_csv_field
 
 
 @app.get("/export/sketchy")
@@ -1159,7 +1312,7 @@ def export_summary(
 # Sync API
 # ---------------------------------------------------------------------------
 @app.post("/api/sync")
-def api_sync():
+def api_sync(_auth: bool = Depends(verify_auth_token)):
     """
     Sync all available data from SimpleFIN.
 
@@ -1302,6 +1455,511 @@ def get_sync_history(
         })
 
     return JSONResponse(content={"syncs": history})
+
+
+# ---------------------------------------------------------------------------
+# Reconciliation API
+# ---------------------------------------------------------------------------
+@app.post("/api/reconcile")
+def api_reconcile(
+    req: ReconcileRequest,
+    conn: sqlite3.Connection = Depends(get_db),
+    _auth: bool = Depends(verify_auth_token),
+):
+    """
+    Reconcile an account against a statement balance.
+
+    Compare the statement ending balance against calculated balance from
+    stored transactions. Saves the reconciliation event for audit.
+    """
+    from .money import parse_to_cents
+
+    try:
+        stmt_date = date.fromisoformat(req.statement_date)
+    except ValueError:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Invalid date format. Use YYYY-MM-DD."},
+        )
+
+    try:
+        stmt_balance_cents = parse_to_cents(req.statement_balance)
+    except ValueError as e:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Invalid balance: {e}"},
+        )
+
+    # Verify account exists
+    acct = conn.execute(
+        "SELECT account_id, name FROM accounts WHERE account_id = ?",
+        (req.account_id,),
+    ).fetchone()
+    if not acct:
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"Account not found: {req.account_id}"},
+        )
+
+    # Compute reconciliation
+    result = reconcile_account(conn, req.account_id, stmt_date, stmt_balance_cents)
+
+    # Save to database
+    event = save_reconciliation(conn, result)
+
+    return JSONResponse(content={
+        "status": "ok",
+        "account_name": result.account_name,
+        "statement_date": result.statement_date.isoformat(),
+        "statement_balance_cents": result.statement_balance_cents,
+        "calculated_balance_cents": result.calculated_balance_cents,
+        "delta_cents": result.delta_cents,
+        "delta_direction": result.delta_direction,
+        "is_matched": result.is_matched,
+        "transaction_count": result.transaction_count,
+        "reconciliation_status": event.status.value,
+    })
+
+
+@app.post("/api/reconcile/resolve")
+def api_resolve_reconciliation(
+    req: ResolveReconciliationRequest,
+    conn: sqlite3.Connection = Depends(get_db),
+    _auth: bool = Depends(verify_auth_token),
+):
+    """Mark a reconciliation discrepancy as resolved."""
+    try:
+        stmt_date = date.fromisoformat(req.statement_date)
+    except ValueError:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Invalid date format. Use YYYY-MM-DD."},
+        )
+
+    resolve_reconciliation(conn, req.account_id, stmt_date, req.notes)
+
+    return JSONResponse(content={
+        "status": "ok",
+        "account_id": req.account_id,
+        "statement_date": req.statement_date,
+    })
+
+
+@app.get("/api/reconcile/history")
+def api_reconciliation_history(
+    account_id: str | None = Query(None, description="Filter by account"),
+    limit: int = Query(50, description="Number of records to return"),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Get reconciliation history."""
+    events = get_reconciliation_history(conn, account_id, limit)
+
+    return JSONResponse(content={
+        "reconciliations": [
+            {
+                "id": e.id,
+                "account_id": e.account_id,
+                "statement_date": e.statement_date.isoformat(),
+                "statement_balance_cents": e.statement_balance_cents,
+                "calculated_balance_cents": e.calculated_balance_cents,
+                "delta_cents": e.delta_cents,
+                "status": e.status.value,
+                "notes": e.notes,
+                "created_at": e.created_at.isoformat(),
+                "resolved_at": e.resolved_at.isoformat() if e.resolved_at else None,
+            }
+            for e in events
+        ]
+    })
+
+
+@app.get("/api/reconcile/pending")
+def api_pending_reconciliations(conn: sqlite3.Connection = Depends(get_db)):
+    """Get all unresolved reconciliation discrepancies."""
+    events = get_pending_reconciliations(conn)
+
+    return JSONResponse(content={
+        "pending_count": len(events),
+        "total_delta_cents": sum(abs(e.delta_cents) for e in events),
+        "discrepancies": [
+            {
+                "id": e.id,
+                "account_id": e.account_id,
+                "statement_date": e.statement_date.isoformat(),
+                "delta_cents": e.delta_cents,
+                "notes": e.notes,
+            }
+            for e in events
+        ]
+    })
+
+
+@app.get("/api/reconcile/insights")
+def api_reconciliation_insights(conn: sqlite3.Connection = Depends(get_db)):
+    """
+    Analyze reconciliation history for patterns and improvement suggestions.
+
+    Returns detected patterns (consistent deltas, growing deltas) and
+    actionable suggestions to improve data accuracy.
+    """
+    insights = analyze_reconciliation_patterns(conn)
+
+    return JSONResponse(content={
+        "accounts_with_issues": insights.accounts_with_issues,
+        "total_unresolved_delta_cents": insights.total_unresolved_delta_cents,
+        "suggestions": insights.suggestions,
+        "patterns": [
+            {
+                "account_id": p.account_id,
+                "account_name": p.account_name,
+                "pattern_type": p.pattern_type,
+                "avg_delta_cents": p.avg_delta_cents,
+                "delta_count": p.delta_count,
+                "confidence": p.confidence,
+                "suggestion": p.suggestion,
+            }
+            for p in insights.patterns
+        ],
+    })
+
+
+@app.get("/api/reconcile/candidates")
+def api_reconciliation_candidates(
+    account_id: str = Query(..., description="Account ID"),
+    statement_date: str = Query(..., description="Statement date YYYY-MM-DD"),
+    delta_cents: int = Query(..., description="Delta to explain"),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """
+    Find transactions that might explain a reconciliation delta.
+
+    Useful for investigating discrepancies by finding transactions
+    with amounts close to the delta.
+    """
+    try:
+        stmt_date = date.fromisoformat(statement_date)
+    except ValueError:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Invalid date format. Use YYYY-MM-DD."},
+        )
+
+    candidates = get_missing_transaction_candidates(
+        conn, account_id, stmt_date, delta_cents
+    )
+
+    return JSONResponse(content={
+        "account_id": account_id,
+        "statement_date": statement_date,
+        "delta_cents": delta_cents,
+        "candidates": candidates,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Audit / Versioning API
+# ---------------------------------------------------------------------------
+@app.get("/api/audit")
+def api_audit_log(
+    entity_type: str | None = Query(None, description="Filter by entity type"),
+    entity_id: str | None = Query(None, description="Filter by entity ID"),
+    event_type: str | None = Query(None, description="Filter by event type"),
+    limit: int = Query(100, description="Max events to return"),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Get audit log with optional filters."""
+    evt_type = None
+    if event_type:
+        try:
+            evt_type = AuditEventType(event_type)
+        except ValueError:
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"Invalid event_type. Valid types: {[e.value for e in AuditEventType]}"},
+            )
+
+    events = get_audit_log(
+        conn,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        event_type=evt_type,
+        limit=limit,
+    )
+
+    return JSONResponse(content={
+        "events": [
+            {
+                "id": e.id,
+                "event_type": e.event_type.value,
+                "timestamp": e.timestamp.isoformat(),
+                "entity_type": e.entity_type,
+                "entity_id": e.entity_id,
+                "old_value": e.old_value,
+                "new_value": e.new_value,
+                "metadata": e.metadata,
+                "classifier_version": e.classifier_version,
+                "report_version": e.report_version,
+            }
+            for e in events
+        ],
+        "count": len(events),
+    })
+
+
+@app.get("/api/audit/entity/{entity_type}/{entity_id:path}")
+def api_entity_history(
+    entity_type: str,
+    entity_id: str,
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Get complete audit history for a specific entity."""
+    events = get_entity_history(conn, entity_type, entity_id)
+
+    return JSONResponse(content={
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+        "events": [
+            {
+                "id": e.id,
+                "event_type": e.event_type.value,
+                "timestamp": e.timestamp.isoformat(),
+                "old_value": e.old_value,
+                "new_value": e.new_value,
+                "metadata": e.metadata,
+            }
+            for e in events
+        ],
+    })
+
+
+@app.get("/api/version")
+def api_version():
+    """Get classifier and report version info."""
+    return JSONResponse(content=get_version_info())
+
+
+@app.get("/api/cache/stats")
+def api_cache_stats():
+    """Get cache statistics for performance monitoring."""
+    return JSONResponse(content=get_cache_stats())
+
+
+@app.post("/api/cache/clear")
+def api_cache_clear(_auth: bool = Depends(verify_auth_token)):
+    """Clear all caches (use after data changes)."""
+    invalidate_pattern_cache()
+    invalidate_report_cache()
+    return JSONResponse(content={"status": "ok", "message": "All caches cleared"})
+
+
+@app.get("/api/report/snapshot")
+def api_report_snapshot(
+    start_date: str = Query(..., description="Start date YYYY-MM-DD"),
+    end_date: str = Query(..., description="End date YYYY-MM-DD"),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """
+    Export a report snapshot for reproducibility.
+
+    Includes report data, versions, and active overrides.
+    """
+    from .reporting import report_period
+
+    try:
+        start = date.fromisoformat(start_date)
+        end = date.fromisoformat(end_date)
+    except ValueError:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Invalid date format. Use YYYY-MM-DD."},
+        )
+
+    report = report_period(conn, start, end)
+    snapshot = export_report_snapshot(conn, report)
+
+    return JSONResponse(content=snapshot)
+
+
+# ---------------------------------------------------------------------------
+# Budget Planner API
+# ---------------------------------------------------------------------------
+@app.get("/api/planner/budget")
+def api_budget_plan(
+    months: int = Query(6, description="Months of history to analyze"),
+    accounts: str | None = Query(None, description="Comma-separated account IDs"),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """
+    Get budget plan based on spending bucket analysis.
+
+    Analyzes historical spending by bucket (fixed obligations, variable
+    essentials, discretionary, one-offs) and provides planning insights.
+    """
+    account_filter = None
+    if accounts and accounts.lower() != "none":
+        account_filter = [a.strip() for a in accounts.split(",") if a.strip()]
+
+    plan = analyze_spending_buckets(conn, months, account_filter)
+
+    return JSONResponse(content={
+        "period_months": plan.period_months,
+        "monthly_income_cents": plan.total_monthly_income_cents,
+        "monthly_spend_cents": plan.total_monthly_spend_cents,
+        "monthly_net_cents": plan.net_monthly_cents,
+        "savings_rate_percent": round(plan.savings_rate, 1),
+        "health_score": round(plan.health_score, 2),
+        "suggestions": plan.suggestions,
+        "buckets": [
+            {
+                "bucket": b.bucket.name,
+                "label": b.label,
+                "description": b.description,
+                "monthly_avg_cents": b.monthly_avg_cents,
+                "monthly_min_cents": b.monthly_min_cents,
+                "monthly_max_cents": b.monthly_max_cents,
+                "trend": b.trend,
+                "trend_percent": round(b.trend_percent, 1),
+                "predictability": round(b.predictability, 2),
+                "merchant_count": b.merchant_count,
+                "transaction_count": b.transaction_count,
+            }
+            for b in plan.buckets
+        ],
+    })
+
+
+@app.get("/api/planner/bucket/{bucket_name}")
+def api_bucket_detail(
+    bucket_name: str,
+    months: int = Query(6, description="Months of history"),
+    accounts: str | None = Query(None, description="Comma-separated account IDs"),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Get detailed breakdown for a specific spending bucket."""
+    try:
+        bucket = SpendingBucket[bucket_name.upper()]
+    except KeyError:
+        valid = [b.name for b in SpendingBucket]
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Invalid bucket. Valid: {valid}"},
+        )
+
+    account_filter = None
+    if accounts and accounts.lower() != "none":
+        account_filter = [a.strip() for a in accounts.split(",") if a.strip()]
+
+    detail = get_bucket_detail(conn, bucket, months, account_filter)
+
+    return JSONResponse(content={
+        "bucket": detail.bucket.name,
+        "merchants": detail.merchants,
+        "monthly_totals": detail.monthly_totals,
+    })
+
+
+@app.get("/api/planner/projection")
+def api_budget_projection(
+    history_months: int = Query(6, description="Months of history to base projection on"),
+    forward_months: int = Query(3, description="Months to project forward"),
+    accounts: str | None = Query(None, description="Comma-separated account IDs"),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """
+    Project future monthly budget based on historical patterns.
+
+    Returns projected income, expenses by bucket, and net for upcoming months.
+    """
+    account_filter = None
+    if accounts and accounts.lower() != "none":
+        account_filter = [a.strip() for a in accounts.split(",") if a.strip()]
+
+    projection = project_monthly_budget(conn, history_months, forward_months, account_filter)
+
+    return JSONResponse(content=projection)
+
+
+# ---------------------------------------------------------------------------
+# Cash Flow Projections API
+# ---------------------------------------------------------------------------
+@app.get("/api/cashflow/projection")
+def api_cashflow_projection(
+    days: int = Query(30, description="Days to project forward"),
+    accounts: str | None = Query(None, description="Comma-separated account IDs"),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """
+    Project cash flow for the next N days.
+
+    Shows expected income, upcoming charges (subscriptions, bills),
+    and projected net position.
+    """
+    account_filter = None
+    if accounts and accounts.lower() != "none":
+        account_filter = [a.strip() for a in accounts.split(",") if a.strip()]
+
+    projection = project_cash_flow(conn, days, account_filter)
+
+    return JSONResponse(content={
+        "start_date": projection.start_date.isoformat(),
+        "end_date": projection.end_date.isoformat(),
+        "expected_income_cents": projection.expected_income_cents,
+        "expected_fixed_cents": projection.expected_fixed_cents,
+        "expected_variable_cents": projection.expected_variable_cents,
+        "expected_discretionary_cents": projection.expected_discretionary_cents,
+        "expected_net_cents": projection.expected_net_cents,
+        "confidence": round(projection.confidence, 2),
+        "upcoming_charges": [
+            {
+                "merchant": c.merchant,
+                "display_name": c.display_name,
+                "expected_date": c.expected_date.isoformat(),
+                "expected_amount_cents": c.expected_amount_cents,
+                "confidence": round(c.confidence, 2),
+                "cadence": c.cadence,
+                "bucket": c.bucket.name,
+                "is_subscription": c.is_subscription,
+                "last_charge_date": c.last_charge_date.isoformat() if c.last_charge_date else None,
+            }
+            for c in projection.upcoming_charges
+        ],
+    })
+
+
+@app.get("/api/cashflow/alerts")
+def api_cashflow_alerts(
+    days: int = Query(30, description="Days to look ahead"),
+    accounts: str | None = Query(None, description="Comma-separated account IDs"),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """
+    Get cash flow alerts for potential issues.
+
+    Alerts include:
+    - Projected shortfalls (expenses > income)
+    - Large upcoming charges
+    - Multiple charges on same day
+    """
+    account_filter = None
+    if accounts and accounts.lower() != "none":
+        account_filter = [a.strip() for a in accounts.split(",") if a.strip()]
+
+    alerts = detect_cash_flow_alerts(conn, days, account_filter)
+
+    return JSONResponse(content={
+        "alert_count": len(alerts),
+        "alerts": [
+            {
+                "alert_type": a.alert_type,
+                "severity": a.severity,
+                "date": a.date.isoformat(),
+                "message": a.message,
+                "amount_cents": a.amount_cents,
+                "merchant": a.merchant,
+            }
+            for a in alerts
+        ],
+    })
 
 
 @app.get("/sync-log", response_class=HTMLResponse)

@@ -4,6 +4,7 @@ import os
 import statistics
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from .status_commands import status_command, drill_command, trend_command
 
@@ -12,12 +13,12 @@ import typer
 from rich.console import Console
 
 from . import db as dbmod
-from .analysis import TimePeriod, analyze_periods
-from .classify import detect_duplicates, detect_sketchy, get_subscriptions
+from .legacy_analysis import TimePeriod, analyze_periods
+from .legacy_classify import detect_duplicates, detect_sketchy, get_subscriptions
 from .config import load_config
 from .log import setup_logging
 from .models import Account
-from .normalize import normalize_simplefin_txn
+from .normalize import normalize_simplefin_txn, sanitize_csv_field
 from .simplefin_client import SimpleFinClient
 
 app = typer.Typer(no_args_is_help=True)
@@ -593,12 +594,12 @@ def subs_pick(
 
         pick = rows[0]
         entry = {
-            "payee_norm": pick["payee_norm"],
+            "payee_norm": sanitize_csv_field(pick["payee_norm"]),
             "occurrences": pick["occurrences"],
             "avg_abs_amount_cents": pick["avg_abs_amount_cents"],
             "first_seen": pick["first_seen"],
             "last_seen": pick["last_seen"],
-            "note": note,
+            "note": sanitize_csv_field(note),
         }
 
         out_dir = "/app/exports"
@@ -917,11 +918,11 @@ def export_csv(
                         f"{abs(cents)/100:.2f}",
                         cents,
                         r["currency"],
-                        r["payee_norm"],
+                        sanitize_csv_field(r["payee_norm"]),
                         family,
                         subtype,
-                        r["merchant"],
-                        r["description"],
+                        sanitize_csv_field(r["merchant"]),
+                        sanitize_csv_field(r["description"]),
                     ]
                 )
 
@@ -1119,7 +1120,7 @@ def export_csv(
             for c in candidates:
                 w.writerow(
                     [
-                        c["label"],
+                        sanitize_csv_field(c["label"]),
                         c["family"],
                         c["subtype"],
                         c["occurrences"],
@@ -1168,7 +1169,7 @@ def export_csv(
                 wl = watch.get(c["label"], {})
                 w.writerow(
                     [
-                        c["label"],
+                        sanitize_csv_field(c["label"]),
                         c["family"],
                         c["subtype"],
                         c["monthly_est_cents"],
@@ -1180,7 +1181,7 @@ def export_csv(
                         c["last_seen"],
                         c["next_expected"],
                         wl.get("status", ""),
-                        wl.get("note", ""),
+                        sanitize_csv_field(wl.get("note", "")),
                         wl.get("handled_at", ""),
                     ]
                 )
@@ -1194,11 +1195,11 @@ def export_csv(
             for alert in alerts:
                 w.writerow([
                     alert.posted_at.isoformat(),
-                    alert.merchant_norm,
+                    sanitize_csv_field(alert.merchant_norm),
                     f"{alert.amount_cents / 100:.2f}",
                     alert.pattern_type,
                     alert.severity,
-                    alert.detail,
+                    sanitize_csv_field(alert.detail),
                 ])
 
         # ---- duplicates.csv (duplicate subscription groups)
@@ -1210,10 +1211,10 @@ def export_csv(
             for dup in duplicates:
                 w.writerow([
                     dup.group_type,
-                    "; ".join(dup.merchants),
+                    sanitize_csv_field("; ".join(dup.merchants)),
                     f"{dup.total_monthly_cents / 100:.2f}",
                     dup.severity,
-                    dup.detail,
+                    sanitize_csv_field(dup.detail),
                 ])
 
         # ---- monthly_summary.csv (income vs spend with rolling averages)
@@ -1890,11 +1891,11 @@ def export_sketchy(
             for alert in alerts:
                 w.writerow([
                     alert.posted_at.isoformat(),
-                    alert.merchant_norm,
+                    sanitize_csv_field(alert.merchant_norm),
                     f"{alert.amount_cents / 100:.2f}",
                     alert.pattern_type,
                     alert.severity,
-                    alert.detail,
+                    sanitize_csv_field(alert.detail),
                 ])
 
         console.print(f"[green]export complete[/green] wrote {len(alerts)} alerts -> {out_path}")
@@ -1933,10 +1934,10 @@ def export_duplicates_cmd(
             for dup in duplicates:
                 w.writerow([
                     dup.group_type,
-                    "; ".join(dup.merchants),
+                    sanitize_csv_field("; ".join(dup.merchants)),
                     f"{dup.total_monthly_cents / 100:.2f}",
                     dup.severity,
-                    dup.detail,
+                    sanitize_csv_field(dup.detail),
                 ])
 
         console.print(f"[green]export complete[/green] wrote {len(duplicates)} groups -> {out_path}")
@@ -2186,8 +2187,9 @@ def import_csv(
             # Handle parentheses for negative (accounting format)
             if amount_str.startswith("(") and amount_str.endswith(")"):
                 amount_str = "-" + amount_str[1:-1]
-            amount = float(amount_str)
-            amount_cents = int(round(amount * 100))
+            # Use Decimal for precise money conversion with ROUND_HALF_UP
+            amount = Decimal(amount_str)
+            amount_cents = int((amount * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
             # Get description/merchant
             description = row.get(description_col, "").strip() if description_col in available_cols else ""
@@ -2421,9 +2423,15 @@ def web(
 
     By default, binds to localhost (127.0.0.1) only.
     Use --host 0.0.0.0 to allow LAN access (not recommended without auth).
+
+    API Authentication:
+    - Mutation endpoints (POST/DELETE) require bearer token auth
+    - Set FIN_API_TOKEN env var for a fixed token, or use the auto-generated one
+    - Set FIN_AUTH_DISABLED=1 to disable auth (not recommended for LAN access)
     """
     import uvicorn
     from pathlib import Path
+    from .security import get_auth_info
 
     cfg = load_config()
     db_path = Path(cfg.db_path)
@@ -2443,6 +2451,14 @@ def web(
     if host == "0.0.0.0":
         console.print("[yellow]Warning: Binding to all interfaces (0.0.0.0). Your financial data will be accessible on the network.[/yellow]")
         console.print()
+
+    # Show auth info
+    auth_info = get_auth_info()
+    if auth_info["auth_enabled"]:
+        console.print(f"[dim]API Token:[/dim] {auth_info['full_token']} [dim]({auth_info['source']})[/dim]")
+        console.print("[dim]Use: Authorization: Bearer <token> for POST/DELETE endpoints[/dim]")
+    else:
+        console.print("[yellow]API Auth: Disabled[/yellow] (set FIN_API_TOKEN to enable)")
 
     console.print(f"[dim]Dashboard:[/dim] http://{host if host != '0.0.0.0' else '127.0.0.1'}:{port}/dashboard")
     console.print()

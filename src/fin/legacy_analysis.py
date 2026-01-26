@@ -1,5 +1,14 @@
-# analysis.py
+# legacy_analysis.py
 """
+LEGACY: This module is DEPRECATED for user-facing reporting.
+
+DO NOT USE for new code. Use report_service.py instead.
+
+This module remains for internal utilities and backwards compatibility only.
+All user-facing totals MUST come from ReportService.
+
+---
+Original description:
 Flexible time period analysis engine for income vs spend.
 
 Supports:
@@ -8,13 +17,30 @@ Supports:
 - Yearly view: Last N years
 - Configurable rolling average window
 """
+import warnings
 import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from enum import Enum
 from typing import Callable
 
-from .classify import _detect_patterns, _is_transfer
+from .legacy_classify import (
+    _detect_patterns,
+    _is_transfer,
+    _is_credit_card_account,
+    _is_income_transfer,
+    _is_cc_payment_expense,
+    classify_transaction,
+    detect_transfer_pairs,
+)
+
+# Emit deprecation warning when module is imported
+warnings.warn(
+    "legacy_analysis is deprecated for user-facing reporting. "
+    "Use report_service.py instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 
 class TimePeriod(Enum):
@@ -32,11 +58,12 @@ class PeriodAnalysis:
     end_date: date
 
     income_cents: int
+    credit_cents: int          # Refunds, rewards, adjustments (not income)
     recurring_cents: int
     discretionary_cents: int
     transfer_cents: int
     incoming_transfer_cents: int  # Transfers IN (e.g., from savings)
-    net_cents: int
+    net_cents: int             # income + credits - recurring - discretionary
 
     # Comparison to previous period
     prev_income_cents: int | None
@@ -56,11 +83,12 @@ class PeriodAnalysis:
 
     # Breakdown items for drill-down
     income_items: list[tuple[str, int]] | None = None  # (merchant, amount_cents)
+    credit_items: list[tuple[str, int]] | None = None  # (merchant, amount_cents) - refunds etc.
     transfer_items: list[tuple[str, int]] | None = None
 
     # Checksum verification
     raw_sum_cents: int = 0           # Sum of all raw transaction amounts
-    classification_sum_cents: int = 0  # Computed: income + transfers_in - recurring - discretionary - transfers_out
+    classification_sum_cents: int = 0  # Computed: income + credits + transfers_in - recurring - discretionary - transfers_out
     checksum_valid: bool = True      # Whether raw_sum == classification_sum
 
     # === Financial Health Metrics ===
@@ -281,48 +309,6 @@ def _compute_trend(current: int, previous: int | None, threshold_pct: float = 5.
     return "stable"
 
 
-def _is_income_transfer(merchant_norm: str) -> bool:
-    """
-    Detect if a positive amount is a transfer rather than real income.
-
-    These should not count as income:
-    - Internal transfers between accounts
-    - Zelle/Venmo/PayPal (could be person-to-person, need user to confirm)
-
-    NOT transfers (real income):
-    - Unemployment payments
-    - Direct deposits
-    - Paychecks
-    """
-    # First check for known income patterns (these are NOT transfers)
-    income_patterns = [
-        "unemployment",
-        "direct deposit",
-        "payroll",
-        "paycheck",
-        "salary",
-        "irs",
-        "tax refund",
-    ]
-    if any(p in merchant_norm for p in income_patterns):
-        return False
-
-    # These are likely transfers, not real income
-    transfer_keywords = [
-        "transfer from",
-        "transfer to",
-        "online transfer",
-        "recurring transfer",
-        "ach transfer",
-        "wire transfer",
-        "zelle",
-        "venmo",
-        "cash app",
-        "paypal",
-    ]
-    return any(kw in merchant_norm for kw in transfer_keywords)
-
-
 def _analyze_single_period(
     conn: sqlite3.Connection,
     period_type: TimePeriod,
@@ -333,24 +319,56 @@ def _analyze_single_period(
     excluded_sources: set[str] | None = None,
     account_filter: list[str] | None = None,
 ) -> dict:
-    """Analyze a single period and return raw values."""
+    """
+    Analyze a single period and return raw values.
+
+    Uses the shared classify_transaction() function for consistent classification.
+
+    Args:
+        account_filter: None = all accounts, [] = no accounts (return empty), list = filter
+    """
+    # Empty list means "no accounts selected" - return empty results
+    if account_filter is not None and len(account_filter) == 0:
+        return {
+            "income_cents": 0,
+            "credit_cents": 0,
+            "recurring_cents": 0,
+            "discretionary_cents": 0,
+            "transfer_cents": 0,
+            "incoming_transfer_cents": 0,
+            "net_cents": 0,
+            "transaction_count": 0,
+            "income_items": [],
+            "credit_items": [],
+            "transfer_items": [],
+            "raw_sum_cents": 0,
+            "classification_sum_cents": 0,
+            "checksum_valid": True,
+        }
+
     income_sources = income_sources or set()
     excluded_sources = excluded_sources or set()
+
+    # Detect transfer pairs (matching outflow/inflow across accounts)
+    paired_fingerprints = detect_transfer_pairs(conn, start, end)
 
     # Get account info to determine account types
     account_types: dict[str, bool] = {}  # account_id -> is_credit_card
     for acc in conn.execute("SELECT account_id, name FROM accounts").fetchall():
         account_types[acc["account_id"]] = _is_credit_card_account(acc["name"])
 
-    # Build query with optional account filter
+    # Build query with optional account filter (end-exclusive for period bounds)
+    # Exclude pending transactions by default
     query = """
         SELECT
+            t.fingerprint,
             t.account_id,
             t.posted_at,
             t.amount_cents,
             TRIM(LOWER(COALESCE(NULLIF(t.merchant,''), NULLIF(t.description,''), ''))) AS merchant_norm
         FROM transactions t
         WHERE t.posted_at >= ? AND t.posted_at < ?
+          AND COALESCE(t.pending, 0) = 0
     """
     params: list = [start.isoformat(), end.isoformat()]
 
@@ -363,6 +381,7 @@ def _analyze_single_period(
     rows = conn.execute(query, params).fetchall()
 
     income_cents = 0
+    credit_cents = 0  # Refunds, rewards, adjustments
     recurring_cents = 0
     discretionary_cents = 0
     transfer_cents = 0
@@ -372,72 +391,64 @@ def _analyze_single_period(
     outgoing_transfer_cents = 0  # Negative amounts classified as transfers
 
     # Track components for drill-down
-    income_items = []
-    transfer_items = []
+    income_items: list[tuple[str, int]] = []
+    credit_items: list[tuple[str, int]] = []
+    transfer_items: list[tuple[str, int]] = []
 
     for r in rows:
+        fingerprint = r["fingerprint"]
         amount = r["amount_cents"]
         merchant_norm = r["merchant_norm"]
         account_id = r["account_id"]
         is_cc = account_types.get(account_id, False)
         pattern = patterns.get(merchant_norm)
 
-        # Check user rules for this merchant
-        is_user_marked_income = any(src in merchant_norm for src in income_sources)
-        is_user_excluded = any(src in merchant_norm for src in excluded_sources)
-
-        if amount > 0:
-            # POSITIVE AMOUNT
-            if is_cc:
-                # Credit card positive = payment received (always a transfer)
-                transfer_cents += amount
-                incoming_transfer_cents += amount
-                transfer_items.append((merchant_norm, amount))
-            elif is_user_excluded:
-                # User explicitly marked as NOT income
-                transfer_cents += amount
-                incoming_transfer_cents += amount
-                transfer_items.append((merchant_norm, amount))
-            elif is_user_marked_income:
-                # User explicitly marked as income
-                income_cents += amount
-                income_items.append((merchant_norm, amount))
-            elif _is_income_transfer(merchant_norm):
-                # Looks like a transfer
-                transfer_cents += amount
-                incoming_transfer_cents += amount
-                transfer_items.append((merchant_norm, amount))
-            else:
-                # Default: treat as income
-                income_cents += amount
-                income_items.append((merchant_norm, amount))
+        # Check if this transaction is part of a transfer pair
+        # If so, override classification to "transfer" to prevent distortion
+        if fingerprint in paired_fingerprints:
+            classification = "transfer"
         else:
-            # NEGATIVE AMOUNT
-            abs_amount = abs(amount)
+            # Use shared classification function
+            classification = classify_transaction(
+                amount_cents=amount,
+                merchant_norm=merchant_norm,
+                is_credit_card=is_cc,
+                pattern=pattern,
+                income_sources=income_sources,
+                excluded_sources=excluded_sources,
+            )
 
-            if not is_cc and _is_cc_payment_expense(merchant_norm):
-                # Checking account paying a credit card = transfer
-                transfer_cents += abs_amount
-                outgoing_transfer_cents += abs_amount
-            elif pattern and pattern.is_transfer:
-                transfer_cents += abs_amount
-                outgoing_transfer_cents += abs_amount
-            elif _is_transfer(merchant_norm):
-                transfer_cents += abs_amount
-                outgoing_transfer_cents += abs_amount
-            elif pattern and pattern.is_recurring:
-                recurring_cents += abs_amount
+        if classification == "income":
+            income_cents += amount
+            income_items.append((merchant_norm, amount))
+
+        elif classification == "credit":
+            credit_cents += amount
+            credit_items.append((merchant_norm, amount))
+
+        elif classification == "transfer":
+            if amount > 0:
+                incoming_transfer_cents += amount
+                transfer_items.append((merchant_norm, amount))
             else:
-                discretionary_cents += abs_amount
+                outgoing_transfer_cents += abs(amount)
+            transfer_cents += abs(amount)
 
-    net_cents = income_cents - recurring_cents - discretionary_cents
+        elif classification == "recurring":
+            recurring_cents += abs(amount)
+
+        else:  # one-off / discretionary
+            discretionary_cents += abs(amount)
+
+    # Net includes credits as they reduce effective spend
+    net_cents = income_cents + credit_cents - recurring_cents - discretionary_cents
 
     # === DATA INTEGRITY ASSERTION ===
     # Every transaction must be classified into exactly one bucket.
-    # Formula: positive_sum - negative_sum = income + incoming_transfers - recurring - discretionary - outgoing_transfers
+    # Formula: positive_sum - negative_sum = income + credits + incoming_transfers - recurring - discretionary - outgoing_transfers
     total_from_transactions = sum(r["amount_cents"] for r in rows)
     total_from_classification = (
-        income_cents + incoming_transfer_cents
+        income_cents + credit_cents + incoming_transfer_cents
         - recurring_cents - discretionary_cents - outgoing_transfer_cents
     )
 
@@ -447,12 +458,13 @@ def _analyze_single_period(
         log.error(
             f"DATA INTEGRITY ERROR in _analyze_single_period: "
             f"Txn sum ({total_from_transactions}) != Classification sum ({total_from_classification}). "
-            f"Income={income_cents}, InTransfer={incoming_transfer_cents}, OutTransfer={outgoing_transfer_cents}, "
-            f"Recurring={recurring_cents}, Discretionary={discretionary_cents}"
+            f"Income={income_cents}, Credit={credit_cents}, InTransfer={incoming_transfer_cents}, "
+            f"OutTransfer={outgoing_transfer_cents}, Recurring={recurring_cents}, Discretionary={discretionary_cents}"
         )
 
     return {
         "income_cents": income_cents,
+        "credit_cents": credit_cents,
         "recurring_cents": recurring_cents,
         "discretionary_cents": discretionary_cents,
         "transfer_cents": transfer_cents,
@@ -460,6 +472,7 @@ def _analyze_single_period(
         "net_cents": net_cents,
         "transaction_count": len(rows),
         "income_items": income_items,
+        "credit_items": credit_items,
         "transfer_items": transfer_items,
         "raw_sum_cents": total_from_transactions,
         "classification_sum_cents": total_from_classification,
@@ -494,11 +507,12 @@ def analyze_periods(
     if end_date is None:
         end_date = date.today()
 
-    # Detect patterns once for consistency
-    patterns = _detect_patterns(conn, lookback_days=800)
-
     # Get user-marked income rules
     income_sources, excluded_sources = dbmod.get_income_rules(conn)
+
+    # Cache patterns by anchor_date to avoid recomputation
+    # (optimization for when multiple periods share the same anchor)
+    pattern_cache: dict[date, dict] = {}
 
     # Collect period data
     period_data: list[tuple[date, date, str, dict]] = []
@@ -509,6 +523,15 @@ def analyze_periods(
 
     for _ in range(periods_needed):
         label = _get_period_label(period_type, current_start)
+
+        # CRITICAL: Detect patterns anchored to THIS period's end date
+        # This ensures each period only sees patterns from data up to that point
+        if current_end not in pattern_cache:
+            pattern_cache[current_end] = _detect_patterns(
+                conn, lookback_days=800, anchor_date=current_end
+            )
+        patterns = pattern_cache[current_end]
+
         data = _analyze_single_period(
             conn, period_type, current_start, current_end, patterns,
             income_sources, excluded_sources, account_filter
@@ -554,6 +577,7 @@ def analyze_periods(
             start_date=start,
             end_date=end,
             income_cents=data["income_cents"],
+            credit_cents=data["credit_cents"],
             recurring_cents=data["recurring_cents"],
             discretionary_cents=data["discretionary_cents"],
             transfer_cents=data["transfer_cents"],
@@ -569,6 +593,9 @@ def analyze_periods(
             avg_recurring_cents=avg_recurring,
             avg_discretionary_cents=avg_discretionary,
             transaction_count=data["transaction_count"],
+            income_items=data.get("income_items"),
+            credit_items=data.get("credit_items"),
+            transfer_items=data.get("transfer_items"),
             raw_sum_cents=data["raw_sum_cents"],
             classification_sum_cents=data["classification_sum_cents"],
             checksum_valid=data["checksum_valid"],
@@ -602,30 +629,6 @@ def format_trend_symbol(trend: str) -> str:
     return "\u2192"  # →
 
 
-def _is_credit_card_account(account_name: str) -> bool:
-    """Detect if an account is a credit card based on name."""
-    name_lower = account_name.lower()
-    cc_keywords = [
-        "visa", "mastercard", "amex", "american express", "discover",
-        "credit card", "rewards", "freedom", "sapphire", "platinum",
-        "signature", "rapid rewards", "prime rewards"
-    ]
-    # Exclude checking/savings even if they have "rewards"
-    if any(kw in name_lower for kw in ["checking", "savings", "deposit"]):
-        return False
-    return any(kw in name_lower for kw in cc_keywords)
-
-
-def _is_cc_payment_expense(merchant_norm: str) -> bool:
-    """Detect if a negative checking transaction is a credit card payment."""
-    cc_payment_keywords = [
-        "credit card", "chase credit", "citi card", "amex", "american express",
-        "discover card", "capital one", "apple card", "apple credit",
-        "barclays", "wells fargo card", "bank of america card", "usaa icpayment"
-    ]
-    return any(kw in merchant_norm for kw in cc_payment_keywords)
-
-
 def analyze_custom_range(
     conn: sqlite3.Connection,
     start: date,
@@ -635,33 +638,72 @@ def analyze_custom_range(
     """
     Analyze income vs spend for a custom date range.
 
-    Classification logic:
-    - Credit card accounts: ALL positive amounts are transfers (payments received)
-    - Checking accounts: Positive amounts are income UNLESS they look like transfers
-    - Checking accounts: Negative amounts to credit cards are transfers, not expenses
-    - Credit card accounts: Negative amounts are real expenses
+    Uses the shared classify_transaction() function for consistent classification.
 
     Args:
-        account_filter: Optional list of account_ids to filter by
+        start: Start date (inclusive)
+        end: End date (inclusive, converted to exclusive internally)
+        account_filter: None = all accounts, [] = no accounts (return empty), list = filter
 
     Returns a PeriodAnalysis with income_items for drill-down.
     """
+    # Empty list means "no accounts selected" - return empty results
+    if account_filter is not None and len(account_filter) == 0:
+        return PeriodAnalysis(
+            period_type=None,
+            period_label=f"{start.isoformat()} to {end.isoformat()}",
+            start_date=start,
+            end_date=end,
+            income_cents=0,
+            credit_cents=0,
+            recurring_cents=0,
+            discretionary_cents=0,
+            transfer_cents=0,
+            incoming_transfer_cents=0,
+            net_cents=0,
+            prev_income_cents=None,
+            prev_recurring_cents=None,
+            prev_discretionary_cents=None,
+            income_trend="stable",
+            recurring_trend="stable",
+            discretionary_trend="stable",
+            avg_income_cents=0,
+            avg_recurring_cents=0,
+            avg_discretionary_cents=0,
+            transaction_count=0,
+            income_items=[],
+            credit_items=[],
+            transfer_items=[],
+            raw_sum_cents=0,
+            classification_sum_cents=0,
+            checksum_valid=True,
+        )
+
     from . import db as dbmod
 
     # Get user-marked income rules
     income_sources, excluded_sources = dbmod.get_income_rules(conn)
 
-    # Detect patterns for recurring classification
-    patterns = _detect_patterns(conn, lookback_days=800)
+    # Convert inclusive end to exclusive (add 1 day)
+    end_exclusive = end + timedelta(days=1)
+
+    # Detect patterns anchored to the END of the custom range
+    # This ensures historical reports use patterns that existed at that time
+    patterns = _detect_patterns(conn, lookback_days=800, anchor_date=end)
+
+    # Detect transfer pairs (end-exclusive)
+    paired_fingerprints = detect_transfer_pairs(conn, start, end_exclusive)
 
     # Get account info to determine account types
     account_types: dict[str, bool] = {}  # account_id -> is_credit_card
     for acc in conn.execute("SELECT account_id, name FROM accounts").fetchall():
         account_types[acc["account_id"]] = _is_credit_card_account(acc["name"])
 
-    # Build query with optional account filter
+    # Build query with optional account filter (end-exclusive internally)
+    # Exclude pending transactions by default
     query = """
         SELECT
+            t.fingerprint,
             t.account_id,
             t.posted_at,
             t.amount_cents,
@@ -669,9 +711,10 @@ def analyze_custom_range(
             a.name AS account_name
         FROM transactions t
         JOIN accounts a ON t.account_id = a.account_id
-        WHERE t.posted_at >= ? AND t.posted_at <= ?
+        WHERE t.posted_at >= ? AND t.posted_at < ?
+          AND COALESCE(t.pending, 0) = 0
     """
-    params: list = [start.isoformat(), end.isoformat()]
+    params: list = [start.isoformat(), end_exclusive.isoformat()]
 
     if account_filter:
         placeholders = ",".join("?" * len(account_filter))
@@ -682,6 +725,7 @@ def analyze_custom_range(
     rows = conn.execute(query, params).fetchall()
 
     income_cents = 0
+    credit_cents = 0  # Refunds, rewards, adjustments
     recurring_cents = 0
     discretionary_cents = 0
     transfer_cents = 0
@@ -692,71 +736,60 @@ def analyze_custom_range(
 
     # Track components for drill-down
     income_items: list[tuple[str, int]] = []
+    credit_items: list[tuple[str, int]] = []
     transfer_items: list[tuple[str, int]] = []
 
     for r in rows:
+        fingerprint = r["fingerprint"]
         amount = r["amount_cents"]
         merchant_norm = r["merchant_norm"]
         account_id = r["account_id"]
         is_cc = account_types.get(account_id, False)
         pattern = patterns.get(merchant_norm)
 
-        # Check user rules for this merchant
-        is_user_marked_income = any(src in merchant_norm for src in income_sources)
-        is_user_excluded = any(src in merchant_norm for src in excluded_sources)
-
-        if amount > 0:
-            # POSITIVE AMOUNT
-            if is_cc:
-                # Credit card positive = payment received (always a transfer)
-                transfer_cents += amount
-                incoming_transfer_cents += amount
-                transfer_items.append((merchant_norm, amount))
-            elif is_user_excluded:
-                # User explicitly marked as NOT income (transfer/refund)
-                transfer_cents += amount
-                incoming_transfer_cents += amount
-                transfer_items.append((merchant_norm, amount))
-            elif is_user_marked_income:
-                # User explicitly marked as income
-                income_cents += amount
-                income_items.append((merchant_norm, amount))
-            elif _is_income_transfer(merchant_norm):
-                # Looks like a transfer (Zelle, Venmo, etc.)
-                transfer_cents += amount
-                incoming_transfer_cents += amount
-                transfer_items.append((merchant_norm, amount))
-            else:
-                # Checking account positive, not a transfer = income (but show in breakdown for review)
-                income_cents += amount
-                income_items.append((merchant_norm, amount))
+        # Check if this transaction is part of a transfer pair
+        if fingerprint in paired_fingerprints:
+            classification = "transfer"
         else:
-            # NEGATIVE AMOUNT (expense or outgoing transfer)
-            abs_amount = abs(amount)
+            # Use shared classification function
+            classification = classify_transaction(
+                amount_cents=amount,
+                merchant_norm=merchant_norm,
+                is_credit_card=is_cc,
+                pattern=pattern,
+                income_sources=income_sources,
+                excluded_sources=excluded_sources,
+            )
 
-            if not is_cc and _is_cc_payment_expense(merchant_norm):
-                # Checking account paying a credit card = transfer
-                transfer_cents += abs_amount
-                outgoing_transfer_cents += abs_amount
-            elif pattern and pattern.is_transfer:
-                transfer_cents += abs_amount
-                outgoing_transfer_cents += abs_amount
-            elif _is_transfer(merchant_norm):
-                transfer_cents += abs_amount
-                outgoing_transfer_cents += abs_amount
-            elif pattern and pattern.is_recurring:
-                recurring_cents += abs_amount
+        if classification == "income":
+            income_cents += amount
+            income_items.append((merchant_norm, amount))
+
+        elif classification == "credit":
+            credit_cents += amount
+            credit_items.append((merchant_norm, amount))
+
+        elif classification == "transfer":
+            if amount > 0:
+                incoming_transfer_cents += amount
+                transfer_items.append((merchant_norm, amount))
             else:
-                discretionary_cents += abs_amount
+                outgoing_transfer_cents += abs(amount)
+            transfer_cents += abs(amount)
 
-    net_cents = income_cents - recurring_cents - discretionary_cents
+        elif classification == "recurring":
+            recurring_cents += abs(amount)
+
+        else:  # one-off / discretionary
+            discretionary_cents += abs(amount)
+
+    # Net includes credits as they reduce effective spend
+    net_cents = income_cents + credit_cents - recurring_cents - discretionary_cents
 
     # === DATA INTEGRITY ASSERTION ===
-    # Every transaction must be classified into exactly one bucket.
-    # Formula: positive_sum - negative_sum = income + incoming_transfers - recurring - discretionary - outgoing_transfers
     total_from_transactions = sum(r["amount_cents"] for r in rows)
     total_from_classification = (
-        income_cents + incoming_transfer_cents
+        income_cents + credit_cents + incoming_transfer_cents
         - recurring_cents - discretionary_cents - outgoing_transfer_cents
     )
 
@@ -766,22 +799,21 @@ def analyze_custom_range(
         log.error(
             f"DATA INTEGRITY ERROR in analyze_custom_range: "
             f"Txn sum ({total_from_transactions}) != Classification sum ({total_from_classification}). "
-            f"Income={income_cents}, InTransfer={incoming_transfer_cents}, OutTransfer={outgoing_transfer_cents}, "
-            f"Recurring={recurring_cents}, Discretionary={discretionary_cents}, "
+            f"Income={income_cents}, Credit={credit_cents}, InTransfer={incoming_transfer_cents}, "
+            f"OutTransfer={outgoing_transfer_cents}, Recurring={recurring_cents}, Discretionary={discretionary_cents}, "
             f"Period={start} to {end}, Txn count={len(rows)}"
         )
 
-    # Aggregate income items by merchant
-    income_by_merchant: dict[str, int] = {}
-    for merchant, amount in income_items:
-        income_by_merchant[merchant] = income_by_merchant.get(merchant, 0) + amount
-    aggregated_income = sorted(income_by_merchant.items(), key=lambda x: -x[1])
+    # Aggregate items by merchant
+    def aggregate(items: list[tuple[str, int]]) -> list[tuple[str, int]]:
+        by_merchant: dict[str, int] = {}
+        for merchant, amount in items:
+            by_merchant[merchant] = by_merchant.get(merchant, 0) + amount
+        return sorted(by_merchant.items(), key=lambda x: -x[1])
 
-    # Aggregate transfer items by merchant
-    transfer_by_merchant: dict[str, int] = {}
-    for merchant, amount in transfer_items:
-        transfer_by_merchant[merchant] = transfer_by_merchant.get(merchant, 0) + amount
-    aggregated_transfers = sorted(transfer_by_merchant.items(), key=lambda x: -x[1])
+    aggregated_income = aggregate(income_items)
+    aggregated_credits = aggregate(credit_items)
+    aggregated_transfers = aggregate(transfer_items)
 
     # Create label
     label = f"{start.strftime('%b %d')} - {end.strftime('%b %d, %Y')}"
@@ -794,6 +826,7 @@ def analyze_custom_range(
         start_date=start,
         end_date=end,
         income_cents=income_cents,
+        credit_cents=credit_cents,
         recurring_cents=recurring_cents,
         discretionary_cents=discretionary_cents,
         transfer_cents=transfer_cents,
@@ -810,6 +843,7 @@ def analyze_custom_range(
         avg_discretionary_cents=discretionary_cents,
         transaction_count=len(rows),
         income_items=aggregated_income,
+        credit_items=aggregated_credits,
         transfer_items=aggregated_transfers,
         raw_sum_cents=total_from_transactions,
         classification_sum_cents=total_from_classification,

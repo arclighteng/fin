@@ -414,17 +414,22 @@
 
     <div class="card-body">
     <div class="category-breakdown">
-        {% for category, total_cents, count in category_breakdown %}
+        {% for category, net_cents, count, gross_cents, refund_cents in category_breakdown %}
         <div class="category-item clickable" onclick="drillCategory('{{ category.id }}')" data-category="{{ category.id }}" data-search="{{ category.name|lower }}">
             <div class="category-icon">{{ category.icon }}</div>
             <div class="category-info">
                 <div class="category-name">{{ category.name }}</div>
-                <div class="category-meta">{{ count }} transaction{% if count != 1 %}s{% endif %}</div>
+                <div class="category-meta">
+                    {{ count }} transaction{% if count != 1 %}s{% endif %}
+                    {% if refund_cents > 0 %}
+                    <span style="color: #22c55e;">(incl. ${{ "%.0f"|format(refund_cents / 100) }} refunds)</span>
+                    {% endif %}
+                </div>
             </div>
-            <div class="category-amount">${{ "%.0f"|format(total_cents / 100) }}</div>
+            <div class="category-amount">${{ "%.0f"|format(net_cents / 100) }}</div>
             <div class="category-bar-container">
                 {% set max_amount = category_breakdown[0][1] if category_breakdown else 1 %}
-                <div class="category-bar" style="width: {{ (total_cents / max_amount * 100)|int }}%; background: {{ category.color }};"></div>
+                <div class="category-bar" style="width: {{ (net_cents / max_amount * 100)|int if max_amount > 0 else 0 }}%; background: {{ category.color }};"></div>
             </div>
         </div>
         <!-- Drill-down section (hidden by default) -->

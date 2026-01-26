@@ -14,7 +14,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from fin.classify import (
+from fin.legacy_classify import (
     SketchyCharge,
     detect_sketchy,
     _normalize_merchant_fuzzy,

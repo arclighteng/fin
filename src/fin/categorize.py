@@ -184,16 +184,25 @@ def categorize_transactions(
     """
     Categorize all transactions in a date range.
 
+    Args:
+        start_date: Start date YYYY-MM-DD (inclusive)
+        end_date: End date YYYY-MM-DD (inclusive, converted to exclusive internally)
+
     Manual overrides take precedence over ML/rule-based categorization.
 
     Returns: dict mapping category_id to list of (merchant, amount_cents, date)
     """
+    from datetime import date, timedelta
+
     # Get manual overrides if not provided
     if overrides is None:
         from . import db as dbmod
         overrides = dbmod.get_category_overrides(conn)
 
-    # Build query with optional account filter
+    # Convert inclusive end to exclusive (add 1 day)
+    end_exclusive = (date.fromisoformat(end_date) + timedelta(days=1)).isoformat()
+
+    # Build query with optional account filter (end-exclusive internally)
     sql = """
         SELECT
             posted_at,
@@ -201,13 +210,12 @@ def categorize_transactions(
             TRIM(LOWER(COALESCE(NULLIF(merchant,''), NULLIF(description,''), ''))) AS merchant_norm,
             COALESCE(description, '') AS description
         FROM transactions
-        WHERE posted_at >= ? AND posted_at <= ?
+        WHERE posted_at >= ? AND posted_at < ?
     """
-    params: list = [start_date, end_date]
+    params: list = [start_date, end_exclusive]
 
-    if account_filter is not None:
-        if not account_filter:  # Empty list = no accounts
-            return {cat: [] for cat in CATEGORIES}
+    # account_filter: None or [] = all accounts, non-empty list = filter to those accounts
+    if account_filter:
         placeholders = ",".join("?" * len(account_filter))
         sql += f" AND account_id IN ({placeholders})"
         params.extend(account_filter)
@@ -228,11 +236,32 @@ def categorize_transactions(
         if override and override in CATEGORIES:
             cat_id = override
         elif amount > 0:
-            # Positive amount: check if it's a one-time deposit or regular income
+            # Positive amount: could be income OR a refund/credit
+            # IMPORTANT: Default to "one_time_deposit" NOT "income"
+            # This aligns with classify_transaction() which treats unknown positives as credits
             cat_id, confidence = categorize_merchant(merchant, description)
-            # If no specific match or matched as expense category, default to income
-            if cat_id not in ("income", "one_time_deposit") or confidence == 0:
-                cat_id = "income"
+
+            # If merchant categorizes to an expense category (not income/transfer),
+            # treat this as a REFUND and keep it in that category.
+            # This allows category breakdowns to show NET amounts.
+            expense_categories = {
+                "dining", "groceries", "transport", "shopping", "entertainment",
+                "health", "utilities", "travel", "personal", "home", "education",
+                "subscriptions", "insurance", "fees", "gifts", "pets",
+            }
+            if cat_id in expense_categories and confidence > 0:
+                # It's a refund - keep in expense category
+                pass
+            elif cat_id == "income" and confidence > 0.5:
+                # Only use "income" when confidence is high (explicit income patterns)
+                pass
+            elif cat_id == "one_time_deposit" and confidence > 0:
+                # Explicitly categorized as one-time deposit
+                pass
+            else:
+                # Default positive amounts to one_time_deposit (NOT income)
+                # This is the conservative default - we don't assume positive = income
+                cat_id = "one_time_deposit"
         else:
             # Negative amount: categorize as expense
             cat_id, _ = categorize_merchant(merchant, description)
@@ -247,28 +276,38 @@ def get_category_breakdown(
     start_date: str,
     end_date: str,
     account_filter: list[str] | None = None,
-) -> list[tuple[Category, int, int]]:
+) -> list[tuple[Category, int, int, int, int]]:
     """
-    Get spending breakdown by category.
+    Get spending breakdown by category with NET amounts (gross - refunds).
 
-    Returns: list of (Category, total_cents, transaction_count) sorted by total
+    Returns: list of (Category, net_cents, transaction_count, gross_cents, refund_cents)
+             sorted by net_cents descending
+
+    The net amount accounts for refunds/credits, giving a more accurate picture
+    of actual spending per category.
     """
     categorized = categorize_transactions(conn, start_date, end_date, account_filter=account_filter)
 
     breakdown = []
     for cat_id, transactions in categorized.items():
         if cat_id in ("income", "transfer", "one_time_deposit"):
-            continue  # Skip income, transfers, and refunds/credits for expense breakdown
+            continue  # Skip income, transfers for expense breakdown
 
-        # Only count negative amounts (actual expenses)
-        expense_txns = [t for t in transactions if t[1] < 0]
-        total = sum(abs(t[1]) for t in expense_txns)
-        count = len(expense_txns)
+        # Split into expenses (negative) and refunds (positive)
+        expenses = [t for t in transactions if t[1] < 0]
+        refunds = [t for t in transactions if t[1] > 0]
 
-        if total > 0:
-            breakdown.append((CATEGORIES[cat_id], total, count))
+        gross_cents = sum(abs(t[1]) for t in expenses)
+        refund_cents = sum(t[1] for t in refunds)  # Already positive
+        net_cents = gross_cents - refund_cents  # Net spending
 
-    # Sort by total descending
+        # Count all transactions (both expenses and refunds)
+        count = len(expenses) + len(refunds)
+
+        if gross_cents > 0 or refund_cents > 0:
+            breakdown.append((CATEGORIES[cat_id], net_cents, count, gross_cents, refund_cents))
+
+    # Sort by net_cents descending
     breakdown.sort(key=lambda x: -x[1])
     return breakdown
 
