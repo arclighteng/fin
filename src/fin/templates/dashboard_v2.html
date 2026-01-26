@@ -569,6 +569,55 @@
         margin-top: 8px;
     }
 }
+
+/* ============================================
+   CLOSE-THE-BOOKS UI
+   ============================================ */
+
+.closed-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    background: var(--accent-green-dim, rgba(34, 197, 94, 0.15));
+    color: var(--accent-green);
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.closed-icon {
+    font-size: 11px;
+}
+
+.btn-outline {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+}
+
+.btn-outline:hover {
+    background: var(--bg-hover);
+    border-color: var(--accent-blue);
+    color: var(--accent-blue);
+}
+
+.adjustment-alert {
+    background: var(--accent-orange-dim, rgba(249, 115, 22, 0.1));
+    border-left: 3px solid var(--accent-orange, #f97316);
+}
+
+.adjustment-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    background: var(--accent-orange, #f97316);
+    color: white;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+}
 </style>
 
 <div class="dashboard">
@@ -619,6 +668,15 @@
         <div class="card-v2 card-hero">
             <div class="card-v2-header">
                 <h2 class="card-v2-title">{{ current_period.period_label }}</h2>
+                {% if closed_period %}
+                <span class="closed-badge" title="Closed {{ closed_period.closed_at.strftime('%b %d, %Y') }}">
+                    <span class="closed-icon">&#128274;</span> Closed
+                </span>
+                {% else %}
+                <button class="btn btn-sm btn-outline" onclick="closePeriod()" title="Close this period to lock in totals">
+                    Close Period
+                </button>
+                {% endif %}
             </div>
 
             {% if not expense_only_view %}
@@ -688,6 +746,22 @@
             </div>
             {% endif %}
 
+            <!-- Closed period indicator -->
+            {% if closed_period %}
+            <div class="closed-period-notice" style="margin-top: 12px; padding: 10px 14px; background: var(--accent-green-dim, rgba(34, 197, 94, 0.1)); border: 1px solid var(--accent-green); border-radius: 8px; font-size: 13px;">
+                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+                    <span style="color: var(--accent-green);">&#128274;</span>
+                    <strong style="color: var(--accent-green);">Period Closed</strong>
+                    <span style="color: var(--text-muted);">{{ closed_period.closed_at.strftime('%b %d, %Y at %H:%M') }}</span>
+                </div>
+                <div style="font-size: 12px; color: var(--text-secondary);">
+                    Snapshot: ${{ "%.0f"|format(closed_period.income_cents / 100) }} income,
+                    ${{ "%.0f"|format(closed_period.total_expenses_cents / 100) }} expenses
+                    ({{ closed_period.transaction_count }} txns)
+                </div>
+            </div>
+            {% endif %}
+
             <!-- Screen reader summary -->
             <p class="sr-only">
                 Financial summary for {{ current_period.period_label }}:
@@ -701,16 +775,36 @@
         <!-- ALERTS CARD -->
         <div class="card-v2">
             <div class="card-v2-header">
-                {% set total_alert_count = alerts|length + price_changes|length %}
+                {% set total_alert_count = alerts|length + price_changes|length + pending_adjustments_count %}
                 <h2 class="card-v2-title">Alerts ({{ total_alert_count }})</h2>
                 {% if alerts %}
                 <a href="/export/sketchy" class="card-v2-action">Export</a>
                 {% endif %}
             </div>
 
-            {% if alerts or price_changes %}
+            {% if alerts or price_changes or pending_adjustments_count > 0 %}
             <div class="alert-list-v2">
-                {# Price changes first - these are actionable #}
+                {# Post-close adjustments first - highest priority #}
+                {% if pending_adjustments_count > 0 %}
+                <div class="alert-item-v2 adjustment-alert">
+                    <span class="alert-icon-v2">&#9888;</span>
+                    <div class="alert-content-v2">
+                        <div class="alert-title-v2">
+                            Post-close adjustments
+                            <span class="adjustment-badge">{{ pending_adjustments_count }}</span>
+                        </div>
+                        <div class="alert-detail-v2">
+                            New transactions landed in closed period{{ 's' if pending_adjustments_count > 1 else '' }}.
+                            Review and re-close to update snapshot.
+                        </div>
+                    </div>
+                    <div class="alert-actions-v2">
+                        <button class="alert-btn" onclick="viewAdjustments()">Review</button>
+                    </div>
+                </div>
+                {% endif %}
+
+                {# Price changes - these are actionable #}
                 {% for pc in price_changes[:3] %}
                 <div class="alert-item-v2 price-change-alert">
                     <span class="alert-icon-v2">{% if pc.change_pct > 0 %}&#128200;{% else %}&#128201;{% endif %}</span>
@@ -1036,6 +1130,87 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 });
+
+// ============================================
+// Close-the-books functionality
+// ============================================
+
+async function closePeriod() {
+    // Get current period dates from the page context
+    const startDate = '{{ current_period.start_date.isoformat() if current_period else "" }}';
+    const endDate = '{{ (current_period.end_date + timedelta(days=1)).isoformat() if current_period else "" }}';
+
+    if (!startDate || !endDate) {
+        showToast('No period selected');
+        return;
+    }
+
+    // Get current account filter
+    const urlParams = new URLSearchParams(window.location.search);
+    const accounts = urlParams.get('accounts');
+    const accountFilter = accounts && accounts !== 'none' ? accounts.split(',') : null;
+
+    if (!confirm('Close this period? This will snapshot the current totals. Any new transactions landing in this period will be flagged as adjustments.')) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/close-period', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                start_date: startDate,
+                end_date: endDate,
+                account_filter: accountFilter
+            })
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            showToast('Period closed successfully');
+            // Reload to show the closed badge
+            setTimeout(() => window.location.reload(), 500);
+        } else {
+            showToast('Error: ' + (data.error || data.detail || 'Failed to close period'));
+        }
+    } catch (err) {
+        showToast('Error: ' + err.message);
+    }
+}
+
+async function viewAdjustments() {
+    // Open a modal or navigate to adjustments view
+    try {
+        const response = await fetch('/api/adjustments');
+        const data = await response.json();
+
+        if (data.pending_adjustments && data.pending_adjustments.length > 0) {
+            let msg = 'Pending Adjustments:\n\n';
+            data.pending_adjustments.forEach(adj => {
+                msg += `• ${adj.posted_at}: ${adj.merchant_norm || adj.description} - $${Math.abs(adj.amount_cents / 100).toFixed(2)}\n`;
+            });
+            msg += '\nRe-close the affected period to incorporate these changes.';
+            alert(msg);
+        } else {
+            showToast('No pending adjustments');
+        }
+    } catch (err) {
+        showToast('Error loading adjustments: ' + err.message);
+    }
+}
+
+// Toast helper (if not already defined)
+if (typeof showToast === 'undefined') {
+    function showToast(message) {
+        // Simple toast implementation
+        const toast = document.createElement('div');
+        toast.style.cssText = 'position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--bg-secondary, #333); color: var(--text-primary, white); padding: 12px 24px; border-radius: 8px; z-index: 9999; font-size: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);';
+        toast.textContent = message;
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 3000);
+    }
+}
 </script>
 
 {% endblock %}
