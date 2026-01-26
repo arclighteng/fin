@@ -130,6 +130,38 @@ class ResolveReconciliationRequest(BaseModel):
     notes: str | None = None
 
 
+def parse_account_filter(accounts: str | None) -> tuple[list[str] | None, bool]:
+    """
+    Parse accounts query parameter into account_filter.
+
+    Returns:
+        (account_filter, show_no_data)
+        - account_filter=None: all accounts
+        - account_filter=[...]: filter to these accounts
+        - show_no_data=True: explicit "no accounts" mode (accounts="none")
+
+    CONTRACT:
+        - accounts=None, "", "," → None (all accounts)
+        - accounts="none" → None + show_no_data=True
+        - accounts="acc1,acc2" → ["acc1", "acc2"]
+        - Empty list after parsing → None (not [])
+    """
+    if not accounts:
+        return None, False
+
+    if accounts.lower() == "none":
+        return None, True  # Explicit no-data mode
+
+    # Parse comma-separated, strip whitespace, filter empty
+    parsed = [a.strip() for a in accounts.split(",") if a.strip()]
+
+    # Empty list after parsing → treat as None (all accounts)
+    if not parsed:
+        return None, False
+
+    return parsed, False
+
+
 app = FastAPI()
 
 # Setup Jinja2 templates
@@ -256,15 +288,8 @@ def dashboard(
     """Main dashboard with financial health overview."""
     from calendar import monthrange
 
-    # Parse account filter - "none" means show no data (early return)
-    # None or [] = all accounts, non-empty list = filter to those accounts
-    account_filter: list[str] | None = None
-    show_no_data = False
-    if accounts:
-        if accounts.lower() == "none":
-            show_no_data = True  # Causes early return below
-        else:
-            account_filter = [a.strip() for a in accounts.split(",") if a.strip()]
+    # Parse account filter using normalized helper
+    account_filter, show_no_data = parse_account_filter(accounts)
 
     # Get all accounts for the filter UI
     all_accounts = conn.execute(
@@ -457,10 +482,11 @@ def dashboard(
     closed_period = None
     pending_adjustments_count = 0
     if current_period:
+        # current_period.end_date is already exclusive (from Report)
         closed_period = get_closed_period(
             conn,
             current_period.start_date,
-            current_period.end_date + timedelta(days=1),  # Exclusive end
+            current_period.end_date,  # Already exclusive
             account_filter=account_filter,
         )
         # Get all pending adjustments (across all closed periods)
@@ -760,9 +786,7 @@ def search_transactions(
         })
 
     # Parse account filter
-    account_filter: list[str] | None = None
-    if accounts and accounts.lower() != "none":
-        account_filter = [a.strip() for a in accounts.split(",") if a.strip()]
+    account_filter, _ = parse_account_filter(accounts)
 
     # Get all accounts for name lookup
     all_accounts = {
@@ -847,9 +871,7 @@ def get_category_transactions(
         return JSONResponse(status_code=404, content={"error": "Category not found"})
 
     # Parse account filter
-    account_filter: list[str] | None = None
-    if accounts and accounts.lower() != "none":
-        account_filter = [a.strip() for a in accounts.split(",") if a.strip()]
+    account_filter, _ = parse_account_filter(accounts)
 
     # Get category overrides to respect manual user choices
     category_overrides = dbmod.get_category_overrides(conn)
@@ -947,9 +969,7 @@ def get_transactions_by_type(
         return JSONResponse(status_code=400, content={"error": f"Invalid type. Must be one of: {', '.join(valid_types)}"})
 
     # Parse account filter
-    account_filter: list[str] | None = None
-    if accounts and accounts.lower() != "none":
-        account_filter = [a.strip() for a in accounts.split(",") if a.strip()]
+    account_filter, _ = parse_account_filter(accounts)
 
     # Get account names for display
     account_names: dict[str, str] = {}
@@ -1024,15 +1044,8 @@ def subs(
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """Recurring charges page with styled layout and drill-down."""
-    # Parse account filter - "none" means show no data (early return)
-    # None or [] = all accounts, non-empty list = filter to those accounts
-    account_filter: list[str] | None = None
-    show_no_data = False
-    if accounts:
-        if accounts.lower() == "none":
-            show_no_data = True  # Causes early return below
-        else:
-            account_filter = [a.strip() for a in accounts.split(",") if a.strip()]
+    # Parse account filter using normalized helper
+    account_filter, show_no_data = parse_account_filter(accounts)
 
     # Get all accounts for the filter UI
     all_accounts = conn.execute(
@@ -1088,9 +1101,7 @@ def get_payee_transactions(
     since = (date.today() - timedelta(days=days)).isoformat()
 
     # Parse account filter
-    account_filter: list[str] | None = None
-    if accounts and accounts.lower() != "none":
-        account_filter = [a.strip() for a in accounts.split(",") if a.strip()]
+    account_filter, _ = parse_account_filter(accounts)
 
     # Build query with optional account filter - includes provenance fields
     sql = """
@@ -1814,9 +1825,7 @@ def api_budget_plan(
     Analyzes historical spending by bucket (fixed obligations, variable
     essentials, discretionary, one-offs) and provides planning insights.
     """
-    account_filter = None
-    if accounts and accounts.lower() != "none":
-        account_filter = [a.strip() for a in accounts.split(",") if a.strip()]
+    account_filter, _ = parse_account_filter(accounts)
 
     plan = analyze_spending_buckets(conn, months, account_filter)
 
@@ -1864,9 +1873,7 @@ def api_bucket_detail(
             content={"error": f"Invalid bucket. Valid: {valid}"},
         )
 
-    account_filter = None
-    if accounts and accounts.lower() != "none":
-        account_filter = [a.strip() for a in accounts.split(",") if a.strip()]
+    account_filter, _ = parse_account_filter(accounts)
 
     detail = get_bucket_detail(conn, bucket, months, account_filter)
 
@@ -1889,9 +1896,7 @@ def api_budget_projection(
 
     Returns projected income, expenses by bucket, and net for upcoming months.
     """
-    account_filter = None
-    if accounts and accounts.lower() != "none":
-        account_filter = [a.strip() for a in accounts.split(",") if a.strip()]
+    account_filter, _ = parse_account_filter(accounts)
 
     projection = project_monthly_budget(conn, history_months, forward_months, account_filter)
 
@@ -1913,9 +1918,7 @@ def api_cashflow_projection(
     Shows expected income, upcoming charges (subscriptions, bills),
     and projected net position.
     """
-    account_filter = None
-    if accounts and accounts.lower() != "none":
-        account_filter = [a.strip() for a in accounts.split(",") if a.strip()]
+    account_filter, _ = parse_account_filter(accounts)
 
     projection = project_cash_flow(conn, days, account_filter)
 
@@ -1959,9 +1962,7 @@ def api_cashflow_alerts(
     - Large upcoming charges
     - Multiple charges on same day
     """
-    account_filter = None
-    if accounts and accounts.lower() != "none":
-        account_filter = [a.strip() for a in accounts.split(",") if a.strip()]
+    account_filter, _ = parse_account_filter(accounts)
 
     alerts = detect_cash_flow_alerts(conn, days, account_filter)
 

@@ -1137,8 +1137,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
 async function closePeriod() {
     // Get current period dates from the page context
+    // end_date is already exclusive (from Report model)
     const startDate = '{{ current_period.start_date.isoformat() if current_period else "" }}';
-    const endDate = '{{ (current_period.end_date + timedelta(days=1)).isoformat() if current_period else "" }}';
+    const endDate = '{{ current_period.end_date.isoformat() if current_period else "" }}';
 
     if (!startDate || !endDate) {
         showToast('No period selected');

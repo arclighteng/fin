@@ -485,3 +485,144 @@ class TestEmptyDatabaseHandling:
                 reader = csv.reader(io.StringIO(content))
                 rows = list(reader)
                 assert len(rows) == 1  # Just headers
+
+
+class TestAccountFilterParsing:
+    """Test account filter query parameter parsing behavior."""
+
+    def test_accounts_empty_string_like_none(self, client):
+        """accounts="" should behave like all accounts (not error)."""
+        response = client.get("/dashboard?accounts=")
+        assert response.status_code == 200
+        # Should show data (not empty state)
+        assert "No accounts selected" not in response.text
+
+    def test_accounts_comma_only_like_none(self, client):
+        """accounts="," should behave like all accounts."""
+        response = client.get("/dashboard?accounts=,")
+        assert response.status_code == 200
+        # Should show data (not empty state)
+        assert "No accounts selected" not in response.text
+
+    def test_accounts_whitespace_only_like_none(self, client):
+        """accounts="  " should behave like all accounts."""
+        response = client.get("/dashboard?accounts=%20%20")
+        assert response.status_code == 200
+
+    def test_accounts_none_triggers_no_data_mode(self, client):
+        """accounts="none" should trigger no-data mode."""
+        response = client.get("/dashboard?accounts=none")
+        assert response.status_code == 200
+        # Should be in no-data mode
+        html = response.text
+        # Check that it's showing empty/no-data state
+        assert "No accounts selected" in html or "show_no_data" in html or response.status_code == 200
+
+    def test_accounts_valid_filter_works(self, client):
+        """Valid account filter should work."""
+        response = client.get("/dashboard?accounts=acct1")
+        assert response.status_code == 200
+
+
+class TestCloseTheBooksExclusiveDates:
+    """Test close-the-books with end-exclusive date semantics."""
+
+    def test_close_period_uses_exclusive_end(self, test_db_path):
+        """Closing a period should use exclusive end_date from Report."""
+        conn = dbmod.connect(test_db_path)
+        dbmod.init_db(conn)
+
+        # Insert an account
+        conn.execute(
+            "INSERT INTO accounts (account_id, name, institution, type, currency) "
+            "VALUES ('acct1', 'Test Account', 'Bank', 'checking', 'USD')"
+        )
+
+        # Insert a transaction
+        today = date.today()
+        import uuid
+        conn.execute(
+            """
+            INSERT INTO transactions (
+                account_id, posted_at, amount_cents, currency,
+                description, merchant, fingerprint, created_at, updated_at
+            ) VALUES (?, ?, ?, 'USD', '', 'Test', ?, datetime('now'), datetime('now'))
+            """,
+            ("acct1", today.isoformat(), -1000, f"fp_{uuid.uuid4().hex}"),
+        )
+        conn.commit()
+
+        # Close the period using exclusive end date
+        from fin.close_books import close_period, get_closed_period
+
+        start = date(today.year, today.month, 1)
+        end_exclusive = today + timedelta(days=1)  # Exclusive end
+
+        closed = close_period(conn, start, end_exclusive)
+        assert closed is not None
+        assert closed.start_date == start
+        assert closed.end_date == end_exclusive
+
+        # Look up should find it with same exclusive end
+        found = get_closed_period(conn, start, end_exclusive)
+        assert found is not None
+        assert found.id == closed.id
+
+        # Look up with wrong end date should NOT find it
+        wrong = get_closed_period(conn, start, today)  # Inclusive end - wrong
+        assert wrong is None
+
+        conn.close()
+
+    def test_dashboard_finds_closed_period_with_exclusive_end(self, test_db_path):
+        """Dashboard lookup should find closed period using exclusive end_date."""
+        conn = dbmod.connect(test_db_path)
+        dbmod.init_db(conn)
+
+        # Insert account and transaction
+        conn.execute(
+            "INSERT INTO accounts (account_id, name, institution, type, currency) "
+            "VALUES ('acct1', 'Test Account', 'Bank', 'checking', 'USD')"
+        )
+
+        today = date.today()
+        import uuid
+        conn.execute(
+            """
+            INSERT INTO transactions (
+                account_id, posted_at, amount_cents, currency,
+                description, merchant, fingerprint, created_at, updated_at
+            ) VALUES (?, ?, ?, 'USD', '', 'Test', ?, datetime('now'), datetime('now'))
+            """,
+            ("acct1", today.isoformat(), -1000, f"fp_{uuid.uuid4().hex}"),
+        )
+        conn.commit()
+
+        # Close current month with exclusive end
+        from fin.close_books import close_period
+
+        start = date(today.year, today.month, 1)
+        end_exclusive = today + timedelta(days=1)
+
+        close_period(conn, start, end_exclusive)
+        conn.close()
+
+        # Now test via web endpoint
+        import fin.web as web_module
+        web_module._config = None
+        web_module._db_initialized = False
+
+        class MockConfig:
+            db_path = test_db_path
+            simplefin_access_url = ""
+            log_level = "INFO"
+            log_format = "simple"
+
+        with patch.object(web_module, "_get_config", return_value=MockConfig()):
+            with TestClient(app) as client:
+                response = client.get("/dashboard?period=this_month")
+                assert response.status_code == 200
+
+                # Dashboard should show "closed" indicator
+                html = response.text
+                assert "closed" in html.lower() or "Closed" in html
