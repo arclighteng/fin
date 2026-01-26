@@ -22,6 +22,7 @@ from typing import Optional
 
 from .reporting_models import (
     TransactionType,
+    TransferStatus,
     SpendingBucket,
     IntegrityFlag,
     PendingStatus,
@@ -39,6 +40,7 @@ from .classifier import (
 )
 from .transfer_pairing import detect_transfer_pairs
 from .refund_matching import detect_refund_matches
+from .categorize import categorize_merchant
 
 
 # Version identifiers for reproducibility
@@ -169,6 +171,16 @@ def report_period(
             matched_refund_of=matched_refund_of,
         )
 
+        # Determine category for expenses
+        category_id = None
+        if result.txn_type == TransactionType.EXPENSE:
+            cat_id, _ = categorize_merchant(merchant, row["raw_description"])
+            category_id = cat_id
+        elif result.txn_type == TransactionType.REFUND:
+            # Refunds can inherit category from matched expense or use categorization
+            cat_id, _ = categorize_merchant(merchant, row["raw_description"])
+            category_id = cat_id
+
         # Build classified transaction
         txn = ClassifiedTransaction(
             fingerprint=fp,
@@ -179,13 +191,18 @@ def report_period(
             raw_description=row["raw_description"],
             txn_type=result.txn_type,
             spending_bucket=result.spending_bucket,
-            category_id=None,  # TODO: integrate categorize.py
+            category_id=category_id,
             pending_status=PendingStatus.PENDING if is_pending else PendingStatus.POSTED,
             reason=result.reason,
         )
 
+        # Set transfer metadata properly with enum types and group IDs
         if is_transfer_paired:
-            txn.transfer_status = transfer_result.get_pair_id(fp) and "MATCHED"
+            txn.transfer_group_id = transfer_result.get_pair_id(fp)
+            txn.transfer_status = TransferStatus.MATCHED
+        elif result.txn_type == TransactionType.TRANSFER:
+            # Unmatched transfer leg
+            txn.transfer_status = TransferStatus.UNMATCHED
 
         transactions.append(txn)
 

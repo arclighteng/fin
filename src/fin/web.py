@@ -18,9 +18,9 @@ from . import db as dbmod
 from .dates import TimePeriod  # Use canonical TimePeriod from dates module
 from .categorize import CATEGORIES, get_category_breakdown
 from .legacy_classify import detect_alerts, detect_duplicates, detect_sketchy, get_subscriptions, get_bills, detect_cross_account_duplicates, detect_price_changes
-from .legacy_analysis import analyze_periods  # Still needed for export_summary until fully migrated
+# Detection utilities allowed; totals functions (analyze_periods) have been migrated to ReportService
 from .report_service import ReportService
-from .view_models import PeriodViewModel, reports_to_json
+from .view_models import PeriodViewModel, reports_to_json, compute_period_trends
 from .config import Config, load_config
 from .models import Account
 from .normalize import normalize_simplefin_txn
@@ -1315,9 +1315,13 @@ def export_summary(
     period: str = Query("month", description="Period type: month, quarter, year"),
     conn: sqlite3.Connection = Depends(get_db),
 ):
-    """Export period summary as CSV."""
+    """Export period summary as CSV - using canonical ReportService."""
     period_type = _period_type_from_str(period)
-    periods = analyze_periods(conn, period_type, num_periods=12, avg_window=3)
+
+    # Use canonical ReportService for all totals
+    service = ReportService(conn)
+    reports = service.report_periods(period_type, num_periods=12)
+    periods = compute_period_trends(reports, avg_window=3)
 
     output = io.StringIO()
     writer = csv.writer(output)

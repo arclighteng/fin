@@ -13,8 +13,10 @@ import typer
 from rich.console import Console
 
 from . import db as dbmod
-from .legacy_analysis import TimePeriod, analyze_periods
-from .legacy_classify import detect_duplicates, detect_sketchy, get_subscriptions
+from .dates import TimePeriod
+from .report_service import ReportService
+from .view_models import PeriodViewModel, compute_period_trends
+from .legacy_classify import detect_duplicates, detect_sketchy, get_subscriptions  # Detection utilities only
 from .config import load_config
 from .log import setup_logging
 from .models import Account
@@ -1218,8 +1220,11 @@ def export_csv(
                 ])
 
         # ---- monthly_summary.csv (income vs spend with rolling averages)
+        # Using canonical ReportService for all totals
         summary_path = os.path.join(out, "monthly_summary.csv")
-        periods = analyze_periods(conn, TimePeriod.MONTH, num_periods=12, avg_window=3)
+        service = ReportService(conn)
+        reports = service.report_periods(TimePeriod.MONTH, num_periods=12)
+        periods = compute_period_trends(reports, avg_window=3)
         with open(summary_path, "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             w.writerow([
@@ -1966,7 +1971,10 @@ def export_summary_cmd(
     period_type = period_map.get(period.lower(), TimePeriod.MONTH)
 
     try:
-        periods = analyze_periods(conn, period_type, num_periods=num_periods, avg_window=3)
+        # Using canonical ReportService for all totals
+        service = ReportService(conn)
+        reports = service.report_periods(period_type, num_periods=num_periods)
+        periods = compute_period_trends(reports, avg_window=3)
 
         out_path = os.path.join(out, f"{period}_summary.csv")
         with open(out_path, "w", newline="", encoding="utf-8") as f:
@@ -2018,13 +2026,15 @@ def dashboard_cli(
     period_type = period_map.get(period.lower(), TimePeriod.MONTH)
 
     try:
-        # Get current period analysis
-        periods = analyze_periods(conn, period_type, num_periods=1, avg_window=3)
+        # Get current period analysis using canonical ReportService
+        service = ReportService(conn)
+        reports = service.report_periods(period_type, num_periods=3)  # Get 3 for trends
 
-        if not periods:
+        if not reports:
             console.print("[yellow]No transaction data available.[/yellow]")
             return
 
+        periods = compute_period_trends(reports, avg_window=3)
         p = periods[0]
 
         # Format trend arrows

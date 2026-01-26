@@ -3,6 +3,7 @@
 User-facing status and drill commands.
 
 These are the primary interface for users to understand their financial situation.
+ALL totals come from ReportService - the canonical truth engine.
 """
 import calendar
 from datetime import date
@@ -13,7 +14,8 @@ from rich.panel import Panel
 from rich.table import Table
 
 from . import db as dbmod
-from .legacy_classify import detect_alerts, summarize_month, MonthSummary
+from .report_service import ReportService
+from .view_models import CLISummary
 from .config import load_config
 from .log import setup_logging
 
@@ -35,13 +37,13 @@ def _fmt_month(year: int, month: int) -> str:
     return f"{calendar.month_name[month].upper()} {year}"
 
 
-def _verdict(summary: MonthSummary) -> tuple[str, str, str]:
+def _verdict(summary: CLISummary) -> tuple[str, str, str]:
     """
     Return (emoji, short_verdict, explanation) based on financial state.
     """
     baseline = summary.baseline_cents
     net = summary.net_cents
-    
+
     if baseline < 0:
         # Structural deficit
         shortfall = abs(baseline)
@@ -77,9 +79,56 @@ def _verdict(summary: MonthSummary) -> tuple[str, str, str]:
         )
 
 
-def _severity_style(severity: str) -> str:
-    """Return rich style for alert severity."""
-    return {"high": "red", "medium": "yellow", "low": "dim"}.get(severity, "")
+def _get_summary(conn, year: int, month: int) -> CLISummary:
+    """Get CLI summary using canonical ReportService."""
+    service = ReportService(conn)
+    report = service.report_month(year, month)
+    return CLISummary.from_report(report, year, month)
+
+
+def _get_alerts(report) -> list:
+    """
+    Extract alerts from report integrity info.
+
+    Returns list of alert-like objects for display.
+    """
+    from dataclasses import dataclass
+
+    @dataclass
+    class Alert:
+        severity: str
+        title: str
+        detail: str
+        amount_cents: int = 0
+
+    alerts = []
+
+    # Check integrity flags
+    integrity = report.integrity
+
+    if integrity.unclassified_credit_count > 0:
+        alerts.append(Alert(
+            severity="high",
+            title="Unclassified credits",
+            detail=f"{integrity.unclassified_credit_count} transactions ({_fmt_money(integrity.unclassified_credit_cents)}) need classification",
+            amount_cents=integrity.unclassified_credit_cents,
+        ))
+
+    if integrity.unmatched_transfer_count > 0:
+        alerts.append(Alert(
+            severity="medium",
+            title="Unmatched transfers",
+            detail=f"{integrity.unmatched_transfer_count} transfer(s) without matching leg",
+        ))
+
+    if integrity.duplicate_suspect_count > 0:
+        alerts.append(Alert(
+            severity="low",
+            title="Possible duplicates",
+            detail=f"{integrity.duplicate_suspect_count} transaction(s) may be duplicated",
+        ))
+
+    return alerts
 
 
 def status_command(
@@ -87,16 +136,16 @@ def status_command(
 ):
     """
     Your financial status at a glance.
-    
+
     Shows whether you can sustain your lifestyle on your income,
     how much you're saving, and what needs attention.
     """
     cfg = load_config()
     setup_logging(cfg)
-    
+
     conn = dbmod.connect(cfg.db_path)
     dbmod.init_db(conn)
-    
+
     try:
         # Parse month
         if month:
@@ -108,16 +157,18 @@ def status_command(
         else:
             today = date.today()
             year, mon = today.year, today.month
-        
+
         # Check for data
         count = conn.execute("SELECT COUNT(*) as c FROM transactions").fetchone()["c"]
         if count == 0:
             console.print("[yellow]No transaction data yet. Run 'fin sync' first.[/yellow]")
             raise typer.Exit(1)
-        
-        # Get summary and alerts
-        summary = summarize_month(conn, year, mon)
-        alerts = detect_alerts(conn, year, mon)
+
+        # Get summary and alerts using canonical ReportService
+        service = ReportService(conn)
+        report = service.report_month(year, mon)
+        summary = CLISummary.from_report(report, year, mon)
+        alerts = _get_alerts(report)
         
         # Build display
         emoji, verdict_short, verdict_long = _verdict(summary)
@@ -157,12 +208,13 @@ def status_command(
         if summary.transfer_cents > 0:
             console.print(f"[dim]  Note: {_fmt_money(summary.transfer_cents)} in transfers (credit card payments, etc.) excluded from expenses.[/dim]")
             console.print()
-        
-        # Alerts
+
+        # Alerts from integrity report
         if alerts:
             console.print("[bold]ALERTS[/bold]")
+            severity_style = {"high": "red", "medium": "yellow", "low": "dim"}
             for alert in alerts[:5]:
-                style = _severity_style(alert.severity)
+                style = severity_style.get(alert.severity, "")
                 icon = {"high": "🔴", "medium": "🟡", "low": "🔵"}.get(alert.severity, "•")
                 console.print(f"  {icon} [{style}]{alert.title}[/{style}]")
                 console.print(f"      [dim]{alert.detail}[/dim]")
@@ -219,7 +271,7 @@ def drill_command(
 ):
     """
     Detailed breakdown of a specific area.
-    
+
     Areas:
       recurring  - All recurring expenses with cadence patterns
       one-offs   - Discretionary spending this month
@@ -229,10 +281,10 @@ def drill_command(
     """
     cfg = load_config()
     setup_logging(cfg)
-    
+
     conn = dbmod.connect(cfg.db_path)
     dbmod.init_db(conn)
-    
+
     try:
         # Parse month
         if month:
@@ -244,8 +296,11 @@ def drill_command(
         else:
             today = date.today()
             year, mon = today.year, today.month
-        
-        summary = summarize_month(conn, year, mon)
+
+        # Get report and summary using canonical ReportService
+        service = ReportService(conn)
+        report = service.report_month(year, mon)
+        summary = CLISummary.from_report(report, year, mon)
         
         console.print()
         console.print(f"[bold]{_fmt_month(year, mon)} - {area.upper()}[/bold]")
@@ -296,21 +351,22 @@ def drill_command(
                 console.print(f"[dim]Showing {limit} of {len(summary.one_off_expenses)}. Use --limit to see more.[/dim]")
         
         elif area == "alerts":
-            alerts = detect_alerts(conn, year, mon)
-            
+            alerts = _get_alerts(report)
+
             if not alerts:
                 console.print("[green]No alerts. Looking good![/green]")
                 return
-            
+
+            severity_style = {"high": "red", "medium": "yellow", "low": "dim"}
             for alert in alerts[:limit]:
-                style = _severity_style(alert.severity)
+                style = severity_style.get(alert.severity, "")
                 icon = {"high": "🔴", "medium": "🟡", "low": "🔵"}.get(alert.severity, "•")
                 console.print(f"{icon} [{style}][bold]{alert.title}[/bold][/{style}]")
                 console.print(f"   {alert.detail}")
                 if alert.amount_cents:
                     console.print(f"   [dim]Impact: {_fmt_money(alert.amount_cents)}[/dim]")
                 console.print()
-            
+
             if len(alerts) > limit:
                 console.print(f"[dim]Showing {limit} of {len(alerts)}. Use --limit to see more.[/dim]")
         
@@ -369,38 +425,36 @@ def trend_command(
 ):
     """
     Show trends over recent months.
-    
+
     Helps answer: Am I getting better or worse?
     """
     cfg = load_config()
     setup_logging(cfg)
-    
+
     conn = dbmod.connect(cfg.db_path)
     dbmod.init_db(conn)
-    
+
     try:
-        today = date.today()
-        summaries: list[MonthSummary] = []
-        
-        for i in range(months):
-            # Go back i months
-            year = today.year
-            month = today.month - i
-            while month <= 0:
-                month += 12
-                year -= 1
-            
-            try:
-                s = summarize_month(conn, year, month)
-                if s.income_cents > 0 or s.recurring_cents > 0 or s.one_off_cents > 0:
-                    summaries.append(s)
-            except Exception:
-                pass
-        
+        from .dates import TimePeriod
+
+        # Use ReportService to get multiple periods
+        service = ReportService(conn)
+        reports = service.report_periods(TimePeriod.MONTH, num_periods=months)
+
+        # Convert to CLISummary for display
+        summaries: list[CLISummary] = []
+        for report in reports:
+            # Extract year/month from report dates
+            year = report.start_date.year
+            month = report.start_date.month
+            s = CLISummary.from_report(report, year, month)
+            if s.income_cents > 0 or s.recurring_cents > 0 or s.one_off_cents > 0:
+                summaries.append(s)
+
         if not summaries:
             console.print("[yellow]Not enough data for trends. Run 'fin sync' with more history.[/yellow]")
             raise typer.Exit(1)
-        
+
         summaries.reverse()  # Oldest first
         
         console.print()

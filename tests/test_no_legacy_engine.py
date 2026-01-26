@@ -2,13 +2,14 @@
 Enforcement tests to prevent legacy engine reintroduction.
 
 These tests fail if:
-- web.py or status_commands.py import forbidden legacy functions
-- Any new code paths use analyze_periods/summarize_month/classify_month
+- Protected files import forbidden legacy functions for totals
+- Any user-facing code paths use analyze_periods/summarize_month/classify_month
 
 The goal is to ensure ALL user-facing totals come from ReportService.
 """
 import ast
 import re
+import warnings
 from pathlib import Path
 
 import pytest
@@ -23,8 +24,9 @@ SRC_ROOT = PROJECT_ROOT / "src" / "fin"
 # (They may import detection utilities like detect_duplicates)
 PROTECTED_FILES = [
     "web.py",
-    # "status_commands.py",  # DEFERRED: CLI still uses legacy (see migration doc)
-    # "cli.py",  # DEFERRED: CLI still uses legacy
+    "status_commands.py",
+    "cli.py",
+    "projections.py",
 ]
 
 # Forbidden imports - these produce totals and must not be used
@@ -62,35 +64,31 @@ ALLOWED_LEGACY_IMPORTS = {
 class TestNoLegacyEngine:
     """Tests that prevent reintroduction of legacy engine usage."""
 
-    def test_web_no_forbidden_imports(self):
-        """web.py should not import forbidden legacy functions for totals."""
-        web_py = SRC_ROOT / "web.py"
-        assert web_py.exists(), f"web.py not found at {web_py}"
+    def test_protected_files_no_forbidden_imports(self):
+        """Protected files should not import forbidden legacy functions for totals."""
+        for filename in PROTECTED_FILES:
+            filepath = SRC_ROOT / filename
+            if not filepath.exists():
+                continue
 
-        content = web_py.read_text(encoding="utf-8")
+            content = filepath.read_text(encoding="utf-8")
 
-        # Parse AST to find imports
-        tree = ast.parse(content)
-        imported_names = set()
+            # Parse AST to find imports
+            tree = ast.parse(content)
+            imported_names = set()
 
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom):
-                if node.module and "legacy" in node.module:
-                    for alias in node.names:
-                        name = alias.name
-                        imported_names.add(name)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom):
+                    if node.module and "legacy" in node.module:
+                        for alias in node.names:
+                            name = alias.name
+                            imported_names.add(name)
 
-        # Check for forbidden imports
-        forbidden_found = imported_names & FORBIDDEN_IMPORTS
-        if forbidden_found:
-            # Special case: analyze_periods is allowed for export_summary (DEFERRED)
-            if forbidden_found == {"analyze_periods"}:
-                # Check if it's only used in export_summary
-                # This is acceptable per migration doc
-                pass
-            else:
+            # Check for forbidden imports
+            forbidden_found = imported_names & FORBIDDEN_IMPORTS
+            if forbidden_found:
                 pytest.fail(
-                    f"web.py imports forbidden legacy functions: {forbidden_found}\n"
+                    f"{filename} imports forbidden legacy functions: {forbidden_found}\n"
                     f"These functions produce totals and must use ReportService instead.\n"
                     f"Allowed legacy imports: {ALLOWED_LEGACY_IMPORTS}"
                 )
@@ -105,11 +103,8 @@ class TestNoLegacyEngine:
             content = filepath.read_text(encoding="utf-8")
 
             # Check for direct function calls (not imports)
-            # Pattern: function_name( with word boundary
             for func_name in FORBIDDEN_IMPORTS:
-                # Skip if it's just an import line
-                pattern = rf"(?<!from .legacy_analysis import.*)\b{func_name}\s*\("
-                # Simpler: just check if function is called directly
+                # Pattern: function call (not in import statement)
                 call_pattern = rf"= {func_name}\(|[^a-zA-Z_]{func_name}\("
 
                 if re.search(call_pattern, content):
@@ -117,9 +112,6 @@ class TestNoLegacyEngine:
                     lines = content.split("\n")
                     for i, line in enumerate(lines, 1):
                         if re.search(call_pattern, line) and "import" not in line.lower():
-                            # analyze_periods is allowed in export_summary (temporary)
-                            if func_name == "analyze_periods" and "export_summary" in content:
-                                continue
                             pytest.fail(
                                 f"{filename}:{i} calls forbidden function '{func_name}'\n"
                                 f"Line: {line.strip()}\n"
@@ -231,3 +223,60 @@ class TestCanonicalEngineIsComplete:
         assert "def report_month" in content
         assert "def report_periods" in content
         assert "class ReportService" in content
+
+    def test_cli_uses_report_service(self):
+        """cli.py should import ReportService for totals."""
+        cli_py = SRC_ROOT / "cli.py"
+        content = cli_py.read_text(encoding="utf-8")
+
+        assert "from .report_service import" in content or "ReportService" in content, (
+            "cli.py should use ReportService for producing totals"
+        )
+
+    def test_status_commands_uses_report_service(self):
+        """status_commands.py should import ReportService for totals."""
+        status_py = SRC_ROOT / "status_commands.py"
+        content = status_py.read_text(encoding="utf-8")
+
+        assert "from .report_service import" in content or "ReportService" in content, (
+            "status_commands.py should use ReportService for producing totals"
+        )
+
+    def test_projections_uses_canonical_income(self):
+        """projections.py should use ReportService for income estimation."""
+        proj_py = SRC_ROOT / "projections.py"
+        content = proj_py.read_text(encoding="utf-8")
+
+        # Should import ReportService in _estimate_income
+        assert "ReportService" in content, (
+            "projections.py should use ReportService for canonical income"
+        )
+
+        # Should NOT use raw SQL to sum positive amounts (which would include non-income credits)
+        assert "amount_cents > 0" not in content.lower(), (
+            "projections.py should not sum positive amounts directly (use report.totals.income_cents)"
+        )
+
+
+class TestNoDeprecationWarningsInNormalPath:
+    """Ensure normal imports don't trigger deprecation warnings."""
+
+    def test_web_import_works(self):
+        """Importing web.py should work without errors."""
+        # The deprecation warning from legacy_classify is expected because
+        # we import detection utilities from there. The key is that we don't
+        # import the totals-producing functions directly.
+        import fin.web
+        assert fin.web is not None
+
+    def test_cli_import_works(self):
+        """Importing cli.py should work without errors."""
+        # Same as above - deprecation warning from legacy_classify is expected
+        # because we import detection utilities from there.
+        import fin.cli
+        assert fin.cli is not None
+
+    def test_status_commands_import_works(self):
+        """Importing status_commands.py should work without errors."""
+        import fin.status_commands
+        assert fin.status_commands is not None

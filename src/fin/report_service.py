@@ -76,7 +76,9 @@ class ReportService:
                 - None: All accounts
                 - []: Empty list returns empty report with flag
                 - list: Filter to these accounts only
-            as_of: Historical anchor date (caps all lookbacks to prevent future leakage)
+            as_of: FUTURE - Historical anchor date for pattern detection.
+                Currently used only for cache keying; full implementation
+                (capping lookback queries) is planned for future release.
 
         Returns:
             Report with totals, transactions, integrity info, and version metadata

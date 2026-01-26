@@ -198,14 +198,35 @@ def detect_cash_flow_alerts(
     - Large upcoming charges
     - Unusual spending patterns
 
+    TRUTH CONTRACT: Gated by integrity score. If integrity < 0.8,
+    returns resolution tasks instead of forecasts.
+
     Args:
         conn: Database connection
         days_forward: Days to look ahead
         account_filter: Optional account filter
 
     Returns:
-        List of CashFlowAlert objects
+        List of CashFlowAlert objects (empty if integrity too low)
     """
+    from .report_service import ReportService
+
+    # Check integrity before producing alerts
+    service = ReportService(conn)
+    report = service.report_this_month(account_filter=account_filter)
+
+    if not report.integrity.is_actionable:
+        # Integrity too low - return resolution task instead of forecast
+        return [CashFlowAlert(
+            alert_type="resolution_needed",
+            severity="medium",
+            date=date.today(),
+            message="Resolve data quality issues before viewing projections. "
+                    f"Integrity score: {report.integrity.score:.0%}",
+            amount_cents=None,
+            merchant=None,
+        )]
+
     alerts: list[CashFlowAlert] = []
     today = date.today()
 
@@ -292,30 +313,35 @@ def _estimate_income(
     days_forward: int,
     account_filter: Optional[list[str]] = None,
 ) -> int:
-    """Estimate expected income for the period."""
-    # Get historical income (last 3 months)
-    today = date.today()
-    start = today - timedelta(days=90)
-
-    query = """
-        SELECT SUM(amount_cents) as total
-        FROM transactions
-        WHERE posted_at >= ? AND posted_at < ?
-          AND amount_cents > 0
-          AND COALESCE(pending, 0) = 0
     """
-    params: list = [start.isoformat(), today.isoformat()]
+    Estimate expected income for the period.
 
-    if account_filter:
-        placeholders = ",".join("?" * len(account_filter))
-        query += f" AND account_id IN ({placeholders})"
-        params.extend(account_filter)
+    TRUTH CONTRACT: Uses canonical ReportService to get income.
+    Only counts TransactionType.INCOME - never credits_other.
+    """
+    from .report_service import ReportService
+    from .dates import TimePeriod
 
-    result = conn.execute(query, params).fetchone()
-    total_income = result["total"] or 0
+    # Get last 3 months of reports from canonical source
+    service = ReportService(conn)
+    reports = service.report_periods(
+        TimePeriod.MONTH,
+        num_periods=3,
+        account_filter=account_filter,
+    )
+
+    if not reports:
+        return 0
+
+    # Sum income from canonical reports (only INCOME type, never credits_other)
+    total_income = sum(r.totals.income_cents for r in reports)
+    total_days = sum((r.end_date - r.start_date).days for r in reports)
+
+    if total_days == 0:
+        return 0
 
     # Calculate daily average and project forward
-    daily_avg = total_income / 90
+    daily_avg = total_income / total_days
     return int(daily_avg * days_forward)
 
 
