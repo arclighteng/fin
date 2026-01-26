@@ -15,9 +15,9 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from . import db as dbmod
-from .analysis import TimePeriod, analyze_periods, get_current_period
+from .legacy_analysis import TimePeriod, analyze_periods, get_current_period
 from .categorize import CATEGORIES, get_category_breakdown
-from .classify import detect_alerts, detect_duplicates, detect_sketchy, get_subscriptions, get_bills, detect_cross_account_duplicates, detect_price_changes
+from .legacy_classify import detect_alerts, detect_duplicates, detect_sketchy, get_subscriptions, get_bills, detect_cross_account_duplicates, detect_price_changes
 from .config import Config, load_config
 from .models import Account
 from .normalize import normalize_simplefin_txn
@@ -223,7 +223,7 @@ def dashboard(
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """Main dashboard with financial health overview."""
-    from .analysis import analyze_custom_range
+    from .legacy_analysis import analyze_custom_range
     from calendar import monthrange
 
     # Parse account filter - "none" means show no data (early return)
@@ -884,8 +884,8 @@ def get_transactions_by_type(
     This re-runs the same classification logic used in analysis to ensure
     the drill-down matches exactly what the user sees in the totals.
     """
-    from .analysis import _is_credit_card_account, _is_cc_payment_expense, _is_income_transfer
-    from .classify import _detect_patterns, _is_transfer
+    from .legacy_analysis import _is_credit_card_account, _is_cc_payment_expense, _is_income_transfer
+    from .legacy_classify import _detect_patterns, _is_transfer
 
     valid_types = {"income", "recurring", "discretionary", "transfer"}
     if txn_type not in valid_types:
@@ -1060,7 +1060,7 @@ def get_payee_transactions(
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """Get transactions for a specific payee (drill-down) with enhanced details."""
-    from .classify import _match_known_subscription
+    from .legacy_classify import _match_known_subscription
 
     since = (date.today() - timedelta(days=days)).isoformat()
 

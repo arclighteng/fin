@@ -1,5 +1,14 @@
-# analysis.py
+# legacy_analysis.py
 """
+LEGACY: This module is DEPRECATED for user-facing reporting.
+
+DO NOT USE for new code. Use report_service.py instead.
+
+This module remains for internal utilities and backwards compatibility only.
+All user-facing totals MUST come from ReportService.
+
+---
+Original description:
 Flexible time period analysis engine for income vs spend.
 
 Supports:
@@ -8,13 +17,14 @@ Supports:
 - Yearly view: Last N years
 - Configurable rolling average window
 """
+import warnings
 import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from enum import Enum
 from typing import Callable
 
-from .classify import (
+from .legacy_classify import (
     _detect_patterns,
     _is_transfer,
     _is_credit_card_account,
@@ -22,6 +32,14 @@ from .classify import (
     _is_cc_payment_expense,
     classify_transaction,
     detect_transfer_pairs,
+)
+
+# Emit deprecation warning when module is imported
+warnings.warn(
+    "legacy_analysis is deprecated for user-facing reporting. "
+    "Use report_service.py instead.",
+    DeprecationWarning,
+    stacklevel=2,
 )
 
 

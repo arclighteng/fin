@@ -12,7 +12,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from fin.classify import (
+from fin.legacy_classify import (
     DuplicateGroup,
     detect_duplicates,
     get_subscriptions,

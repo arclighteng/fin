@@ -13,7 +13,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from fin.analysis import (
+from fin.legacy_analysis import (
     TimePeriod,
     PeriodAnalysis,
     _get_period_bounds,

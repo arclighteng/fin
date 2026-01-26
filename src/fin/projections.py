@@ -73,7 +73,7 @@ def project_cash_flow(
     Returns:
         CashFlowProjection with expected income, charges, and net
     """
-    from .classify import _detect_patterns, _match_known_subscription, get_subscriptions, get_bills
+    from .legacy_classify import _detect_patterns, _match_known_subscription, get_subscriptions, get_bills
 
     today = date.today()
     end_date = today + timedelta(days=days_forward)

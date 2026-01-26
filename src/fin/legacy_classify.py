@@ -1,5 +1,15 @@
-# classify.py
+# legacy_classify.py
 """
+LEGACY: This module is DEPRECATED for user-facing reporting.
+
+DO NOT USE summarize_month, classify_month, or detect_alerts for new code.
+Use report_service.py instead.
+
+Detection utilities (get_subscriptions, get_bills, detect_duplicates, detect_sketchy)
+are still valid for anomaly detection, but NOT for producing totals.
+
+---
+Original description:
 Transaction classification engine.
 
 Classifies transactions into:
@@ -22,6 +32,7 @@ Classification priority (for negative amounts):
 2. Recurring patterns → recurring
 3. Default → one-off
 """
+import warnings
 import sqlite3
 import statistics
 from collections import defaultdict
@@ -29,6 +40,15 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 from . import db as dbmod
+
+# Emit deprecation warning for summarize_month/classify_month/detect_alerts
+# Detection utilities (get_subscriptions, etc.) are still valid
+warnings.warn(
+    "legacy_classify.py: summarize_month, classify_month, detect_alerts are deprecated. "
+    "Use report_service.py for user-facing reporting.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 
 # ---------------------------------------------------------------------------

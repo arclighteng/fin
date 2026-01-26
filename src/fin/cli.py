@@ -13,8 +13,8 @@ import typer
 from rich.console import Console
 
 from . import db as dbmod
-from .analysis import TimePeriod, analyze_periods
-from .classify import detect_duplicates, detect_sketchy, get_subscriptions
+from .legacy_analysis import TimePeriod, analyze_periods
+from .legacy_classify import detect_duplicates, detect_sketchy, get_subscriptions
 from .config import load_config
 from .log import setup_logging
 from .models import Account
