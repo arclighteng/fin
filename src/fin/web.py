@@ -52,6 +52,16 @@ from .projections import (
 from .cache import get_cache_stats, invalidate_pattern_cache, invalidate_report_cache
 from .reporting_models import SpendingBucket
 from .security import verify_auth_token
+from .close_books import (
+    close_period,
+    get_closed_period,
+    get_all_closed_periods,
+    get_pending_adjustments,
+    acknowledge_adjustment,
+    get_adjustment_summary,
+    check_for_adjustments_on_ingest,
+    save_statement_match,
+)
 from .simplefin_client import SimpleFinClient
 
 
@@ -73,6 +83,24 @@ class TypeOverrideRequest(BaseModel):
 class CategoryOverrideRequest(BaseModel):
     merchant: str
     category_id: str  # Category ID like "healthcare", "shopping", or "auto" to reset
+
+
+class ClosePeriodRequest(BaseModel):
+    start_date: str  # YYYY-MM-DD
+    end_date: str  # YYYY-MM-DD
+    account_filter: list[str] | None = None
+    notes: str | None = None
+
+
+class AcknowledgeAdjustmentRequest(BaseModel):
+    notes: str | None = None
+
+
+class StatementMatchRequest(BaseModel):
+    fingerprint: str
+    statement_date: str | None = None  # YYYY-MM-DD
+    statement_amount_cents: int | None = None
+    statement_description: str | None = None
 
 
 class DuplicateDismissRequest(BaseModel):
@@ -276,6 +304,8 @@ def dashboard(
             "pending_count": 0,
             "today": date.today(),
             "timedelta": timedelta,
+            "closed_period": None,
+            "pending_adjustments_count": 0,
         })
 
     # Initialize ReportService - THE canonical source of truth
@@ -427,6 +457,20 @@ def dashboard(
 
     # periods_json already computed above using ReportService
 
+    # Check if current period is closed (for close-the-books UI)
+    closed_period = None
+    pending_adjustments_count = 0
+    if current_period:
+        closed_period = get_closed_period(
+            conn,
+            current_period.start_date,
+            current_period.end_date + timedelta(days=1),  # Exclusive end
+            account_filter=account_filter,
+        )
+        # Get all pending adjustments (across all closed periods)
+        all_pending = get_pending_adjustments(conn)
+        pending_adjustments_count = len(all_pending)
+
     return templates.TemplateResponse("dashboard_v2.html", {
         "request": request,
         "period_type": period,
@@ -454,6 +498,9 @@ def dashboard(
         "pending_count": pending_count,
         "today": date.today(),
         "timedelta": timedelta,
+        # Close-the-books context
+        "closed_period": closed_period,
+        "pending_adjustments_count": pending_adjustments_count,
     })
 
 
@@ -1373,12 +1420,18 @@ def api_sync(_auth: bool = Depends(verify_auth_token)):
             # Record sync run for audit log
             dbmod.record_run(conn, 730, fetched, inserted, updated)  # 730 = "all available"
 
+            # Check for post-close adjustments (transactions that landed in closed periods)
+            adjustment_results = check_for_adjustments_on_ingest(conn)
+            adjustment_count = sum(len(adj) for adj in adjustment_results.values())
+
             return JSONResponse(content={
                 "status": "ok",
                 "accounts": len(accounts),
                 "fetched": fetched,
                 "inserted": inserted,
                 "updated": updated,
+                "post_close_adjustments": adjustment_count,
+                "affected_periods": len(adjustment_results),
             })
         finally:
             client.close()
@@ -2198,6 +2251,202 @@ def sync_log_page(
     """
 
     return HTMLResponse(content=html_content)
+
+
+# ---------------------------------------------------------------------------
+# Close-the-Books API
+# ---------------------------------------------------------------------------
+@app.post("/api/close-period")
+def api_close_period(
+    req: ClosePeriodRequest,
+    conn: sqlite3.Connection = Depends(get_db),
+    _auth: bool = Depends(verify_auth_token),
+):
+    """
+    Close a period, creating an official snapshot of totals.
+
+    This is the "close the books" action. Any future transactions
+    landing in this period will be flagged as post-close adjustments.
+    """
+    try:
+        start = date.fromisoformat(req.start_date)
+        end = date.fromisoformat(req.end_date)
+    except ValueError:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Invalid date format. Use YYYY-MM-DD."},
+        )
+
+    period = close_period(
+        conn, start, end,
+        account_filter=req.account_filter,
+        notes=req.notes,
+    )
+
+    return JSONResponse(content={
+        "status": "ok",
+        "closed_period": {
+            "id": period.id,
+            "start_date": period.start_date.isoformat(),
+            "end_date": period.end_date.isoformat(),
+            "closed_at": period.closed_at.isoformat(),
+            "report_hash": period.report_hash,
+            "snapshot_id": period.snapshot_id,
+            "transaction_count": period.transaction_count,
+            "totals": {
+                "income_cents": period.income_cents,
+                "expenses_cents": period.total_expenses_cents,
+                "net_cents": period.net_cents,
+            },
+        },
+    })
+
+
+@app.get("/api/closed-periods")
+def api_closed_periods(conn: sqlite3.Connection = Depends(get_db)):
+    """List all closed periods."""
+    periods = get_all_closed_periods(conn)
+
+    return JSONResponse(content={
+        "closed_periods": [
+            {
+                "id": p.id,
+                "start_date": p.start_date.isoformat(),
+                "end_date": p.end_date.isoformat(),
+                "closed_at": p.closed_at.isoformat(),
+                "report_hash": p.report_hash,
+                "transaction_count": p.transaction_count,
+                "income_cents": p.income_cents,
+                "expenses_cents": p.total_expenses_cents,
+                "net_cents": p.net_cents,
+                "status": p.status,
+            }
+            for p in periods
+        ]
+    })
+
+
+@app.get("/api/closed-period/{period_id}")
+def api_closed_period_detail(
+    period_id: int,
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Get details of a closed period including adjustments."""
+    # Find the period
+    periods = get_all_closed_periods(conn)
+    period = next((p for p in periods if p.id == period_id), None)
+
+    if not period:
+        return JSONResponse(
+            status_code=404,
+            content={"error": "Closed period not found"},
+        )
+
+    # Get adjustment summary
+    summary = get_adjustment_summary(conn, period)
+
+    return JSONResponse(content={
+        "closed_period": {
+            "id": period.id,
+            "start_date": period.start_date.isoformat(),
+            "end_date": period.end_date.isoformat(),
+            "closed_at": period.closed_at.isoformat(),
+            "report_hash": period.report_hash,
+            "snapshot_id": period.snapshot_id,
+            "transaction_count": period.transaction_count,
+            "totals": {
+                "income_cents": period.income_cents,
+                "fixed_obligations_cents": period.fixed_obligations_cents,
+                "variable_essentials_cents": period.variable_essentials_cents,
+                "discretionary_cents": period.discretionary_cents,
+                "one_offs_cents": period.one_offs_cents,
+                "refunds_cents": period.refunds_cents,
+                "transfers_in_cents": period.transfers_in_cents,
+                "transfers_out_cents": period.transfers_out_cents,
+                "total_expenses_cents": period.total_expenses_cents,
+                "net_cents": period.net_cents,
+            },
+            "notes": period.notes,
+        },
+        "adjustments": {
+            "has_pending": summary.has_pending,
+            "pending_count": len(summary.pending_adjustments),
+            "total_adjustment_cents": summary.total_adjustment_cents,
+            "adjusted_net_cents": summary.adjusted_net_cents,
+            "net_change_cents": summary.net_change_cents,
+            "pending": [
+                {
+                    "id": a.id,
+                    "fingerprint": a.fingerprint,
+                    "detected_at": a.detected_at.isoformat(),
+                    "adjustment_type": a.adjustment_type,
+                    "posted_at": a.posted_at.isoformat() if a.posted_at else None,
+                    "amount_cents": a.amount_cents,
+                    "merchant_norm": a.merchant_norm,
+                    "description": a.description,
+                    "status": a.status,
+                }
+                for a in summary.pending_adjustments
+            ],
+        },
+    })
+
+
+@app.get("/api/adjustments")
+def api_all_adjustments(conn: sqlite3.Connection = Depends(get_db)):
+    """Get all pending post-close adjustments across all periods."""
+    adjustments = get_pending_adjustments(conn)
+
+    return JSONResponse(content={
+        "pending_adjustments": [
+            {
+                "id": a.id,
+                "closed_period_id": a.closed_period_id,
+                "fingerprint": a.fingerprint,
+                "detected_at": a.detected_at.isoformat(),
+                "adjustment_type": a.adjustment_type,
+                "posted_at": a.posted_at.isoformat() if a.posted_at else None,
+                "amount_cents": a.amount_cents,
+                "merchant_norm": a.merchant_norm,
+                "description": a.description,
+            }
+            for a in adjustments
+        ],
+        "count": len(adjustments),
+    })
+
+
+@app.post("/api/adjustments/{adjustment_id}/acknowledge")
+def api_acknowledge_adjustment(
+    adjustment_id: int,
+    req: AcknowledgeAdjustmentRequest,
+    conn: sqlite3.Connection = Depends(get_db),
+    _auth: bool = Depends(verify_auth_token),
+):
+    """Acknowledge a post-close adjustment (user accepts it)."""
+    acknowledge_adjustment(conn, adjustment_id, notes=req.notes)
+    return JSONResponse(content={"status": "ok"})
+
+
+@app.post("/api/statement-match")
+def api_statement_match(
+    req: StatementMatchRequest,
+    conn: sqlite3.Connection = Depends(get_db),
+    _auth: bool = Depends(verify_auth_token),
+):
+    """Save a user-confirmed statement-to-transaction match."""
+    stmt_date = date.fromisoformat(req.statement_date) if req.statement_date else None
+
+    save_statement_match(
+        conn,
+        fingerprint=req.fingerprint,
+        statement_date=stmt_date,
+        statement_amount_cents=req.statement_amount_cents,
+        statement_description=req.statement_description,
+        confidence="user_confirmed",
+    )
+
+    return JSONResponse(content={"status": "ok"})
 
 
 # ---------------------------------------------------------------------------
