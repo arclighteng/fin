@@ -180,23 +180,14 @@ def detect_transfer_pairs(
         (start_date.isoformat(), end_date.isoformat()),
     ).fetchall()
 
-    # Build transfer legs
+    # Build transfer legs - consider ALL transactions as potential transfer candidates
+    # Keywords are used as scoring bonus, not as prerequisite (per Truth Contract 5.3)
     outflows: list[TransferLeg] = []
     inflows: list[TransferLeg] = []
 
     for r in rows:
         posted = datetime.fromisoformat(r["posted_at"]).date()
         merchant = r["merchant_norm"]
-
-        # Only consider transactions that look like transfers
-        looks_like_transfer = (
-            _is_transfer_pattern(merchant) or
-            _is_bank_pattern(merchant) or
-            _is_cc_payment(merchant)
-        )
-
-        if not looks_like_transfer:
-            continue
 
         leg = TransferLeg(
             fingerprint=r["fingerprint"],
@@ -257,12 +248,38 @@ def detect_transfer_pairs(
             if days_diff == 0:
                 score += 0.1
 
+            # Bonus for transfer-like keywords (not required, just bonus)
+            outflow_has_keywords = (
+                _is_transfer_pattern(outflow.merchant_norm) or
+                _is_bank_pattern(outflow.merchant_norm) or
+                _is_cc_payment(outflow.merchant_norm)
+            )
+            inflow_has_keywords = (
+                _is_transfer_pattern(inflow.merchant_norm) or
+                _is_bank_pattern(inflow.merchant_norm) or
+                _is_cc_payment(inflow.merchant_norm)
+            )
+            if outflow_has_keywords or inflow_has_keywords:
+                score += 0.15
+            if outflow_has_keywords and inflow_has_keywords:
+                score += 0.1  # Extra bonus if both sides have keywords
+
             if score > best_score:
                 best_score = score
                 best_match = inflow
                 best_reason = _match_reason(outflow, inflow, days_diff, amount_diff)
 
-        if best_match and best_score >= 0.5:
+        # Require higher confidence for matches without transfer keywords
+        min_score = 0.5
+        outflow_has_keywords = (
+            _is_transfer_pattern(outflow.merchant_norm) or
+            _is_bank_pattern(outflow.merchant_norm) or
+            _is_cc_payment(outflow.merchant_norm)
+        )
+        if not outflow_has_keywords:
+            min_score = 0.7  # Higher threshold for non-keyword matches
+
+        if best_match and best_score >= min_score:
             pair_id = str(uuid.uuid4())[:8]  # Short UUID for pair ID
 
             pair = TransferPair(

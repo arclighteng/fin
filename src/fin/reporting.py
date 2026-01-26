@@ -65,10 +65,17 @@ def report_period(
         end_date: End of period (exclusive)
         include_pending: Whether to include pending transactions
         account_filter: Optional list of account IDs to filter
+            - None: All accounts
+            - []: Empty list returns empty report with EMPTY_ACCOUNT_FILTER flag
+            - list: Filter to specified accounts only
 
     Returns:
         Report object with totals, transactions, and integrity info
     """
+    # Handle empty account filter explicitly
+    if account_filter is not None and len(account_filter) == 0:
+        return _empty_report(start_date, end_date)
+
     # Load overrides
     override_registry = OverrideRegistry()
     override_registry.load_from_db(conn)
@@ -281,6 +288,28 @@ def _get_cc_account_ids(conn: sqlite3.Connection) -> set[str]:
         "SELECT account_id FROM accounts WHERE LOWER(type) LIKE '%credit%'"
     ).fetchall()
     return {r["account_id"] for r in rows}
+
+
+def _empty_report(start_date: date, end_date: date) -> Report:
+    """Create an empty report for empty account filter."""
+    return Report(
+        period_label=f"{start_date.isoformat()} to {end_date.isoformat()}",
+        start_date=start_date,
+        end_date=end_date,
+        totals=PeriodTotals(),
+        transactions=[],
+        integrity=IntegrityReport(
+            flags=[IntegrityFlag.EMPTY_ACCOUNT_FILTER],
+            unmatched_transfer_count=0,
+            unclassified_credit_count=0,
+            unclassified_credit_cents=0,
+        ),
+        classifier_version=CLASSIFIER_VERSION,
+        report_version=REPORT_VERSION,
+        transaction_count=0,
+        pending_count=0,
+        report_hash="",
+    )
 
 
 def _compute_report_hash(report: Report) -> str:
