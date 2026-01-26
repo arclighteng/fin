@@ -62,6 +62,7 @@ class IntegrityFlag(Enum):
     RECONCILIATION_FAILED = auto()    # Statement doesn't match
     FUTURE_DATA_LEAK = auto()         # Pattern detection used future data
     PENDING_IN_TOTALS = auto()        # Pending mixed with posted
+    EMPTY_ACCOUNT_FILTER = auto()     # account_filter=[] explicitly returned empty
 
 
 class SpendingBucket(Enum):
@@ -195,6 +196,7 @@ class IntegrityReport:
             IntegrityFlag.RECONCILIATION_FAILED: 0.20,
             IntegrityFlag.FUTURE_DATA_LEAK: 0.15,
             IntegrityFlag.PENDING_IN_TOTALS: 0.10,
+            IntegrityFlag.EMPTY_ACCOUNT_FILTER: 0.0,  # Not an error, just informational
         }
         total_penalty = sum(penalties.get(f, 0.05) for f in self.flags)
         return max(0.0, 1.0 - total_penalty)
@@ -230,6 +232,7 @@ class Report:
     classifier_version: str = "1.0.0"
     report_version: str = "1.0.0"
     report_hash: Optional[str] = None  # SHA256 of canonical JSON
+    snapshot_id: Optional[str] = None  # Data snapshot identifier
 
     # Counts
     transaction_count: int = 0
