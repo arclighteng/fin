@@ -2688,6 +2688,18 @@
         </button>
     </nav>
 
+    <!-- Auth helpers - must be defined before content block for child templates -->
+    <script>
+        const API_TOKEN = '{{ api_token() or "" }}';
+        function getAuthHeaders() {
+            const headers = { 'Content-Type': 'application/json' };
+            if (API_TOKEN) {
+                headers['Authorization'] = 'Bearer ' + API_TOKEN;
+            }
+            return headers;
+        }
+    </script>
+
     <div class="container">
         {% block content %}{% endblock %}
     </div>
@@ -2774,6 +2786,7 @@
                 // Smart sync: API auto-detects bootstrap (400 days) vs incremental (30 days)
                 const response = await fetch('/api/sync', {
                     method: 'POST',
+                    headers: getAuthHeaders(),
                 });
                 const data = await response.json();
 
@@ -2914,7 +2927,7 @@
             try {
                 const response = await fetch('/api/alert-action', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: getAuthHeaders(),
                     body: JSON.stringify({ alert_key: alertKey, action: action })
                 });
                 if (response.ok) {
@@ -2948,7 +2961,7 @@
             try {
                 const response = await fetch('/api/income-source', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: getAuthHeaders(),
                     body: JSON.stringify({ merchant: merchant, is_income: isIncome })
                 });
                 if (response.ok) {
@@ -3089,7 +3102,7 @@
             try {
                 const response = await fetch('/api/type-override', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: getAuthHeaders(),
                     body: JSON.stringify({ merchant: merchant, override_type: newType })
                 });
 
@@ -3162,7 +3175,7 @@
             try {
                 const response = await fetch('/api/category-override', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: getAuthHeaders(),
                     body: JSON.stringify({
                         merchant: categoryModalMerchant,
                         category_id: categoryId

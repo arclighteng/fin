@@ -168,6 +168,10 @@ app = FastAPI()
 templates_dir = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(templates_dir))
 
+# Add API token to template globals for frontend auth
+from .security import get_api_token
+templates.env.globals["api_token"] = get_api_token
+
 # ---------------------------------------------------------------------------
 # Startup: initialize config and database once
 # ---------------------------------------------------------------------------

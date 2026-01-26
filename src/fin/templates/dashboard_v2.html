@@ -1036,7 +1036,7 @@ async function alertAction(alertKey, action) {
     try {
         const response = await fetch('/api/alert-action', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getAuthHeaders(),
             body: JSON.stringify({ alert_key: alertKey, action: action })
         });
         if (response.ok) {
@@ -1158,7 +1158,7 @@ async function closePeriod() {
     try {
         const response = await fetch('/api/close-period', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getAuthHeaders(),
             body: JSON.stringify({
                 start_date: startDate,
                 end_date: endDate,
