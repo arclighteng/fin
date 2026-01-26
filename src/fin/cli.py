@@ -2423,9 +2423,15 @@ def web(
 
     By default, binds to localhost (127.0.0.1) only.
     Use --host 0.0.0.0 to allow LAN access (not recommended without auth).
+
+    API Authentication:
+    - Mutation endpoints (POST/DELETE) require bearer token auth
+    - Set FIN_API_TOKEN env var for a fixed token, or use the auto-generated one
+    - Set FIN_AUTH_DISABLED=1 to disable auth (not recommended for LAN access)
     """
     import uvicorn
     from pathlib import Path
+    from .security import get_auth_info
 
     cfg = load_config()
     db_path = Path(cfg.db_path)
@@ -2445,6 +2451,14 @@ def web(
     if host == "0.0.0.0":
         console.print("[yellow]Warning: Binding to all interfaces (0.0.0.0). Your financial data will be accessible on the network.[/yellow]")
         console.print()
+
+    # Show auth info
+    auth_info = get_auth_info()
+    if auth_info["auth_enabled"]:
+        console.print(f"[dim]API Token:[/dim] {auth_info['full_token']} [dim]({auth_info['source']})[/dim]")
+        console.print("[dim]Use: Authorization: Bearer <token> for POST/DELETE endpoints[/dim]")
+    else:
+        console.print("[yellow]API Auth: Disabled[/yellow] (set FIN_API_TOKEN to enable)")
 
     console.print(f"[dim]Dashboard:[/dim] http://{host if host != '0.0.0.0' else '127.0.0.1'}:{port}/dashboard")
     console.print()

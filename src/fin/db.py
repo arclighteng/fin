@@ -130,6 +130,12 @@ CREATE TABLE IF NOT EXISTS txn_type_overrides (
 
 -- Index for fast fingerprint lookup
 CREATE INDEX IF NOT EXISTS idx_txn_type_overrides_fp ON txn_type_overrides(fingerprint);
+
+-- Performance indexes for common query patterns
+CREATE INDEX IF NOT EXISTS idx_txn_posted_at ON transactions(posted_at);
+CREATE INDEX IF NOT EXISTS idx_txn_account_posted ON transactions(account_id, posted_at);
+CREATE INDEX IF NOT EXISTS idx_txn_pending ON transactions(pending) WHERE pending = 1;
+CREATE INDEX IF NOT EXISTS idx_txn_amount ON transactions(amount_cents);
 """
 
 

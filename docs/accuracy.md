@@ -122,6 +122,24 @@ Issues discovered and fixed during implementation:
 | Medium | "amazon.com" didn't match "amazon" | Split only on spaces | Split on spaces and punctuation | test_first_word_match |
 | Low | Refund keyword in merchant name | "unknown credit" → REFUND | Correct behavior, test updated | test_resolution_tasks |
 
+## Security Baseline
+
+| Control | Implementation | Notes |
+|---------|---------------|-------|
+| .env excluded | .gitignore has `.env` | Secrets never committed |
+| HTML escaping | `html.escape()` on user data | Prevents XSS |
+| CSV sanitization | `sanitize_csv_field()` | Prevents formula injection |
+| localhost-only | Default `--host 127.0.0.1` | Warning if 0.0.0.0 used |
+| Mutation auth | Bearer token on POST/DELETE | FIN_API_TOKEN or auto-generated |
+
+### API Authentication
+
+- **Enabled by default**: Auto-generates session token on startup
+- **Custom token**: Set `FIN_API_TOKEN` env var
+- **Disable**: Set `FIN_AUTH_DISABLED=1` (not recommended for LAN)
+- **Read-only endpoints**: Always public for local dashboard use
+- **Mutation endpoints**: Require `Authorization: Bearer <token>` header
+
 ## Invariants (Checked at Runtime)
 
 1. `sum(all_txn_amounts) == income + credits - expenses - transfers_out + transfers_in`
