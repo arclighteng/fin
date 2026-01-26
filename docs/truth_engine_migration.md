@@ -133,12 +133,16 @@ Eliminate all legacy truth paths. ALL user-visible numbers must come from `repor
 - [ ] Custom range → ReportService
 
 ### Commits 7-8: CLI Migration (Step 4)
-- [ ] `fin status` → ReportService
-- [ ] `fin drill` → ReportService
-- [ ] `fin trend` → ReportService
-- [ ] `fin report` → ReportService
-- [ ] `fin month` → ReportService
-- [ ] `fin export-summary` → ReportService
+**DEFERRED**: CLI commands use MonthSummary which includes cadence data not in Report model.
+Full migration requires adding cadence to ClassifiedTransaction or querying patterns.
+
+Current state (acceptable for now):
+- [x] CLI still imports legacy_classify (with deprecation warning)
+- [x] CLI totals are consistent with legacy logic
+- [ ] FUTURE: `fin status` → ReportService
+- [ ] FUTURE: `fin drill` → ReportService
+- [ ] FUTURE: `fin trend` → ReportService
+- [ ] FUTURE: `fin export-summary` → ReportService
 
 ### Commits 9-11: Truth Leaks (Step 5)
 - [ ] Pending filter consistency
