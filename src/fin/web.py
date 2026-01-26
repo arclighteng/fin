@@ -15,9 +15,12 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from . import db as dbmod
-from .legacy_analysis import TimePeriod, analyze_periods, get_current_period
+from .dates import TimePeriod  # Use canonical TimePeriod from dates module
 from .categorize import CATEGORIES, get_category_breakdown
 from .legacy_classify import detect_alerts, detect_duplicates, detect_sketchy, get_subscriptions, get_bills, detect_cross_account_duplicates, detect_price_changes
+from .legacy_analysis import analyze_periods  # Still needed for export_summary until fully migrated
+from .report_service import ReportService
+from .view_models import PeriodViewModel, reports_to_json
 from .config import Config, load_config
 from .models import Account
 from .normalize import normalize_simplefin_txn
@@ -223,7 +226,6 @@ def dashboard(
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """Main dashboard with financial health overview."""
-    from .legacy_analysis import analyze_custom_range
     from calendar import monthrange
 
     # Parse account filter - "none" means show no data (early return)
@@ -276,25 +278,38 @@ def dashboard(
             "timedelta": timedelta,
         })
 
+    # Initialize ReportService - THE canonical source of truth
+    report_service = ReportService(conn)
+
     # Compute date range based on period type
     today = date.today()
     custom_start = None
     custom_end = None
-    custom_analysis = None
+    current_period = None
 
     if start_date and end_date:
         # Explicit date range provided
         try:
             custom_start = date.fromisoformat(start_date)
             custom_end = date.fromisoformat(end_date)
-            custom_analysis = analyze_custom_range(conn, custom_start, custom_end, account_filter=account_filter)
+            # end_date is inclusive in UI, convert to exclusive for report_period
+            report = report_service.report_period(
+                custom_start, custom_end + timedelta(days=1),
+                account_filter=account_filter
+            )
+            current_period = PeriodViewModel.from_report(report)
         except ValueError:
             pass  # Invalid dates, ignore
     elif period == "this_month":
         # Current calendar month (1st of month through today)
         custom_start = date(today.year, today.month, 1)
         custom_end = today
-        custom_analysis = analyze_custom_range(conn, custom_start, custom_end, account_filter=account_filter)
+        # end_date is inclusive, add 1 day for exclusive
+        report = report_service.report_period(
+            custom_start, custom_end + timedelta(days=1),
+            account_filter=account_filter
+        )
+        current_period = PeriodViewModel.from_report(report)
     elif period == "last_month":
         # Previous complete calendar month
         if today.month == 1:
@@ -306,12 +321,22 @@ def dashboard(
         custom_start = date(last_month_year, last_month, 1)
         _, last_day = monthrange(last_month_year, last_month)
         custom_end = date(last_month_year, last_month, last_day)
-        custom_analysis = analyze_custom_range(conn, custom_start, custom_end, account_filter=account_filter)
+        report = report_service.report_period(
+            custom_start, custom_end + timedelta(days=1),
+            account_filter=account_filter
+        )
+        current_period = PeriodViewModel.from_report(report)
 
     # Get period analysis for historical comparison (use MONTH for trend data)
-    period_type = _period_type_from_str("month")
-    periods = analyze_periods(conn, period_type, num_periods=6, avg_window=3, account_filter=account_filter)
-    current_period = custom_analysis if custom_analysis else (periods[0] if periods else None)
+    # Using ReportService for canonical numbers
+    reports = report_service.report_periods(
+        TimePeriod.MONTH, num_periods=6, account_filter=account_filter
+    )
+    periods_json = reports_to_json(reports)
+
+    # Use current_period from custom range, or first historical period
+    if current_period is None and reports:
+        current_period = PeriodViewModel.from_report(reports[0])
 
     # Get alerts (sketchy charges) - fetch enough history to cover any selected range
     all_alerts = detect_sketchy(conn, days=400, account_filter=account_filter)
@@ -400,18 +425,7 @@ def dashboard(
     # Detect subscription price changes
     price_changes = detect_price_changes(conn, days=180, account_filter=account_filter)
 
-    # Serialize periods for Chart.js
-    periods_json = [
-        {
-            "period_label": p.period_label,
-            "income_cents": p.income_cents,
-            "credit_cents": p.credit_cents,  # Refunds, rewards, adjustments
-            "recurring_cents": p.recurring_cents,
-            "discretionary_cents": p.discretionary_cents,
-            "net_cents": p.net_cents,
-        }
-        for p in periods
-    ] if periods else []
+    # periods_json already computed above using ReportService
 
     return templates.TemplateResponse("dashboard_v2.html", {
         "request": request,
