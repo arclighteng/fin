@@ -74,9 +74,15 @@ cents = (Decimal(str(amount)) * 100).quantize(
 
 ### 7. One Canonical Report Engine
 
-- `report_period()` is the ONLY source of truth
-- Web, CLI, and exports all call the same function
-- No parallel recomputation of totals
+- `ReportService.report_period()` is the ONLY source of truth
+- Web dashboard uses `ReportService` + `PeriodViewModel` adapter
+- CLI currently uses legacy (migration deferred - see docs/truth_engine_migration.md)
+- No parallel recomputation of totals in new code
+
+**Report Reproducibility:**
+- Every report includes `report_hash` (SHA256 of canonical JSON)
+- Every report includes `snapshot_id` (hash of DB state)
+- Same snapshot_id + inputs → same report_hash (reproducible)
 
 ### 8. Recommendations Gated by Integrity
 
@@ -105,6 +111,7 @@ cents = (Decimal(str(amount)) * 100).quantize(
 | `RECONCILIATION_FAILED` | Critical | Match statement totals |
 | `FUTURE_DATA_LEAK` | Critical | Fix anchor_date in patterns |
 | `PENDING_IN_TOTALS` | Medium | Separate pending properly |
+| `EMPTY_ACCOUNT_FILTER` | Info | Empty filter explicitly returns empty report |
 
 ## Findings Log
 
@@ -118,6 +125,7 @@ Issues discovered and fixed during implementation:
 | High | Pending in totals | No pending filter | Added COALESCE(pending, 0) = 0 | test_pending_excluded |
 | High | Float rounding errors | Using float for money | Decimal with ROUND_HALF_UP | test_money_rounding |
 | Medium | Empty account filter = all | `if account_filter:` | Check for empty list explicitly | test_empty_filter |
+| Medium | Transfer requires keywords | Must look like transfer | Keywords are bonus, not prereq | test_transfer_pairing |
 | Medium | "purchase" matched "chase" | Substring match for banks | Use word-boundary regex | test_bank_keywords |
 | Medium | "amazon.com" didn't match "amazon" | Split only on spaces | Split on spaces and punctuation | test_first_word_match |
 | Low | Refund keyword in merchant name | "unknown credit" → REFUND | Correct behavior, test updated | test_resolution_tasks |
