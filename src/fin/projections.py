@@ -2,10 +2,16 @@
 """
 Cash flow projections and alerts.
 
-TRUTH CONTRACT:
-- Projections are based on detected patterns (subscriptions, bills, income)
-- Alerts warn about potential shortfalls
-- Never assume income from unclassified credits
+HEURISTIC MODULE - NOT CANONICAL:
+These projections use pattern detection heuristics from legacy_classify
+to predict future charges. Results are estimates, not canonical numbers.
+
+- Income estimation uses canonical ReportService (truthful)
+- Subscription/bill detection uses legacy pattern matching (heuristic)
+- All projections should display confidence scores to users
+- Alerts are gated by integrity score (only show if is_actionable)
+
+TODO: Migrate subscription detection to canonical source when available.
 """
 import sqlite3
 from dataclasses import dataclass
@@ -31,7 +37,12 @@ class UpcomingCharge:
 
 @dataclass
 class CashFlowProjection:
-    """Cash flow projection for a future period."""
+    """
+    Cash flow projection for a future period.
+
+    HEURISTIC: These are predictions based on pattern detection,
+    not canonical numbers. Always display confidence to users.
+    """
     start_date: date
     end_date: date
     expected_income_cents: int
@@ -41,6 +52,7 @@ class CashFlowProjection:
     expected_net_cents: int
     upcoming_charges: list[UpcomingCharge]
     confidence: float
+    is_heuristic: bool = True  # Always true - projections are never canonical
 
 
 @dataclass
@@ -62,8 +74,11 @@ def project_cash_flow(
     """
     Project cash flow for the next N days.
 
-    Identifies expected income and upcoming charges based on
-    detected patterns.
+    HEURISTIC: Uses pattern detection to predict upcoming charges.
+    Results include confidence scores - display these to users.
+
+    - Income: From canonical ReportService (truthful)
+    - Subscriptions/bills: From legacy pattern detection (heuristic)
 
     Args:
         conn: Database connection
@@ -71,7 +86,7 @@ def project_cash_flow(
         account_filter: Optional account filter
 
     Returns:
-        CashFlowProjection with expected income, charges, and net
+        CashFlowProjection with expected income, charges, and confidence
     """
     from .legacy_classify import _detect_patterns, _match_known_subscription, get_subscriptions, get_bills
 
@@ -189,25 +204,31 @@ def detect_cash_flow_alerts(
     conn: sqlite3.Connection,
     days_forward: int = 30,
     account_filter: Optional[list[str]] = None,
+    min_confidence: float = 0.5,
 ) -> list[CashFlowAlert]:
     """
     Detect potential cash flow issues.
+
+    HEURISTIC: Based on pattern detection, not canonical numbers.
+    All alerts should be presented with appropriate confidence caveats.
 
     Alerts include:
     - Projected shortfall (expenses > income)
     - Large upcoming charges
     - Unusual spending patterns
 
-    TRUTH CONTRACT: Gated by integrity score. If integrity < 0.8,
-    returns resolution tasks instead of forecasts.
+    Gating:
+    - Integrity score must be >= 0.8 (is_actionable)
+    - Projection confidence must be >= min_confidence
 
     Args:
         conn: Database connection
         days_forward: Days to look ahead
         account_filter: Optional account filter
+        min_confidence: Minimum projection confidence to show alerts
 
     Returns:
-        List of CashFlowAlert objects (empty if integrity too low)
+        List of CashFlowAlert objects (empty if gating fails)
     """
     from .report_service import ReportService
 
@@ -231,6 +252,18 @@ def detect_cash_flow_alerts(
     today = date.today()
 
     projection = project_cash_flow(conn, days_forward, account_filter)
+
+    # Check projection confidence threshold
+    if projection.confidence < min_confidence:
+        return [CashFlowAlert(
+            alert_type="low_confidence",
+            severity="low",
+            date=today,
+            message=f"Projection confidence too low ({projection.confidence:.0%}). "
+                    "Need more transaction history for reliable predictions.",
+            amount_cents=None,
+            merchant=None,
+        )]
 
     # Check for shortfall
     if projection.expected_net_cents < 0:

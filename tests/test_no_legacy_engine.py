@@ -41,6 +41,9 @@ FORBIDDEN_IMPORTS = {
 }
 
 # Allowed legacy imports (detection utilities, not totals)
+# NOTE: Internal functions (_detect_patterns, _is_transfer, etc.) are NOT
+# allowed in web.py - they were removed when /api/transactions-by-type was
+# migrated to canonical ReportService.
 ALLOWED_LEGACY_IMPORTS = {
     "detect_alerts",
     "detect_duplicates",
@@ -49,15 +52,26 @@ ALLOWED_LEGACY_IMPORTS = {
     "get_bills",
     "detect_cross_account_duplicates",
     "detect_price_changes",
+    "KNOWN_SUBSCRIPTIONS",
+    "_SORTED_SUBSCRIPTION_PATTERNS",
+    "TimePeriod",  # Can be imported from dates.py but also legacy
+}
+
+# Legacy imports that are ONLY allowed in projections.py (heuristic module)
+# These are NOT allowed in web.py or other user-facing code
+PROJECTIONS_ONLY_IMPORTS = {
     "_match_known_subscription",
+    "_detect_patterns",
+}
+
+# Legacy imports that should NOT be in web.py at all (drilldowns migrated)
+# Note: _match_known_subscription IS allowed - it's a display utility for /api/payee
+WEB_FORBIDDEN_LEGACY_INTERNALS = {
     "_detect_patterns",
     "_is_transfer",
     "_is_credit_card_account",
     "_is_cc_payment_expense",
     "_is_income_transfer",
-    "KNOWN_SUBSCRIPTIONS",
-    "_SORTED_SUBSCRIPTION_PATTERNS",
-    "TimePeriod",  # Can be imported from dates.py but also legacy
 }
 
 
@@ -280,3 +294,109 @@ class TestNoDeprecationWarningsInNormalPath:
         """Importing status_commands.py should work without errors."""
         import fin.status_commands
         assert fin.status_commands is not None
+
+
+class TestWebDrilldownsCanonical:
+    """Ensure web drilldowns use canonical ReportService, not legacy functions."""
+
+    def test_web_uses_category_breakdown_from_report(self):
+        """web.py should use category_breakdown_from_report, not get_category_breakdown."""
+        web_py = SRC_ROOT / "web.py"
+        content = web_py.read_text(encoding="utf-8")
+
+        # Should import from view_models
+        assert "category_breakdown_from_report" in content, (
+            "web.py should use category_breakdown_from_report from view_models"
+        )
+
+        # Should NOT import get_category_breakdown from categorize
+        assert "from .categorize import" not in content or "get_category_breakdown" not in content, (
+            "web.py should NOT import get_category_breakdown - use category_breakdown_from_report instead"
+        )
+
+    def test_web_transactions_by_type_uses_report_service(self):
+        """The /api/transactions-by-type endpoint should use ReportService."""
+        web_py = SRC_ROOT / "web.py"
+        content = web_py.read_text(encoding="utf-8")
+
+        # Find the transactions-by-type function
+        match = re.search(
+            r'@app\.get\("/api/transactions-by-type"\).*?def get_transactions_by_type\(.*?\):.*?""".*?"""(.*?)(?=\n@app\.|def \w+\(|\Z)',
+            content,
+            re.DOTALL
+        )
+
+        if match:
+            func_body = match.group(1)
+
+            # Should use ReportService
+            assert "ReportService" in func_body, (
+                "/api/transactions-by-type should use ReportService for canonical transactions"
+            )
+
+            # Should NOT import legacy internal functions
+            assert "_detect_patterns" not in func_body, (
+                "/api/transactions-by-type should NOT use _detect_patterns"
+            )
+            assert "_is_transfer" not in func_body, (
+                "/api/transactions-by-type should NOT use _is_transfer"
+            )
+
+    def test_web_no_legacy_internal_imports(self):
+        """web.py should not import legacy internal functions."""
+        web_py = SRC_ROOT / "web.py"
+        content = web_py.read_text(encoding="utf-8")
+
+        # Parse AST to find imports
+        tree = ast.parse(content)
+        imported_names = set()
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                if node.module and "legacy" in node.module:
+                    for alias in node.names:
+                        imported_names.add(alias.name)
+
+        # Check for forbidden internal legacy imports
+        forbidden_found = imported_names & WEB_FORBIDDEN_LEGACY_INTERNALS
+        if forbidden_found:
+            pytest.fail(
+                f"web.py imports forbidden legacy internal functions: {forbidden_found}\n"
+                f"These should have been removed when drilldowns migrated to ReportService."
+            )
+
+    def test_dashboard_category_breakdown_is_canonical(self):
+        """Dashboard should use canonical category breakdown from Report."""
+        web_py = SRC_ROOT / "web.py"
+        content = web_py.read_text(encoding="utf-8")
+
+        # Find the dashboard function's category breakdown section
+        # Should see: category_breakdown_from_report(current_report)
+        # Should NOT see: get_category_breakdown(conn, ...)
+        assert "category_breakdown_from_report(current_report)" in content, (
+            "Dashboard should compute category_breakdown from current_report"
+        )
+
+        assert "get_category_breakdown(conn," not in content or "get_category_breakdown(" not in content, (
+            "Dashboard should NOT call get_category_breakdown - use category_breakdown_from_report"
+        )
+
+    def test_projections_labeled_heuristic(self):
+        """projections.py should be clearly labeled as heuristic, not canonical."""
+        proj_py = SRC_ROOT / "projections.py"
+        content = proj_py.read_text(encoding="utf-8")
+
+        # Module docstring should say HEURISTIC
+        assert "HEURISTIC" in content[:500], (
+            "projections.py should have HEURISTIC label in module docstring"
+        )
+
+        # CashFlowProjection should have is_heuristic flag
+        assert "is_heuristic" in content, (
+            "CashFlowProjection should have is_heuristic flag"
+        )
+
+        # detect_cash_flow_alerts should have confidence gating
+        assert "min_confidence" in content, (
+            "detect_cash_flow_alerts should have confidence threshold gating"
+        )

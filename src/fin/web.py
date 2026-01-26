@@ -16,11 +16,11 @@ from pydantic import BaseModel
 
 from . import db as dbmod
 from .dates import TimePeriod  # Use canonical TimePeriod from dates module
-from .categorize import CATEGORIES, get_category_breakdown
+from .categorize import CATEGORIES
 from .legacy_classify import detect_alerts, detect_duplicates, detect_sketchy, get_subscriptions, get_bills, detect_cross_account_duplicates, detect_price_changes
 # Detection utilities allowed; totals functions (analyze_periods) have been migrated to ReportService
 from .report_service import ReportService
-from .view_models import PeriodViewModel, reports_to_json, compute_period_trends
+from .view_models import PeriodViewModel, reports_to_json, compute_period_trends, category_breakdown_from_report
 from .config import Config, load_config
 from .models import Account
 from .normalize import normalize_simplefin_txn
@@ -316,6 +316,7 @@ def dashboard(
     custom_start = None
     custom_end = None
     current_period = None
+    current_report = None  # Track the Report for category breakdown
 
     if start_date and end_date:
         # Explicit date range provided
@@ -323,11 +324,11 @@ def dashboard(
             custom_start = date.fromisoformat(start_date)
             custom_end = date.fromisoformat(end_date)
             # end_date is inclusive in UI, convert to exclusive for report_period
-            report = report_service.report_period(
+            current_report = report_service.report_period(
                 custom_start, custom_end + timedelta(days=1),
                 account_filter=account_filter
             )
-            current_period = PeriodViewModel.from_report(report)
+            current_period = PeriodViewModel.from_report(current_report)
         except ValueError:
             pass  # Invalid dates, ignore
     elif period == "this_month":
@@ -335,11 +336,11 @@ def dashboard(
         custom_start = date(today.year, today.month, 1)
         custom_end = today
         # end_date is inclusive, add 1 day for exclusive
-        report = report_service.report_period(
+        current_report = report_service.report_period(
             custom_start, custom_end + timedelta(days=1),
             account_filter=account_filter
         )
-        current_period = PeriodViewModel.from_report(report)
+        current_period = PeriodViewModel.from_report(current_report)
     elif period == "last_month":
         # Previous complete calendar month
         if today.month == 1:
@@ -351,11 +352,11 @@ def dashboard(
         custom_start = date(last_month_year, last_month, 1)
         _, last_day = monthrange(last_month_year, last_month)
         custom_end = date(last_month_year, last_month, last_day)
-        report = report_service.report_period(
+        current_report = report_service.report_period(
             custom_start, custom_end + timedelta(days=1),
             account_filter=account_filter
         )
-        current_period = PeriodViewModel.from_report(report)
+        current_period = PeriodViewModel.from_report(current_report)
 
     # Get period analysis for historical comparison (use MONTH for trend data)
     # Using ReportService for canonical numbers
@@ -366,7 +367,8 @@ def dashboard(
 
     # Use current_period from custom range, or first historical period
     if current_period is None and reports:
-        current_period = PeriodViewModel.from_report(reports[0])
+        current_report = reports[0]
+        current_period = PeriodViewModel.from_report(current_report)
 
     # Get alerts (sketchy charges) - fetch enough history to cover any selected range
     all_alerts = detect_sketchy(conn, days=400, account_filter=account_filter)
@@ -423,29 +425,23 @@ def dashboard(
     # Get income rules for UI state
     income_sources, excluded_sources = dbmod.get_income_rules(conn)
 
-    # Get category breakdown for current period
+    # Get category breakdown from canonical Report (not separate DB query)
     category_breakdown = []
-    if current_period:
-        category_breakdown = get_category_breakdown(
-            conn,
-            current_period.start_date.isoformat(),
-            current_period.end_date.isoformat(),
-            account_filter=account_filter,
-        )
+    if current_report:
+        category_breakdown = category_breakdown_from_report(current_report)
 
     # Detect if viewing expense-only accounts (all credit cards)
     expense_only_view = _are_expense_only_accounts(all_accounts, account_filter)
 
     # Count pending transactions in current period
+    # Note: current_period.end_date is already EXCLUSIVE (from Report), no +1 needed
     pending_count = 0
     if current_period:
-        # Convert inclusive end to exclusive (add 1 day)
-        end_exclusive = (current_period.end_date + timedelta(days=1)).isoformat()
         query = """
             SELECT COUNT(*) FROM transactions
             WHERE posted_at >= ? AND posted_at < ? AND pending = 1
         """
-        params = [current_period.start_date.isoformat(), end_exclusive]
+        params = [current_period.start_date.isoformat(), current_period.end_date.isoformat()]
         if account_filter:
             placeholders = ",".join("?" * len(account_filter))
             query += f" AND account_id IN ({placeholders})"
@@ -942,11 +938,9 @@ def get_transactions_by_type(
     """
     Get transactions classified as a specific type for drill-down.
 
-    This re-runs the same classification logic used in analysis to ensure
-    the drill-down matches exactly what the user sees in the totals.
+    Uses canonical ReportService to ensure drill-down matches totals exactly.
     """
-    from .legacy_analysis import _is_credit_card_account, _is_cc_payment_expense, _is_income_transfer
-    from .legacy_classify import _detect_patterns, _is_transfer
+    from .reporting_models import TransactionType, SpendingBucket
 
     valid_types = {"income", "recurring", "discretionary", "transfer"}
     if txn_type not in valid_types:
@@ -957,91 +951,59 @@ def get_transactions_by_type(
     if accounts and accounts.lower() != "none":
         account_filter = [a.strip() for a in accounts.split(",") if a.strip()]
 
-    # Get user-marked income rules
-    income_sources, excluded_sources = dbmod.get_income_rules(conn)
-
-    # Detect patterns for recurring classification
-    patterns = _detect_patterns(conn, lookback_days=800)
-
-    # Get account info to determine account types
-    account_types: dict[str, tuple[bool, str]] = {}  # account_id -> (is_credit_card, name)
+    # Get account names for display
+    account_names: dict[str, str] = {}
     for acc in conn.execute("SELECT account_id, name FROM accounts").fetchall():
-        account_types[acc["account_id"]] = (_is_credit_card_account(acc["name"]), acc["name"])
+        account_names[acc["account_id"]] = acc["name"]
 
-    # Convert inclusive end to exclusive (add 1 day)
-    end_exclusive = (date.fromisoformat(end_date) + timedelta(days=1)).isoformat()
+    # Use canonical ReportService for transactions
+    # end_date is inclusive in UI, add 1 day for exclusive
+    end_exclusive = date.fromisoformat(end_date) + timedelta(days=1)
+    report = ReportService(conn).report_period(
+        date.fromisoformat(start_date),
+        end_exclusive,
+        include_pending=False,
+        account_filter=account_filter,
+    )
 
-    # Build query (end-exclusive internally)
-    query = """
-        SELECT
-            t.posted_at,
-            t.account_id,
-            t.amount_cents,
-            TRIM(LOWER(COALESCE(NULLIF(t.merchant,''), NULLIF(t.description,''), ''))) AS merchant_norm,
-            COALESCE(t.description, t.merchant, '') AS raw_description,
-            COALESCE(t.pending, 0) AS pending
-        FROM transactions t
-        WHERE t.posted_at >= ? AND t.posted_at < ?
-    """
-    params: list = [start_date, end_exclusive]
-
-    if account_filter:
-        placeholders = ",".join("?" * len(account_filter))
-        query += f" AND t.account_id IN ({placeholders})"
-        params.extend(account_filter)
-
-    query += " ORDER BY t.posted_at DESC"
-    rows = conn.execute(query, params).fetchall()
-
-    # Classify each transaction and collect matching ones
+    # Filter transactions by requested type using canonical classification
     results = []
-    for r in rows:
-        amount = r["amount_cents"]
-        merchant_norm = r["merchant_norm"]
-        account_id = r["account_id"]
-        is_cc, account_name = account_types.get(account_id, (False, "Unknown"))
-        pattern = patterns.get(merchant_norm)
+    for txn in report.transactions:
+        # Map UI type names to canonical TransactionType/SpendingBucket
+        matches = False
+        if txn_type == "income":
+            matches = txn.txn_type == TransactionType.INCOME
+        elif txn_type == "recurring":
+            matches = (
+                txn.txn_type == TransactionType.EXPENSE and
+                txn.spending_bucket == SpendingBucket.FIXED_OBLIGATIONS
+            )
+        elif txn_type == "discretionary":
+            matches = (
+                txn.txn_type == TransactionType.EXPENSE and
+                txn.spending_bucket in (
+                    SpendingBucket.VARIABLE_ESSENTIALS,
+                    SpendingBucket.DISCRETIONARY,
+                    SpendingBucket.ONE_OFFS,
+                )
+            )
+        elif txn_type == "transfer":
+            matches = txn.txn_type == TransactionType.TRANSFER
 
-        is_user_marked_income = any(src in merchant_norm for src in income_sources)
-        is_user_excluded = any(src in merchant_norm for src in excluded_sources)
-
-        # Classify this transaction
-        classified_type = None
-        if amount > 0:
-            if is_cc:
-                classified_type = "transfer"
-            elif is_user_excluded:
-                classified_type = "transfer"
-            elif is_user_marked_income:
-                classified_type = "income"
-            elif _is_income_transfer(merchant_norm):
-                classified_type = "transfer"
-            else:
-                classified_type = "income"
-        else:
-            abs_amount = abs(amount)
-            if not is_cc and _is_cc_payment_expense(merchant_norm):
-                classified_type = "transfer"
-            elif pattern and pattern.is_transfer:
-                classified_type = "transfer"
-            elif _is_transfer(merchant_norm):
-                classified_type = "transfer"
-            elif pattern and pattern.is_recurring:
-                classified_type = "recurring"
-            else:
-                classified_type = "discretionary"
-
-        # Include if it matches the requested type
-        if classified_type == txn_type:
+        if matches:
             results.append({
-                "date": r["posted_at"][:10],
-                "amount_cents": amount,
-                "merchant": merchant_norm,
-                "description": r["raw_description"],
-                "account_name": account_name,
-                "pending": bool(r["pending"]),
+                "date": txn.posted_at.isoformat(),
+                "amount_cents": txn.amount_cents,
+                "merchant": txn.merchant_norm,
+                "description": txn.raw_description,
+                "account_name": account_names.get(txn.account_id, "Unknown"),
+                "pending": txn.pending_status.value == "pending",
+                "bucket": txn.spending_bucket.value if txn.spending_bucket else None,
+                "category_id": txn.category_id,
             })
 
+    # Sort by date descending
+    results.sort(key=lambda x: x["date"], reverse=True)
     total_cents = sum(r["amount_cents"] for r in results)
 
     return JSONResponse(content={

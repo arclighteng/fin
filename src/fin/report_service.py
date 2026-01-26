@@ -10,7 +10,7 @@ TRUTH CONTRACT:
 This module provides:
 - report_period(): Single period analysis
 - report_month(): Convenience for month-based reports
-- report_periods(): Multiple periods with proper per-period anchoring
+- report_periods(): Multiple periods (as_of anchoring not yet implemented)
 - All reports include report_hash + snapshot_id + versions + integrity flags
 """
 import sqlite3
@@ -155,8 +155,10 @@ class ReportService:
         """
         Generate reports for multiple periods.
 
-        CRITICAL: Each period is anchored to its own end date to prevent
-        future data leakage in historical reports.
+        Note: as_of anchoring is passed but NOT YET IMPLEMENTED. Pattern
+        detection currently uses all available data regardless of period.
+        True historical anchoring (capping lookback queries) is planned
+        for a future release.
 
         Args:
             period_type: MONTH, QUARTER, or YEAR
@@ -173,18 +175,19 @@ class ReportService:
 
         reports: list[Report] = []
 
-        # Generate each period, anchored to its own end date
+        # Generate each period
+        # TODO: Implement proper as_of anchoring to prevent future data leakage
         current_ref = end_date
         for _ in range(num_periods):
             start, end = period_bounds(period_type, current_ref)
 
-            # Generate report anchored to this period's end
+            # Generate report (as_of passed for cache keying only)
             report = self.report_period(
                 start,
                 end,
                 include_pending,
                 account_filter,
-                as_of=end,  # Anchor to period end
+                as_of=end,  # FUTURE: Will anchor pattern detection
             )
             report.period_label = period_label(period_type, start)
             reports.append(report)

@@ -349,38 +349,50 @@ class CLISummary:
         )
 
 
-def category_breakdown_from_report(report: Report) -> list[tuple[str, int, int, int]]:
+def category_breakdown_from_report(report: Report) -> list:
     """
     Compute category breakdown from a Report's transactions.
 
-    Returns: list of (category_id, gross_cents, refund_cents, net_cents)
-    Sorted by net_cents descending (absolute value).
+    Returns: list of (Category, net_cents, count, gross_cents, refund_cents)
+    Sorted by net_cents descending.
 
     This is THE canonical way to get category breakdowns - no separate DB query.
+    Matches the template-expected format from get_category_breakdown().
     """
     from collections import defaultdict
+    from .categorize import CATEGORIES
 
-    # Aggregate by category
+    # Aggregate by category: {category_id: {"gross": int, "refunds": int, "count": int}}
     category_totals: dict[str, dict[str, int]] = defaultdict(
-        lambda: {"gross": 0, "refunds": 0}
+        lambda: {"gross": 0, "refunds": 0, "count": 0}
     )
 
     for txn in report.transactions:
         cat = txn.category_id or "other"
 
+        # Skip income, transfers, and one_time_deposit for expense breakdown
+        if cat in ("income", "transfer", "one_time_deposit"):
+            continue
+
         if txn.txn_type == TransactionType.EXPENSE:
             category_totals[cat]["gross"] += abs(txn.amount_cents)
+            category_totals[cat]["count"] += 1
         elif txn.txn_type == TransactionType.REFUND:
             category_totals[cat]["refunds"] += txn.amount_cents
+            category_totals[cat]["count"] += 1
 
-    # Build result list
+    # Build result list matching template format: (Category, net_cents, count, gross_cents, refund_cents)
     result = []
     for cat_id, totals in category_totals.items():
         gross = totals["gross"]
         refunds = totals["refunds"]
         net = gross - refunds
-        result.append((cat_id, gross, refunds, net))
+        count = totals["count"]
 
-    # Sort by net descending
-    result.sort(key=lambda x: -x[3])
+        if gross > 0 or refunds > 0:
+            category = CATEGORIES.get(cat_id, CATEGORIES["other"])
+            result.append((category, net, count, gross, refunds))
+
+    # Sort by net_cents descending
+    result.sort(key=lambda x: -x[1])
     return result
