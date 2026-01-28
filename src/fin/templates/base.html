@@ -162,17 +162,27 @@
         }
 
         .sync-btn.syncing .sync-icon {
-            animation: spin 1s linear infinite;
+            animation: spin 1.5s linear infinite;
         }
 
         .sync-btn.success {
             border-color: var(--accent-green);
             color: var(--accent-green);
+            background: rgba(40, 167, 69, 0.1);
+        }
+
+        .sync-btn.success .sync-icon {
+            animation: none;
         }
 
         .sync-btn.error {
             border-color: var(--accent-red);
             color: var(--accent-red);
+            background: rgba(220, 53, 69, 0.1);
+        }
+
+        .sync-btn.error .sync-icon {
+            animation: none;
         }
 
         @keyframes spin {
@@ -183,6 +193,32 @@
         .sync-icon {
             font-size: 16px;
             display: inline-block;
+        }
+
+        /* Read-only mode banner */
+        .read-only-banner {
+            background: var(--accent-yellow);
+            color: #1a1f36;
+            padding: 8px 16px;
+            text-align: center;
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .read-only-banner code {
+            background: rgba(0,0,0,0.1);
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: monospace;
+        }
+
+        [data-theme="dark"] .read-only-banner {
+            background: #78350f;
+            color: #fef3c7;
+        }
+
+        [data-theme="dark"] .read-only-banner code {
+            background: rgba(255,255,255,0.15);
         }
 
         .theme-toggle {
@@ -2332,6 +2368,46 @@
             animation: slideIn 0.2s ease;
         }
 
+        .toast.with-action {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .toast-message {
+            flex: 1;
+        }
+
+        .toast-action {
+            background: var(--accent-blue);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 6px 12px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+
+        .toast-action:hover {
+            opacity: 0.9;
+        }
+
+        .toast-dismiss {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 18px;
+            line-height: 1;
+            padding: 0 4px;
+        }
+
+        .toast-dismiss:hover {
+            color: var(--text-primary);
+        }
+
         @keyframes slideIn {
             from { transform: translateY(20px); opacity: 0; }
             to { transform: translateY(0); opacity: 1; }
@@ -2657,6 +2733,7 @@
     </style>
     <!-- Chart.js for visualizations -->
     <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="/static/css/fin_drilldown.css">
 </head>
 <body>
     <script>
@@ -2677,7 +2754,7 @@
         </div>
         <div class="sync-container">
             <span id="syncStatus" class="sync-status"></span>
-            <button id="syncBtn" class="sync-btn" onclick="triggerSync()" title="Sync all accounts with SimpleFIN">
+            <button id="syncBtn" class="sync-btn" onclick="triggerSync()" title="Sync all accounts with SimpleFIN" data-requires-auth="true">
                 <span class="sync-icon">&#8635;</span>
                 <span class="sync-text">Sync Accounts</span>
             </button>
@@ -2688,23 +2765,58 @@
         </button>
     </nav>
 
-    <!-- Auth helpers - must be defined before content block for child templates -->
+    <!-- Auth config - must be defined before loading JS modules -->
     <script>
         const API_TOKEN = '{{ api_token() or "" }}';
-        function getAuthHeaders() {
-            const headers = { 'Content-Type': 'application/json' };
-            if (API_TOKEN) {
-                headers['Authorization'] = 'Bearer ' + API_TOKEN;
-            }
-            return headers;
-        }
+        const FIN_READ_ONLY = !API_TOKEN;
     </script>
+
+    <!-- Core JS modules -->
+    <script src="/static/js/fin_api.js"></script>
+    <script src="/static/js/fin_ui.js"></script>
+    <script src="/static/js/fin_drilldown.js"></script>
+
+    <script>
+        // Disable auth-required elements in read-only mode
+        document.addEventListener('DOMContentLoaded', function() {
+            if (FIN_READ_ONLY) {
+                document.querySelectorAll('[data-requires-auth="true"]').forEach(el => {
+                    el.disabled = true;
+                    el.classList.add('disabled');
+                    el.title = 'Requires FIN_AUTH_TOKEN to enable changes';
+                    el.style.opacity = '0.5';
+                    el.style.cursor = 'not-allowed';
+                });
+            }
+        });
+    </script>
+
+    <!-- Read-only mode banner -->
+    {% if not api_token() %}
+    <div class="read-only-banner">
+        <span>&#128274;</span> Read-only mode. Set <code>FIN_AUTH_TOKEN</code> to enable changes.
+    </div>
+    {% endif %}
 
     <div class="container">
         {% block content %}{% endblock %}
     </div>
 
     <div id="toast" class="toast"></div>
+
+    <!-- Drilldown Modal -->
+    <div id="drilldownModal" class="modal" style="display: none;">
+        <div class="modal-content drilldown-modal">
+            <div class="modal-header">
+                <h3 id="drilldownTitle">Loading...</h3>
+                <button class="modal-close" onclick="finDrilldown.close()">&times;</button>
+            </div>
+            <div id="drilldownSummary" class="drilldown-summary-strip"></div>
+            <div id="drilldownFilters" class="drilldown-filters" style="display:none;"></div>
+            <div class="modal-body drilldown-body"><div id="drilldownTable"></div></div>
+            <div id="drilldownFooter" class="drilldown-footer"></div>
+        </div>
+    </div>
 
     <!-- Category Change Modal -->
     <div id="categoryModal" class="modal" style="display: none;">
@@ -2774,6 +2886,10 @@
 
         // Sync with SimpleFIN
         async function triggerSync() {
+            if (FIN_READ_ONLY) {
+                showToast('Read-only mode: Set FIN_AUTH_TOKEN to enable sync');
+                return;
+            }
             const btn = document.getElementById('syncBtn');
             const textEl = btn.querySelector('.sync-text');
             const originalText = textEl.textContent;
@@ -2794,26 +2910,36 @@
 
                 if (response.ok) {
                     btn.classList.add('success');
+                    // Show checkmark and result
+                    const iconEl = btn.querySelector('.sync-icon');
+                    iconEl.textContent = '✓';
                     textEl.textContent = `+${data.inserted} new`;
 
-                    // Simple toast - no modes to think about
-                    showToast(`Synced: ${data.fetched} from bank, ${data.inserted} new, ${data.updated} updated`);
+                    // Toast with refresh action (no auto-reload)
+                    if (data.inserted > 0 || data.updated > 0) {
+                        showToastWithAction(
+                            `Synced: ${data.fetched} from bank, ${data.inserted} new, ${data.updated} updated`,
+                            'Refresh',
+                            () => window.location.reload()
+                        );
+                    } else {
+                        showToast(`Synced: ${data.fetched} from bank, no new transactions`);
+                    }
 
-                    // Refresh sync status
+                    // Refresh sync status display
                     loadSyncStatus();
-
-                    // Reload page after delay to show new data
-                    setTimeout(() => {
-                        window.location.reload();
-                    }, 2000);
                 } else {
                     btn.classList.add('error');
+                    const iconEl = btn.querySelector('.sync-icon');
+                    iconEl.textContent = '✗';
                     textEl.textContent = 'Error';
                     showToast('Sync failed: ' + (data.error || 'Unknown error'));
                 }
             } catch (err) {
                 btn.classList.remove('syncing');
                 btn.classList.add('error');
+                const iconEl = btn.querySelector('.sync-icon');
+                iconEl.textContent = '✗';
                 textEl.textContent = 'Error';
                 showToast('Sync failed: ' + err.message);
             }
@@ -2822,6 +2948,8 @@
             setTimeout(() => {
                 btn.classList.remove('success', 'error');
                 textEl.textContent = originalText;
+                const iconEl = btn.querySelector('.sync-icon');
+                iconEl.textContent = '↻';  // Restore refresh icon
             }, 5000);
         }
 
@@ -2914,16 +3042,12 @@
             });
         });
 
-        // Toast notification
-        function showToast(message, duration = 3000) {
-            const toast = document.getElementById('toast');
-            toast.textContent = message;
-            toast.classList.add('show');
-            setTimeout(() => toast.classList.remove('show'), duration);
-        }
-
         // Alert actions
         async function alertAction(alertKey, action) {
+            if (FIN_READ_ONLY) {
+                showToast('Read-only mode: Set FIN_AUTH_TOKEN to enable changes');
+                return;
+            }
             try {
                 const response = await fetch('/api/alert-action', {
                     method: 'POST',
@@ -2958,6 +3082,10 @@
 
         // Income source marking - reloads page to update totals
         async function markIncome(merchant, isIncome) {
+            if (FIN_READ_ONLY) {
+                showToast('Read-only mode: Set FIN_AUTH_TOKEN to enable changes');
+                return;
+            }
             try {
                 const response = await fetch('/api/income-source', {
                     method: 'POST',
@@ -3097,6 +3225,10 @@
 
         // Toggle subscription/bill type
         async function toggleType(merchant, currentType) {
+            if (FIN_READ_ONLY) {
+                showToast('Read-only mode: Set FIN_AUTH_TOKEN to enable changes');
+                return;
+            }
             const newType = currentType === 'subscription' ? 'bill' : 'subscription';
 
             try {
@@ -3202,6 +3334,17 @@
                 closeCategoryModal();
             }
         });
+
+        document.getElementById('drilldownModal')?.addEventListener('click', function(e) {
+            if (e.target === this) {
+                finDrilldown.close();
+            }
+        });
+
+        // Legacy alias for explainNumber
+        function explainNumber(scope) {
+            finDrilldown.open(scope);
+        }
     </script>
 
     {% block scripts %}{% endblock %}

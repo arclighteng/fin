@@ -211,6 +211,83 @@
 .category-pill .change.down { color: var(--accent-green); }
 
 /* ============================================
+   DATA TRUST WIDGET
+   ============================================ */
+
+.card-trust {
+    background: var(--bg-secondary);
+}
+
+.trust-badge {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 12px;
+}
+
+.trust-badge.badge-success { background: rgba(14, 98, 69, 0.15); color: var(--accent-green); }
+.trust-badge.badge-info { background: rgba(37, 99, 235, 0.15); color: var(--accent-blue); }
+.trust-badge.badge-warning { background: rgba(183, 121, 31, 0.15); color: var(--accent-yellow); }
+.trust-badge.badge-danger { background: rgba(197, 48, 48, 0.15); color: var(--accent-red); }
+
+.trust-issues {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.trust-issue {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+}
+
+.trust-issue-priority {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+
+.trust-issue-priority.priority-1 { background: var(--accent-red); color: white; }
+.trust-issue-priority.priority-2 { background: var(--accent-yellow); color: #1a1f36; }
+.trust-issue-priority.priority-3 { background: var(--text-muted); color: white; }
+
+.trust-issue-text {
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+.trust-blocked-notice {
+    margin-top: 12px;
+    padding: 8px 12px;
+    background: rgba(183, 121, 31, 0.1);
+    border-radius: 8px;
+    font-size: 12px;
+    color: var(--accent-yellow);
+}
+
+.trust-ok {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    color: var(--accent-green);
+    font-size: 14px;
+}
+
+.trust-ok-icon {
+    font-size: 16px;
+}
+
+/* ============================================
    ALERTS CARD
    ============================================ */
 
@@ -673,7 +750,7 @@
                     <span class="closed-icon">&#128274;</span> Closed
                 </span>
                 {% else %}
-                <button class="btn btn-sm btn-outline" onclick="closePeriod()" title="Close this period to lock in totals">
+                <button class="btn btn-sm btn-outline" onclick="closePeriod()" title="Close this period to lock in totals" data-requires-auth="true">
                     Close Period
                 </button>
                 {% endif %}
@@ -684,7 +761,7 @@
             <div class="hero-label">
                 {% if current_period.net_cents >= 0 %}You saved{% else %}You overspent{% endif %}
             </div>
-            <div class="hero-number {{ 'positive' if current_period.net_cents >= 0 else 'negative' }}">
+            <div class="hero-number {{ 'positive' if current_period.net_cents >= 0 else 'negative' }}" style="cursor:pointer" onclick="finDrilldown.open('net')" title="Click to see all transactions">
                 ${{ "%.0f"|format((current_period.net_cents if current_period.net_cents >= 0 else -current_period.net_cents) / 100) }}
             </div>
 
@@ -705,21 +782,21 @@
             <!-- Financial Breakdown -->
             {% set max_val = [current_period.income_cents, current_period.recurring_cents, current_period.discretionary_cents]|max %}
             <div class="breakdown">
-                <div class="breakdown-row">
+                <div class="breakdown-row" style="cursor:pointer" onclick="finDrilldown.open('income')" title="Click to see transactions">
                     <span class="breakdown-label">Income</span>
                     <div class="breakdown-bar-container">
                         <div class="breakdown-bar income" style="width: {{ (current_period.income_cents / max_val * 100)|int if max_val else 0 }}%"></div>
                     </div>
                     <span class="breakdown-value" style="color: var(--accent-green)">+${{ "%.0f"|format(current_period.income_cents / 100) }}</span>
                 </div>
-                <div class="breakdown-row">
+                <div class="breakdown-row" style="cursor:pointer" onclick="finDrilldown.open('recurring')" title="Click to see transactions">
                     <span class="breakdown-label">Recurring</span>
                     <div class="breakdown-bar-container">
                         <div class="breakdown-bar recurring" style="width: {{ (current_period.recurring_cents / max_val * 100)|int if max_val else 0 }}%"></div>
                     </div>
                     <span class="breakdown-value">-${{ "%.0f"|format(current_period.recurring_cents / 100) }}</span>
                 </div>
-                <div class="breakdown-row">
+                <div class="breakdown-row" style="cursor:pointer" onclick="finDrilldown.open('discretionary')" title="Click to see transactions">
                     <span class="breakdown-label">One-time</span>
                     <div class="breakdown-bar-container">
                         <div class="breakdown-bar discretionary" style="width: {{ (current_period.discretionary_cents / max_val * 100)|int if max_val else 0 }}%"></div>
@@ -771,6 +848,37 @@
                 Net {{ 'savings' if current_period.net_cents >= 0 else 'loss' }} ${{ "%.0f"|format((current_period.net_cents if current_period.net_cents >= 0 else -current_period.net_cents) / 100) }}.
             </p>
         </div>
+
+        <!-- DATA TRUST WIDGET -->
+        {% if integrity %}
+        <div class="card-v2 card-trust">
+            <div class="card-v2-header">
+                <h2 class="card-v2-title">Data Trust</h2>
+                <span class="trust-badge {{ integrity.badge_class }}">{{ integrity.badge_text }}</span>
+            </div>
+
+            {% if integrity.tasks %}
+            <div class="trust-issues">
+                {% for task in integrity.tasks[:3] %}
+                <div class="trust-issue"{% if task.task_type == 'CLASSIFY_CREDIT' %} style="cursor:pointer" onclick="finDrilldown.open('credit_other')"{% elif task.task_type == 'MATCH_TRANSFER' %} style="cursor:pointer" onclick="finDrilldown.open('unmatched_transfers')"{% endif %}>
+                    <span class="trust-issue-priority priority-{{ task.priority }}">{{ task.priority_label[0] }}</span>
+                    <span class="trust-issue-text">{{ task.description }}</span>
+                </div>
+                {% endfor %}
+            </div>
+            {% if not integrity.is_actionable %}
+            <div class="trust-blocked-notice">
+                &#128274; Forecasts locked until issues resolved
+            </div>
+            {% endif %}
+            {% else %}
+            <div class="trust-ok">
+                <span class="trust-ok-icon">&#10003;</span>
+                <span>All transactions classified</span>
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
 
         <!-- ALERTS CARD -->
         <div class="card-v2">
@@ -862,7 +970,10 @@
         <div class="card-v2">
             <div class="card-v2-header">
                 <h2 class="card-v2-title">Recurring</h2>
-                <a href="/subs" class="card-v2-action">View All</a>
+                <span>
+                    <a href="#" class="card-v2-action" onclick="event.preventDefault(); finDrilldown.open('recurring')">Explain</a>
+                    <a href="/subs" class="card-v2-action">View All</a>
+                </span>
             </div>
 
             {% set total_recurring = subscriptions|sum(attribute='1') + bills|sum(attribute='1') %}
@@ -973,7 +1084,7 @@
             </div>
             <div class="category-list">
                 {% for category, net_cents, count, gross_cents, refund_cents in category_breakdown[:6] %}
-                <div class="breakdown-row" style="margin-bottom: 10px; cursor: pointer;" onclick="drillCategory('{{ category.id }}')">
+                <div class="breakdown-row" style="margin-bottom: 10px; cursor: pointer;" onclick="finDrilldown.open('category:{{ category.id }}')">
                     <span class="breakdown-label">{{ category.icon }} {{ category.name }}</span>
                     <div class="breakdown-bar-container">
                         {% set max_cat = category_breakdown[0][1] if category_breakdown else 1 %}
@@ -1033,6 +1144,10 @@ function updateAccountFilter() {
 
 // Alert action handler
 async function alertAction(alertKey, action) {
+    if (typeof FIN_READ_ONLY !== 'undefined' && FIN_READ_ONLY) {
+        showToast('Read-only mode: Set FIN_AUTH_TOKEN to enable changes');
+        return;
+    }
     try {
         const response = await fetch('/api/alert-action', {
             method: 'POST',
@@ -1049,11 +1164,6 @@ async function alertAction(alertKey, action) {
     } catch (e) {
         console.error('Failed to save alert action:', e);
     }
-}
-
-// Category drill-down (placeholder - would need implementation)
-function drillCategory(categoryId) {
-    window.location = `/dashboard?drill=category&id=${categoryId}`;
 }
 
 // Initialize Chart.js spending trend
@@ -1136,82 +1246,82 @@ document.addEventListener('DOMContentLoaded', function() {
 // ============================================
 
 async function closePeriod() {
-    // Get current period dates from the page context
-    // end_date is already exclusive (from Report model)
+    if (finApi.isReadOnly()) {
+        finUI.toast('Read-only mode: Set FIN_AUTH_TOKEN to enable changes');
+        return;
+    }
     const startDate = '{{ current_period.start_date.isoformat() if current_period else "" }}';
     const endDate = '{{ current_period.end_date.isoformat() if current_period else "" }}';
 
     if (!startDate || !endDate) {
-        showToast('No period selected');
+        finUI.toast('No period selected');
         return;
     }
 
-    // Get current account filter
     const urlParams = new URLSearchParams(window.location.search);
     const accounts = urlParams.get('accounts');
     const accountFilter = accounts && accounts !== 'none' ? accounts.split(',') : null;
 
-    if (!confirm('Close this period? This will snapshot the current totals. Any new transactions landing in this period will be flagged as adjustments.')) {
+    if (!finUI.confirm('Close this period? This will snapshot the current totals. Any new transactions landing in this period will be flagged as adjustments.')) {
         return;
     }
 
     try {
-        const response = await fetch('/api/close-period', {
-            method: 'POST',
-            headers: getAuthHeaders(),
-            body: JSON.stringify({
-                start_date: startDate,
-                end_date: endDate,
-                account_filter: accountFilter
-            })
+        const response = await finApi.postJSON('/api/close-period', {
+            start_date: startDate,
+            end_date: endDate,
+            account_filter: accountFilter
         });
 
         const data = await response.json();
 
         if (response.ok) {
-            showToast('Period closed successfully');
-            // Reload to show the closed badge
-            setTimeout(() => window.location.reload(), 500);
+            finUI.toastWithAction('Period closed successfully', 'Refresh', () => window.location.reload());
         } else {
-            showToast('Error: ' + (data.error || data.detail || 'Failed to close period'));
+            finUI.toast('Error: ' + (data.error || data.detail || 'Failed to close period'));
         }
     } catch (err) {
-        showToast('Error: ' + err.message);
+        finUI.toast('Error: ' + err.message);
     }
 }
 
 async function viewAdjustments() {
-    // Open a modal or navigate to adjustments view
+    document.getElementById('drilldownTitle').textContent = 'Post-Close Adjustments';
+    document.getElementById('drilldownSummary').innerHTML = '<span class="drilldown-period">Loading...</span>';
+    document.getElementById('drilldownTable').innerHTML = '<div class="drilldown-loading">Loading...</div>';
+    document.getElementById('drilldownFooter').innerHTML = '';
+    document.getElementById('drilldownFilters').style.display = 'none';
+    finUI.openModal('drilldownModal');
+
     try {
-        const response = await fetch('/api/adjustments');
+        const response = await finApi.get('/api/adjustments');
         const data = await response.json();
 
         if (data.pending_adjustments && data.pending_adjustments.length > 0) {
-            let msg = 'Pending Adjustments:\n\n';
+            document.getElementById('drilldownSummary').innerHTML =
+                `<span class="drilldown-period">${data.pending_adjustments.length} new transactions in closed period(s). Re-close to update snapshot.</span>`;
+
+            let html = '<table><thead><tr><th>Date</th><th>Merchant</th><th class="text-right">Amount</th></tr></thead><tbody>';
             data.pending_adjustments.forEach(adj => {
-                msg += `• ${adj.posted_at}: ${adj.merchant_norm || adj.description} - $${Math.abs(adj.amount_cents / 100).toFixed(2)}\n`;
+                html += `<tr>
+                    <td>${finUI.formatDate(adj.posted_at)}</td>
+                    <td>${finUI.escapeHtml(adj.merchant_norm || adj.description || 'Unknown')}</td>
+                    <td class="text-right">${finUI.formatCents(adj.amount_cents)}</td>
+                </tr>`;
             });
-            msg += '\nRe-close the affected period to incorporate these changes.';
-            alert(msg);
+            html += '</tbody></table>';
+            document.getElementById('drilldownTable').innerHTML = html;
         } else {
-            showToast('No pending adjustments');
+            document.getElementById('drilldownSummary').innerHTML = '';
+            document.getElementById('drilldownTable').innerHTML =
+                '<div class="drilldown-empty">No pending adjustments</div>';
         }
     } catch (err) {
-        showToast('Error loading adjustments: ' + err.message);
+        document.getElementById('drilldownTable').innerHTML =
+            `<div class="drilldown-empty" style="color:var(--accent-red);">Error: ${finUI.escapeHtml(err.message)}</div>`;
     }
 }
 
-// Toast helper (if not already defined)
-if (typeof showToast === 'undefined') {
-    function showToast(message) {
-        // Simple toast implementation
-        const toast = document.createElement('div');
-        toast.style.cssText = 'position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--bg-secondary, #333); color: var(--text-primary, white); padding: 12px 24px; border-radius: 8px; z-index: 9999; font-size: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);';
-        toast.textContent = message;
-        document.body.appendChild(toast);
-        setTimeout(() => toast.remove(), 3000);
-    }
-}
 </script>
 
 {% endblock %}

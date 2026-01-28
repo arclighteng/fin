@@ -11,6 +11,7 @@ from typing import Generator
 import uvicorn
 from fastapi import Depends, FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
@@ -62,6 +63,7 @@ from .close_books import (
     check_for_adjustments_on_ingest,
     save_statement_match,
 )
+from .integrity import get_resolution_summary, format_integrity_badge
 from .simplefin_client import SimpleFinClient
 
 
@@ -167,6 +169,11 @@ app = FastAPI()
 # Setup Jinja2 templates
 templates_dir = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(templates_dir))
+
+# Mount static files
+static_dir = Path(__file__).parent / "static"
+if static_dir.exists():
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 # Add API token to template globals for frontend auth
 from .security import get_api_token
@@ -497,6 +504,14 @@ def dashboard(
         all_pending = get_pending_adjustments(conn)
         pending_adjustments_count = len(all_pending)
 
+    # Integrity / Trust assessment
+    integrity_data = None
+    if current_report:
+        integrity_data = get_resolution_summary(current_report)
+        badge_text, badge_class = format_integrity_badge(current_report.integrity.score)
+        integrity_data["badge_text"] = badge_text
+        integrity_data["badge_class"] = badge_class
+
     return templates.TemplateResponse("dashboard_v2.html", {
         "request": request,
         "period_type": period,
@@ -527,7 +542,216 @@ def dashboard(
         # Close-the-books context
         "closed_period": closed_period,
         "pending_adjustments_count": pending_adjustments_count,
+        # Trust / Integrity assessment
+        "integrity": integrity_data,
     })
+
+
+def _drilldown_filter(report, scope: str):
+    """
+    Filter a report's transactions by drilldown scope.
+    Returns (scope_label, inclusion_rules, included_txns, scope_total).
+    """
+    from .reporting_models import TransactionType, SpendingBucket, TransferStatus
+
+    transactions = []
+    scope_label = ""
+    scope_total = 0
+    inclusion_rules: list[str] = []
+
+    if scope == "income":
+        scope_label = "Income"
+        inclusion_rules = ["Transactions classified as Income", "Posted only"]
+        for txn in report.transactions:
+            if txn.txn_type == TransactionType.INCOME:
+                transactions.append(txn)
+                scope_total += txn.amount_cents
+    elif scope == "spend":
+        scope_label = "Total Spending"
+        inclusion_rules = ["All expenses and refunds", "Posted only"]
+        for txn in report.transactions:
+            if txn.txn_type in (TransactionType.EXPENSE, TransactionType.REFUND):
+                transactions.append(txn)
+                if txn.txn_type == TransactionType.EXPENSE:
+                    scope_total -= txn.amount_cents
+                else:
+                    scope_total += txn.amount_cents
+    elif scope == "recurring":
+        scope_label = "Recurring / Fixed"
+        inclusion_rules = ["Fixed obligations (subscriptions, bills)", "Posted only"]
+        for txn in report.transactions:
+            if txn.spending_bucket == SpendingBucket.FIXED_OBLIGATIONS:
+                transactions.append(txn)
+                scope_total += abs(txn.amount_cents)
+    elif scope == "discretionary":
+        scope_label = "One-Time / Discretionary"
+        inclusion_rules = ["Variable, discretionary, and one-off spending", "Posted only"]
+        for txn in report.transactions:
+            if txn.spending_bucket in (SpendingBucket.VARIABLE_ESSENTIALS, SpendingBucket.DISCRETIONARY, SpendingBucket.ONE_OFFS):
+                transactions.append(txn)
+                scope_total += abs(txn.amount_cents)
+    elif scope == "net":
+        scope_label = "Net (Income - Spending)"
+        inclusion_rules = ["Income minus expenses", "Transfers excluded", "Posted only"]
+        for txn in report.transactions:
+            if txn.txn_type not in (TransactionType.TRANSFER, TransactionType.CREDIT_OTHER):
+                transactions.append(txn)
+        scope_total = report.totals.net_cents
+    elif scope == "credit_other":
+        scope_label = "Unclassified Credits"
+        inclusion_rules = ["Unclassified credits awaiting classification"]
+        for txn in report.transactions:
+            if txn.txn_type == TransactionType.CREDIT_OTHER:
+                transactions.append(txn)
+                scope_total += txn.amount_cents
+    elif scope == "unmatched_transfers":
+        scope_label = "Unmatched Transfers"
+        inclusion_rules = ["Transfers with only one leg identified"]
+        for txn in report.transactions:
+            if txn.txn_type == TransactionType.TRANSFER and txn.transfer_status in (TransferStatus.UNMATCHED, TransferStatus.PENDING_MATCH):
+                transactions.append(txn)
+                scope_total += txn.amount_cents
+    elif scope.startswith("category:"):
+        cat_id = scope.split(":", 1)[1]
+        cat = CATEGORIES.get(cat_id)
+        scope_label = f"Category: {cat.name if cat else cat_id}"
+        inclusion_rules = [f"Category: {cat.name if cat else cat_id}", "Expenses and refunds"]
+        for txn in report.transactions:
+            if txn.category_id == cat_id:
+                transactions.append(txn)
+                scope_total += abs(txn.amount_cents)
+    else:
+        return None
+
+    # Build excluded section — count transactions NOT included, grouped by reason
+    included_fps = {txn.fingerprint for txn in transactions}
+    excluded = {"transfers": {"count": 0, "total_cents": 0}, "credit_other": {"count": 0, "total_cents": 0}}
+    for txn in report.transactions:
+        if txn.fingerprint in included_fps:
+            continue
+        if txn.txn_type == TransactionType.TRANSFER:
+            excluded["transfers"]["count"] += 1
+            excluded["transfers"]["total_cents"] += abs(txn.amount_cents)
+        elif txn.txn_type == TransactionType.CREDIT_OTHER:
+            excluded["credit_other"]["count"] += 1
+            excluded["credit_other"]["total_cents"] += abs(txn.amount_cents)
+    # Strip zero-count exclusion categories
+    excluded = {k: v for k, v in excluded.items() if v["count"] > 0}
+
+    return scope_label, inclusion_rules, transactions, scope_total, excluded
+
+
+def _drilldown_report(scope: str, start_date: str, end_date: str, accounts: str | None, conn):
+    """Parse params, run report, filter by scope. Returns (result, error_response)."""
+    try:
+        start = date.fromisoformat(start_date)
+        end = date.fromisoformat(end_date)
+    except ValueError:
+        return None, JSONResponse(status_code=400, content={"error": "Invalid date format"})
+
+    account_filter, _ = parse_account_filter(accounts)
+    report = ReportService(conn).report_period(start, end, account_filter=account_filter)
+    result = _drilldown_filter(report, scope)
+    if result is None:
+        return None, JSONResponse(status_code=400, content={"error": f"Unknown scope: {scope}"})
+
+    return result, None
+
+
+def _account_names(conn) -> dict[str, str]:
+    return {r["account_id"]: r["name"] for r in conn.execute("SELECT account_id, name FROM accounts").fetchall()}
+
+
+@app.get("/api/drilldown")
+def drilldown(
+    scope: str = Query(..., description="Scope: income, spend, recurring, discretionary, net, category:<id>, credit_other, unmatched_transfers"),
+    start_date: str = Query(..., description="Period start date (YYYY-MM-DD)"),
+    end_date: str = Query(..., description="Period end date (YYYY-MM-DD, exclusive)"),
+    accounts: str | None = Query(None, description="Comma-separated account IDs"),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Drilldown into dashboard numbers with full transaction detail."""
+    result, err = _drilldown_report(scope, start_date, end_date, accounts, conn)
+    if err:
+        return err
+
+    scope_label, inclusion_rules, transactions, scope_total, excluded = result
+    acct_names = _account_names(conn)
+
+    txn_list = []
+    for txn in sorted(transactions, key=lambda t: t.posted_at, reverse=True):
+        txn_list.append({
+            "date": txn.posted_at.isoformat(),
+            "merchant": txn.merchant_norm or txn.raw_description or "Unknown",
+            "amount_cents": txn.amount_cents,
+            "type": txn.txn_type.value if txn.txn_type else "unknown",
+            "account_id": txn.account_id,
+            "account_name": acct_names.get(txn.account_id, "Unknown"),
+        })
+
+    return JSONResponse(content={
+        "scope": scope,
+        "scope_label": scope_label,
+        "start_date": start_date,
+        "end_date": end_date,
+        "total_cents": scope_total,
+        "transaction_count": len(txn_list),
+        "inclusion_rules": inclusion_rules,
+        "excluded": excluded,
+        "transactions": txn_list,
+        "accounts": acct_names,
+    })
+
+
+@app.get("/api/drilldown/export")
+def drilldown_export(
+    scope: str = Query(...),
+    start_date: str = Query(...),
+    end_date: str = Query(...),
+    accounts: str | None = Query(None),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Export drilldown transactions as CSV."""
+    result, err = _drilldown_report(scope, start_date, end_date, accounts, conn)
+    if err:
+        return err
+
+    _label, _rules, transactions, _total, _excluded = result
+    acct_names = _account_names(conn)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["date", "merchant", "amount_usd", "type", "category", "account", "reason"])
+    for txn in sorted(transactions, key=lambda t: t.posted_at, reverse=True):
+        writer.writerow([
+            txn.posted_at.isoformat(),
+            _sanitize_csv_field(txn.merchant_norm or txn.raw_description or "Unknown"),
+            f"{txn.amount_cents / 100:.2f}",
+            txn.txn_type.value if txn.txn_type else "unknown",
+            txn.category_id or "",
+            _sanitize_csv_field(acct_names.get(txn.account_id, "Unknown")),
+            txn.reason.primary_code if txn.reason else "",
+        ])
+
+    output.seek(0)
+    safe_scope = scope.replace(":", "_")
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="drilldown_{safe_scope}_{start_date}_{end_date}.csv"'},
+    )
+
+
+@app.get("/api/explain")
+def explain_number(
+    scope: str = Query(...),
+    start_date: str = Query(...),
+    end_date: str = Query(...),
+    accounts: str | None = Query(None),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Deprecated: use /api/drilldown instead."""
+    return drilldown(scope=scope, start_date=start_date, end_date=end_date, accounts=accounts, conn=conn)
 
 
 @app.post("/api/alert-action")
