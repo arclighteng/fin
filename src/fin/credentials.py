@@ -31,8 +31,10 @@ def _get_keyring():
     if _keyring is None:
         try:
             import keyring
+            from keyring.backends.fail import Keyring as FailKeyring
             # Test if keyring backend is actually usable
-            keyring.get_keyring()
+            if isinstance(keyring.get_keyring(), FailKeyring):
+                raise RuntimeError("No usable keyring backend")
             _keyring = keyring
             _keyring_available = True
         except Exception as e:
