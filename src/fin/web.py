@@ -170,14 +170,19 @@ app = FastAPI()
 templates_dir = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(templates_dir))
 
+# Add API token to template globals for frontend auth
+from .security import get_api_token
+
+# Ensure the session token is generated on startup so it's available for all requests
+_startup_token = get_api_token()
+
+# Register the token getter as a callable global
+templates.env.globals["api_token"] = get_api_token
+
 # Mount static files
 static_dir = Path(__file__).parent / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
-
-# Add API token to template globals for frontend auth
-from .security import get_api_token
-templates.env.globals["api_token"] = get_api_token
 
 # ---------------------------------------------------------------------------
 # Startup: initialize config and database once
