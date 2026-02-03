@@ -17,6 +17,7 @@ dependencies = [
   "jinja2>=3.1.0",
   "numpy>=1.24.0",
   "keyring>=25.0.0",
+  "tzdata>=2024.1",  # Required on Windows for zoneinfo timezone support
 ]
 
 [project.optional-dependencies]
