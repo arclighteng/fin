@@ -80,6 +80,15 @@ const finDrilldown = (function() {
             pills +
             `<span class="drilldown-total">${finUI.formatCents(data.total_cents)}</span>`;
 
+        // Show resolution controls if available
+        if (data.resolution_context && data.resolution_context.allows_resolution) {
+            _renderResolutionControls(data.resolution_context, data.transactions);
+        } else {
+            // Clear resolution controls if they exist
+            const controlsEl = document.getElementById('drilldownResolutionControls');
+            if (controlsEl) controlsEl.remove();
+        }
+
         // Filters bar (hidden by default, toggle with button)
         const accounts = data.accounts || {};
         const accountKeys = Object.keys(accounts);
@@ -94,28 +103,49 @@ const finDrilldown = (function() {
         document.getElementById('drilldownFilters').innerHTML = filtersHtml;
 
         // Render table
-        _renderTable(data.transactions);
+        _renderTable(data.transactions, data.resolution_context);
 
         // Footer
         _renderFooter(data);
     }
 
-    function _renderTable(transactions) {
+    function _renderTable(transactions, resolutionContext) {
         if (!transactions || transactions.length === 0) {
             document.getElementById('drilldownTable').innerHTML = '<div class="drilldown-empty">No transactions</div>';
             return;
         }
 
-        let html = '<table><thead><tr><th>Date</th><th>Merchant</th><th class="text-right">Amount</th><th>Account</th><th>Type</th></tr></thead><tbody>';
+        const showResolution = resolutionContext && resolutionContext.allows_resolution;
+
+        let html = '<table><thead><tr><th>Date</th><th>Merchant</th><th class="text-right">Amount</th><th>Account</th>';
+        if (!showResolution) html += '<th>Type</th>';
+        if (showResolution) html += '<th>Classify As</th>';
+        html += '</tr></thead><tbody>';
+
         transactions.forEach(t => {
             const amtClass = t.amount_cents > 0 ? 'positive' : '';
             html += `<tr>
                 <td>${finUI.formatDate(t.date)}</td>
                 <td>${finUI.escapeHtml(t.merchant)}</td>
                 <td class="text-right ${amtClass}">${finUI.formatCents(t.amount_cents)}</td>
-                <td class="muted">${finUI.escapeHtml(t.account_name || '')}</td>
-                <td class="muted">${finUI.escapeHtml(t.type || '')}</td>
-            </tr>`;
+                <td class="muted">${finUI.escapeHtml(t.account_name || '')}</td>`;
+
+            if (!showResolution) {
+                html += `<td class="muted">${finUI.escapeHtml(t.type || '')}</td>`;
+            }
+
+            if (showResolution) {
+                const existingOverride = t.override_type || '';
+                html += '<td><select id="resolution-' + finUI.escapeHtml(t.fingerprint) + '" class="resolution-select" onchange="finDrilldown.markChanged()">';
+                html += '<option value="">- Select -</option>';
+                resolutionContext.resolution_options.forEach(opt => {
+                    const selected = opt.value === existingOverride ? 'selected' : '';
+                    html += `<option value="${finUI.escapeHtml(opt.value)}" ${selected} title="${finUI.escapeHtml(opt.description)}">${finUI.escapeHtml(opt.label)}</option>`;
+                });
+                html += '</select></td>';
+            }
+
+            html += '</tr>';
         });
         html += '</tbody></table>';
         document.getElementById('drilldownTable').innerHTML = html;
@@ -166,7 +196,7 @@ const finDrilldown = (function() {
             return true;
         });
 
-        _renderTable(filtered);
+        _renderTable(filtered, currentData.resolution_context);
 
         // Update count
         const countEl = document.querySelector('.drilldown-count');
@@ -181,6 +211,103 @@ const finDrilldown = (function() {
         window.open(url, '_blank');
     }
 
+    function _renderResolutionControls(context, transactions) {
+        // Create or get container
+        let container = document.getElementById('drilldownResolutionControls');
+        if (!container) {
+            const summaryEl = document.getElementById('drilldownSummary');
+            container = document.createElement('div');
+            container.id = 'drilldownResolutionControls';
+            container.className = 'drilldown-resolution-controls';
+            summaryEl.after(container);
+        }
+
+        // Bulk action bar
+        let html = '<div class="resolution-bulk-bar">';
+        html += '<span class="resolution-bulk-label">Classify all as:</span>';
+        context.resolution_options.forEach(opt => {
+            if (opt.value !== 'CREDIT_OTHER') {  // Don't show "Keep Unclassified" for bulk
+                html += `<button class="btn-resolution-bulk" data-type="${finUI.escapeHtml(opt.value)}">${finUI.escapeHtml(opt.label)}</button>`;
+            }
+        });
+        html += '</div>';
+
+        // Save button (initially hidden)
+        html += '<button id="resolutionSaveBtn" class="btn btn-primary" style="display:none;" onclick="finDrilldown.saveResolutions()">Save Changes</button>';
+
+        container.innerHTML = html;
+
+        // Bind bulk action buttons
+        document.querySelectorAll('.btn-resolution-bulk').forEach(btn => {
+            btn.onclick = () => {
+                const targetType = btn.getAttribute('data-type');
+                transactions.forEach(txn => {
+                    const selectEl = document.getElementById(`resolution-${txn.fingerprint}`);
+                    if (selectEl) selectEl.value = targetType;
+                });
+                // Show save button
+                document.getElementById('resolutionSaveBtn').style.display = 'block';
+            };
+        });
+    }
+
+    function markChanged() {
+        const saveBtn = document.getElementById('resolutionSaveBtn');
+        if (saveBtn) saveBtn.style.display = 'block';
+    }
+
+    async function saveResolutions() {
+        if (!currentData || !currentData.transactions) return;
+
+        const overrides = [];
+
+        currentData.transactions.forEach(txn => {
+            const selectEl = document.getElementById(`resolution-${txn.fingerprint}`);
+            if (selectEl && selectEl.value && selectEl.value !== '') {
+                overrides.push({
+                    fingerprint: txn.fingerprint,
+                    target_type: selectEl.value,
+                    reason: `Resolved from ${currentData.scope_label} (${currentParams.startDate} to ${currentParams.endDate})`
+                });
+            }
+        });
+
+        if (overrides.length === 0) {
+            finUI.toast('No changes to save');
+            return;
+        }
+
+        // Show loading state
+        const saveBtn = document.getElementById('resolutionSaveBtn');
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving...';
+
+        try {
+            const resp = await finApi.postJSON('/api/txn-type-override/bulk', {
+                overrides: overrides,
+                reason: `Bulk resolution from dashboard (${new Date().toISOString()})`
+            });
+
+            const data = await resp.json();
+
+            if (resp.ok) {
+                finUI.toast(`${data.overrides_applied} transactions reclassified. Integrity score: ${data.integrity_percent}%`, 3000);
+                close();  // Close modal
+
+                // Refresh dashboard to show updated integrity score
+                setTimeout(() => window.location.reload(), 1000);
+            } else {
+                finUI.toast(`Error: ${data.error || 'Unknown error'}`, 5000);
+                saveBtn.disabled = false;
+                saveBtn.textContent = 'Save Changes';
+            }
+        } catch (err) {
+            finUI.toast(`Error: ${err.message}`, 5000);
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'Save Changes';
+        }
+    }
+
     function close() {
         finUI.closeModal('drilldownModal');
         currentData = null;
@@ -193,5 +320,7 @@ const finDrilldown = (function() {
         applyFilters,
         toggleFilters,
         exportCSV,
+        markChanged,
+        saveResolutions,
     };
 })();
