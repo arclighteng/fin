@@ -118,6 +118,19 @@ class TxnTypeOverrideRequest(BaseModel):
     reason: str | None = None  # Optional user note
 
 
+class TxnTypeOverrideItem(BaseModel):
+    """Single transaction override within bulk request."""
+    fingerprint: str
+    target_type: str  # INCOME, EXPENSE, TRANSFER, REFUND, CREDIT_OTHER
+    reason: str | None = None  # Optional per-transaction reason
+
+
+class BulkTxnTypeOverrideRequest(BaseModel):
+    """Request to override multiple transactions at once."""
+    overrides: list[TxnTypeOverrideItem]
+    reason: str | None = None  # Optional global reason
+
+
 class ReconcileRequest(BaseModel):
     """Request to reconcile an account against a statement."""
     account_id: str
@@ -555,7 +568,7 @@ def dashboard(
 def _drilldown_filter(report, scope: str):
     """
     Filter a report's transactions by drilldown scope.
-    Returns (scope_label, inclusion_rules, included_txns, scope_total).
+    Returns (scope_label, inclusion_rules, included_txns, scope_total, excluded, resolution_context).
     """
     from .reporting_models import TransactionType, SpendingBucket, TransferStatus
 
@@ -643,7 +656,31 @@ def _drilldown_filter(report, scope: str):
     # Strip zero-count exclusion categories
     excluded = {k: v for k, v in excluded.items() if v["count"] > 0}
 
-    return scope_label, inclusion_rules, transactions, scope_total, excluded
+    # Add resolution context for resolvable scopes
+    resolution_context = None
+    if scope == "credit_other":
+        resolution_context = {
+            "scope": "credit_other",
+            "allows_resolution": True,
+            "resolution_options": [
+                {"value": "INCOME", "label": "Income", "description": "Real income (paycheck, business income)"},
+                {"value": "REFUND", "label": "Refund", "description": "Return or credit for prior purchase"},
+                {"value": "TRANSFER", "label": "Transfer", "description": "Internal transfer between accounts"},
+                {"value": "CREDIT_OTHER", "label": "Keep Unclassified", "description": "Leave as unclassified"},
+            ]
+        }
+    elif scope == "unmatched_transfers":
+        resolution_context = {
+            "scope": "unmatched_transfers",
+            "allows_resolution": True,
+            "resolution_options": [
+                {"value": "TRANSFER", "label": "Confirm Transfer", "description": "This is a valid transfer"},
+                {"value": "INCOME", "label": "Reclassify as Income", "description": "Not a transfer, this is income"},
+                {"value": "EXPENSE", "label": "Reclassify as Expense", "description": "Not a transfer, this is spending"},
+            ]
+        }
+
+    return scope_label, inclusion_rules, transactions, scope_total, excluded, resolution_context
 
 
 def _drilldown_report(scope: str, start_date: str, end_date: str, accounts: str | None, conn):
@@ -680,21 +717,26 @@ def drilldown(
     if err:
         return err
 
-    scope_label, inclusion_rules, transactions, scope_total, excluded = result
+    scope_label, inclusion_rules, transactions, scope_total, excluded, resolution_context = result
     acct_names = _account_names(conn)
+
+    # Get existing overrides for these transactions
+    fp_overrides, _ = dbmod.get_txn_type_overrides(conn)
 
     txn_list = []
     for txn in sorted(transactions, key=lambda t: t.posted_at, reverse=True):
         txn_list.append({
+            "fingerprint": txn.fingerprint,
             "date": txn.posted_at.isoformat(),
             "merchant": txn.merchant_norm or txn.raw_description or "Unknown",
             "amount_cents": txn.amount_cents,
             "type": txn.txn_type.value if txn.txn_type else "unknown",
             "account_id": txn.account_id,
             "account_name": acct_names.get(txn.account_id, "Unknown"),
+            "override_type": fp_overrides.get(txn.fingerprint),
         })
 
-    return JSONResponse(content={
+    response_data = {
         "scope": scope,
         "scope_label": scope_label,
         "start_date": start_date,
@@ -705,7 +747,12 @@ def drilldown(
         "excluded": excluded,
         "transactions": txn_list,
         "accounts": acct_names,
-    })
+    }
+
+    if resolution_context:
+        response_data["resolution_context"] = resolution_context
+
+    return JSONResponse(content=response_data)
 
 
 @app.get("/api/drilldown/export")
@@ -721,7 +768,7 @@ def drilldown_export(
     if err:
         return err
 
-    _label, _rules, transactions, _total, _excluded = result
+    _label, _rules, transactions, _total, _excluded, _resolution_context = result
     acct_names = _account_names(conn)
 
     output = io.StringIO()
@@ -925,6 +972,55 @@ def set_txn_type_override(
             "merchant_pattern": req.merchant_pattern,
             "target_type": req.target_type,
         })
+
+
+@app.post("/api/txn-type-override/bulk")
+def set_bulk_txn_type_override(
+    req: BulkTxnTypeOverrideRequest,
+    conn: sqlite3.Connection = Depends(get_db),
+    _auth: bool = Depends(verify_auth_token),
+):
+    """
+    Set transaction type overrides for multiple transactions.
+
+    Validates all target types, applies overrides in a transaction,
+    invalidates report cache, and returns updated integrity score.
+    """
+    valid_types = {"INCOME", "EXPENSE", "TRANSFER", "REFUND", "CREDIT_OTHER"}
+
+    # Validate all target types
+    for override in req.overrides:
+        if override.target_type not in valid_types:
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"Invalid target_type: {override.target_type}"},
+            )
+
+    # Apply all overrides
+    for override in req.overrides:
+        reason = override.reason or req.reason
+        dbmod.set_txn_type_override_fingerprint(
+            conn, override.fingerprint, override.target_type, reason
+        )
+
+    # Invalidate report cache to force recalculation
+    invalidate_report_cache()
+
+    # Recompute integrity score for current period
+    # (Use same date range as dashboard context)
+    from .dates import period_bounds
+
+    # Default to current month for score calculation
+    start, end = period_bounds(date.today(), TimePeriod.MONTH)
+    report = ReportService(conn).report_period(start, end)
+
+    return JSONResponse(content={
+        "status": "ok",
+        "overrides_applied": len(req.overrides),
+        "new_integrity_score": report.integrity.score,
+        "integrity_percent": int(report.integrity.score * 100),
+        "is_actionable": report.integrity.is_actionable,
+    })
 
 
 @app.delete("/api/txn-type-override")

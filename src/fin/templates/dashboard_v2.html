@@ -695,6 +695,66 @@
     font-size: 11px;
     font-weight: 600;
 }
+
+/* Resolution Controls */
+.drilldown-resolution-controls {
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    padding: 16px;
+    background: var(--bg-tertiary);
+    margin-bottom: 16px;
+}
+
+.resolution-bulk-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.resolution-bulk-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.btn-resolution-bulk {
+    padding: 6px 12px;
+    font-size: 12px;
+    border: 1px solid var(--border);
+    background: var(--bg-secondary);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.btn-resolution-bulk:hover {
+    background: var(--accent-blue);
+    color: white;
+    border-color: var(--accent-blue);
+}
+
+.resolution-select {
+    padding: 4px 8px;
+    font-size: 12px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    min-width: 140px;
+}
+
+.resolution-select:focus {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 2px;
+}
+
+#resolutionSaveBtn {
+    width: 100%;
+    padding: 10px;
+    font-size: 14px;
+    font-weight: 600;
+}
 </style>
 
 <div class="dashboard">
@@ -860,7 +920,7 @@
             {% if integrity.tasks %}
             <div class="trust-issues">
                 {% for task in integrity.tasks[:3] %}
-                <div class="trust-issue"{% if task.task_type == 'CLASSIFY_CREDIT' %} style="cursor:pointer" onclick="finDrilldown.open('credit_other')"{% elif task.task_type == 'MATCH_TRANSFER' %} style="cursor:pointer" onclick="finDrilldown.open('unmatched_transfers')"{% endif %}>
+                <div class="trust-issue"{% if task.type == 'CLASSIFY_CREDIT' %} style="cursor:pointer" onclick="finDrilldown.open('credit_other')"{% elif task.type == 'MATCH_TRANSFER' %} style="cursor:pointer" onclick="finDrilldown.open('unmatched_transfers')"{% endif %}>
                     <span class="trust-issue-priority priority-{{ task.priority }}">{{ task.priority_label[0] }}</span>
                     <span class="trust-issue-text">{{ task.description }}</span>
                 </div>
