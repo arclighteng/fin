@@ -12,6 +12,7 @@ __pycache__/
 *.pyd
 *.sqlite
 *.db
+*.test_backup
 .vscode/
 
 # Local files

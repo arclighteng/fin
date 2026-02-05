@@ -6,7 +6,14 @@ Provides realistic financial data for thorough testing of:
 - Duplicate subscription detection
 - Income vs spend analysis
 - Period calculations
+
+SAFETY: This module includes guards to prevent tests from ever touching
+production data.  Running tests against a live database could trigger API
+calls to SimpleFIN and get the account blocklisted.
 """
+import atexit
+import os
+import shutil
 import sqlite3
 import tempfile
 from datetime import date, timedelta
@@ -16,6 +23,160 @@ from typing import Generator
 import pytest
 
 from fin import db as dbmod
+
+
+# =========================================================================
+# PRODUCTION DATABASE SAFETY GUARDS
+# =========================================================================
+# Two independent layers protect production data:
+#
+#   1. pytest_configure  — runs before collection; aborts immediately if
+#      the default DB path contains real SimpleFIN-sourced transactions.
+#
+#   2. _guard_production_db (session-scoped autouse fixture) — moves any
+#      production DB out of the way, blanks SIMPLEFIN_ACCESS_URL, and
+#      registers an atexit handler to restore the original even on crash.
+# =========================================================================
+
+_PROD_DB_BACKUP_PATH: Path | None = None
+_PROD_DB_ORIGINAL_PATH: Path | None = None
+
+
+def _db_has_real_data(db_path: str) -> bool:
+    """Return True if *db_path* looks like a production database.
+
+    Heuristic: the ``runs`` table exists and contains at least one row
+    (meaning a real SimpleFIN sync has been recorded).  Test databases
+    never have entries in this table because test fixtures insert
+    transactions directly.
+    """
+    p = Path(db_path)
+    if not p.exists() or p.stat().st_size == 0:
+        return False
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM runs WHERE txns_fetched > 0"
+        ).fetchone()
+        conn.close()
+        return row["cnt"] > 0
+    except Exception:
+        return False
+
+
+def _resolve_default_db_path() -> str:
+    """Mirror the logic in fin.config to find the default DB path."""
+    env_path = os.environ.get("FIN_DB_PATH", "").strip()
+    if env_path:
+        return env_path
+    in_docker = os.path.exists("/.dockerenv") or os.getcwd() == "/app"
+    return "/app/data/fin.db" if in_docker else "data/fin.db"
+
+
+# --- Layer 1: abort before any test is collected ---
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Abort the test session if the default DB contains real data."""
+    db_path = _resolve_default_db_path()
+    if _db_has_real_data(db_path):
+        raise pytest.UsageError(
+            "\n\n"
+            "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
+            "  SAFETY ABORT: Production database detected!\n"
+            f"  Path: {db_path}\n"
+            "  This database contains real SimpleFIN sync data.\n"
+            "  Tests MUST NOT run against production data — our\n"
+            "  provider will blocklist the account.\n"
+            "\n"
+            "  To fix:\n"
+            "    export FIN_DB_PATH=/tmp/test.db   # point elsewhere\n"
+            "    -- or --\n"
+            "    Move/rename the production database before running tests.\n"
+            "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
+        )
+
+
+# --- Layer 2: backup / restore + env sanitisation ---
+
+def _backup_db_files(db_path: Path, backup_path: Path) -> None:
+    """Back up a SQLite database and its WAL/SHM journal files.
+
+    Performs a WAL checkpoint first to flush any pending writes into the
+    main database file, ensuring a consistent backup.
+    """
+    # Checkpoint WAL to flush pending writes into the main DB file
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.close()
+    except Exception:
+        pass  # DB might not be in WAL mode; that's fine
+
+    shutil.copy2(str(db_path), str(backup_path))
+    # Also back up WAL and SHM files if they exist
+    for suffix in ("-wal", "-shm"):
+        journal = db_path.parent / (db_path.name + suffix)
+        if journal.exists():
+            shutil.copy2(str(journal), str(backup_path) + suffix)
+
+
+def _restore_db_files(backup_path: Path, db_path: Path) -> None:
+    """Restore a SQLite database and its WAL/SHM journal files from backup."""
+    if backup_path.exists():
+        shutil.copy2(str(backup_path), str(db_path))
+        backup_path.unlink(missing_ok=True)
+    # Restore or clean up WAL and SHM files
+    for suffix in ("-wal", "-shm"):
+        journal_backup = Path(str(backup_path) + suffix)
+        journal_target = db_path.parent / (db_path.name + suffix)
+        if journal_backup.exists():
+            shutil.copy2(str(journal_backup), str(journal_target))
+            journal_backup.unlink(missing_ok=True)
+        else:
+            # Remove stale journal files that don't belong to the backup
+            journal_target.unlink(missing_ok=True)
+
+
+def _restore_production_db() -> None:
+    """atexit callback: restore production DB even after unclean exit."""
+    global _PROD_DB_BACKUP_PATH, _PROD_DB_ORIGINAL_PATH
+    if _PROD_DB_BACKUP_PATH and _PROD_DB_ORIGINAL_PATH:
+        _restore_db_files(_PROD_DB_BACKUP_PATH, _PROD_DB_ORIGINAL_PATH)
+        _PROD_DB_BACKUP_PATH = None
+        _PROD_DB_ORIGINAL_PATH = None
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _guard_production_db() -> Generator[None, None, None]:
+    """Session-wide guard: back up production DB, sanitise env, restore after."""
+    global _PROD_DB_BACKUP_PATH, _PROD_DB_ORIGINAL_PATH
+
+    db_path = Path(_resolve_default_db_path())
+
+    # --- Back up production DB if it exists ---
+    if db_path.exists() and db_path.stat().st_size > 0:
+        backup = db_path.with_suffix(".db.test_backup")
+        _backup_db_files(db_path, backup)
+        _PROD_DB_ORIGINAL_PATH = db_path
+        _PROD_DB_BACKUP_PATH = backup
+        # Remove the original so no test can accidentally use it
+        db_path.unlink()
+        for suffix in ("-wal", "-shm"):
+            (db_path.parent / (db_path.name + suffix)).unlink(missing_ok=True)
+        # Register atexit so even a SIGTERM/crash restores the file
+        atexit.register(_restore_production_db)
+
+    # --- Block real SimpleFIN API calls ---
+    original_simplefin = os.environ.pop("SIMPLEFIN_ACCESS_URL", None)
+
+    yield
+
+    # --- Restore everything ---
+    if original_simplefin is not None:
+        os.environ["SIMPLEFIN_ACCESS_URL"] = original_simplefin
+
+    _restore_production_db()
 
 
 @pytest.fixture
