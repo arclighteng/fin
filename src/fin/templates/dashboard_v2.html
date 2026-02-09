@@ -561,6 +561,89 @@
     color: var(--text-primary);
 }
 
+/* Transaction search */
+.search-container {
+    position: relative;
+    flex: 1;
+    min-width: 180px;
+    max-width: 320px;
+}
+
+.search-input {
+    width: 100%;
+    padding: 8px 12px;
+    font-size: 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    outline: none;
+}
+
+.search-input:focus {
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}
+
+.search-results {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    margin-top: 4px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+    max-height: 400px;
+    overflow-y: auto;
+    z-index: 100;
+}
+
+.search-result-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+}
+
+.search-result-item:last-child { border-bottom: none; }
+.search-result-item:hover { background: var(--hover-bg); }
+
+.search-result-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.search-result-merchant {
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.search-result-meta {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+.search-result-amount {
+    font-weight: 600;
+    white-space: nowrap;
+    margin-left: 12px;
+}
+
+.search-empty {
+    padding: 16px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
 /* Account filter chips */
 .account-chips-v2 {
     display: flex;
@@ -782,6 +865,11 @@
             <a href="?period={{ period_type }}{% if selected_accounts %}&accounts={{ selected_accounts|join(',') }}{% endif %}" class="period-tab">Clear</a>
             {% endif %}
         </form>
+
+        <div class="search-container">
+            <input type="search" id="txn-search" class="search-input" placeholder="Search transactions..." autocomplete="off">
+            <div id="search-results" class="search-results" style="display: none;"></div>
+        </div>
 
         {% if all_accounts and all_accounts|length > 1 %}
         <div class="account-chips-v2">
@@ -1213,6 +1301,85 @@ function selectAllAccounts() {
     url.searchParams.delete('accounts');
     window.location = url;
 }
+
+// Transaction search
+(function() {
+    const input = document.getElementById('txn-search');
+    const resultsEl = document.getElementById('search-results');
+    if (!input || !resultsEl) return;
+
+    let debounceTimer = null;
+
+    input.addEventListener('input', function() {
+        clearTimeout(debounceTimer);
+        const q = this.value.trim();
+        if (q.length < 2) {
+            resultsEl.style.display = 'none';
+            return;
+        }
+        debounceTimer = setTimeout(() => doSearch(q), 300);
+    });
+
+    input.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            resultsEl.style.display = 'none';
+            this.blur();
+        }
+    });
+
+    document.addEventListener('click', function(e) {
+        if (!e.target.closest('.search-container')) {
+            resultsEl.style.display = 'none';
+        }
+    });
+
+    async function doSearch(q) {
+        const params = new URLSearchParams(window.location.search);
+        const accounts = params.get('accounts');
+        let url = '/api/search?q=' + encodeURIComponent(q) + '&days=365';
+        if (accounts) url += '&accounts=' + encodeURIComponent(accounts);
+
+        try {
+            const resp = await fetch(url);
+            const data = await resp.json();
+            renderResults(data);
+        } catch (e) {
+            resultsEl.innerHTML = '<div class="search-empty">Search failed</div>';
+            resultsEl.style.display = 'block';
+        }
+    }
+
+    function renderResults(data) {
+        if (!data.matches || data.matches.length === 0) {
+            resultsEl.innerHTML = '<div class="search-empty">No results found</div>';
+            resultsEl.style.display = 'block';
+            return;
+        }
+
+        let html = '';
+        for (const txn of data.matches.slice(0, 20)) {
+            const amt = Math.abs(txn.amount_cents / 100).toFixed(2);
+            const sign = txn.amount_cents >= 0 ? '+' : '-';
+            const color = txn.amount_cents >= 0 ? 'var(--accent-green)' : 'var(--text-primary)';
+            const merchant = finUI.escapeHtml(txn.merchant || txn.description || 'Unknown');
+            const account = finUI.escapeHtml(txn.account_name || '');
+            html += '<div class="search-result-item" onclick="finDrilldown.open(\'category:all\')">';
+            html += '<div class="search-result-info">';
+            html += '<div class="search-result-merchant">' + merchant + '</div>';
+            html += '<div class="search-result-meta">' + txn.date + ' &bull; ' + account + '</div>';
+            html += '</div>';
+            html += '<div class="search-result-amount" style="color:' + color + '">' + sign + '$' + amt + '</div>';
+            html += '</div>';
+        }
+
+        if (data.matches_count > 20) {
+            html += '<div class="search-empty">' + (data.matches_count - 20) + ' more results</div>';
+        }
+
+        resultsEl.innerHTML = html;
+        resultsEl.style.display = 'block';
+    }
+})();
 
 // Account filter update
 function updateAccountFilter() {
