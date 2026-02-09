@@ -2428,11 +2428,13 @@ def export_backup(
 def web(
     port: int = typer.Option(8000, help="Port to serve on."),
     host: str = typer.Option("127.0.0.1", help="Host to bind to. Use 0.0.0.0 for LAN access (security risk)."),
+    no_tls: bool = typer.Option(False, "--no-tls", help="Disable HTTPS and serve over plain HTTP."),
 ):
     """Run the local web UI.
 
-    By default, binds to localhost (127.0.0.1) only.
-    Use --host 0.0.0.0 to allow LAN access (not recommended without auth).
+    By default, binds to localhost (127.0.0.1) with HTTPS (self-signed cert).
+    Use --host 0.0.0.0 to allow LAN access.
+    Use --no-tls to disable HTTPS.
 
     API Authentication:
     - Mutation endpoints (POST/DELETE) require bearer token auth
@@ -2442,6 +2444,7 @@ def web(
     import uvicorn
     from pathlib import Path
     from .security import get_auth_info
+    from .tls import ensure_cert
 
     cfg = load_config()
     db_path = Path(cfg.db_path)
@@ -2470,10 +2473,27 @@ def web(
     else:
         console.print("[yellow]API Auth: Disabled[/yellow] (set FIN_API_TOKEN to enable)")
 
-    console.print(f"[dim]Dashboard:[/dim] http://{host if host != '0.0.0.0' else '127.0.0.1'}:{port}/dashboard")
+    # TLS setup
+    ssl_kwargs = {}
+    scheme = "http"
+    if not no_tls:
+        cert_dir = db_path.parent / "certs"
+        result = ensure_cert(cert_dir)
+        if result:
+            cert_path, key_path = result
+            ssl_kwargs["ssl_certfile"] = str(cert_path)
+            ssl_kwargs["ssl_keyfile"] = str(key_path)
+            scheme = "https"
+            console.print(f"[dim]TLS cert:[/dim] {cert_path}")
+            console.print("[dim]Your browser will show a security warning for the self-signed cert — this is expected.[/dim]")
+        else:
+            console.print("[yellow]TLS unavailable (openssl not found) — serving over HTTP[/yellow]")
+
+    display_host = host if host != "0.0.0.0" else "127.0.0.1"
+    console.print(f"[dim]Dashboard:[/dim] {scheme}://{display_host}:{port}/dashboard")
     console.print()
 
-    uvicorn.run("fin.web:app", host=host, port=port, reload=False)
+    uvicorn.run("fin.web:app", host=host, port=port, reload=False, **ssl_kwargs)
 
 
 @app.command()
