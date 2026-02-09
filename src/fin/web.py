@@ -1154,7 +1154,7 @@ def set_bulk_txn_type_override(
     from .dates import period_bounds
 
     # Default to current month for score calculation
-    start, end = period_bounds(date.today(), TimePeriod.MONTH)
+    start, end = period_bounds(TimePeriod.MONTH, date.today())
     report = ReportService(conn).report_period(start, end)
 
     return JSONResponse(content={
@@ -2598,7 +2598,7 @@ def api_budget_status(
     """Get current month budget status: targets vs actual spending."""
     from .dates import period_bounds
 
-    start, end = period_bounds(date.today(), TimePeriod.MONTH)
+    start, end = period_bounds(TimePeriod.MONTH, date.today())
     report = ReportService(conn).report_period(start, end)
     breakdown = category_breakdown_from_report(report)
     targets = dbmod.get_budget_targets(conn)
@@ -2636,8 +2636,8 @@ def api_budget_status(
     total_pct = round(total_spent_cents / total_budget_cents * 100, 1) if total_budget_cents > 0 else 0
 
     return JSONResponse(content={
-        "period_start": start,
-        "period_end": end,
+        "period_start": start.isoformat(),
+        "period_end": end.isoformat(),
         "total_budget_cents": total_budget_cents,
         "total_spent_cents": total_spent_cents,
         "total_remaining_cents": total_budget_cents - total_spent_cents,
@@ -2654,7 +2654,7 @@ def budget_page(
     """Budget management page."""
     from .dates import period_bounds
 
-    start, end = period_bounds(date.today(), TimePeriod.MONTH)
+    start, end = period_bounds(TimePeriod.MONTH, date.today())
     report = ReportService(conn).report_period(start, end)
     breakdown = category_breakdown_from_report(report)
     targets = dbmod.get_budget_targets(conn)
