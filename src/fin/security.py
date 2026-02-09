@@ -15,6 +15,7 @@ from fastapi import Header, HTTPException
 
 # Session token - generated once per process lifetime if not set via env
 _session_token: Optional[str] = None
+_csrf_token: Optional[str] = None
 
 
 def get_api_token() -> Optional[str]:
@@ -94,6 +95,14 @@ def verify_auth_token(authorization: Optional[str] = Header(None)) -> bool:
         )
 
     return True
+
+
+def get_csrf_token() -> str:
+    """Get the per-session CSRF token, generating on first call."""
+    global _csrf_token
+    if _csrf_token is None:
+        _csrf_token = secrets.token_urlsafe(32)
+    return _csrf_token
 
 
 def get_auth_info() -> dict:

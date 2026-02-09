@@ -2,6 +2,7 @@
 import csv
 import html
 import io
+import secrets
 import sqlite3
 from contextlib import contextmanager
 from datetime import date, timedelta
@@ -183,14 +184,15 @@ app = FastAPI()
 templates_dir = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(templates_dir))
 
-# Add API token to template globals for frontend auth
-from .security import get_api_token
+# Add API token and CSRF token to template globals for frontend auth
+from .security import get_api_token, get_csrf_token
 
 # Ensure the session token is generated on startup so it's available for all requests
 _startup_token = get_api_token()
 
-# Register the token getter as a callable global
+# Register token getters as callable globals
 templates.env.globals["api_token"] = get_api_token
+templates.env.globals["csrf_token"] = get_csrf_token
 
 # Mount static files
 static_dir = Path(__file__).parent / "static"
@@ -256,6 +258,26 @@ async def add_security_headers(request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     return response
+
+
+# ---------------------------------------------------------------------------
+# Security: CSRF protection for mutation endpoints
+# ---------------------------------------------------------------------------
+@app.middleware("http")
+async def verify_csrf(request, call_next):
+    if request.method in ("POST", "PUT", "DELETE", "PATCH"):
+        csrf_header = request.headers.get("x-csrf-token", "")
+        expected = get_csrf_token()
+        if not csrf_header or not secrets.compare_digest(csrf_header, expected):
+            # Allow if auth is disabled entirely
+            if not get_api_token():
+                return await call_next(request)
+            from starlette.responses import JSONResponse as _JSONResp
+            return _JSONResp(
+                status_code=403,
+                content={"detail": "CSRF token missing or invalid"},
+            )
+    return await call_next(request)
 
 
 # ---------------------------------------------------------------------------
