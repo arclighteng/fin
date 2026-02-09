@@ -1,0 +1,492 @@
+{% extends "base.html" %}
+
+{% block title %}Budget - fin{% endblock %}
+
+{% block content %}
+<style>
+.budget-page {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 16px;
+}
+
+.budget-summary {
+    background: var(--bg-secondary);
+    border-radius: 16px;
+    padding: 24px;
+    margin-bottom: 20px;
+}
+
+.budget-summary-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+}
+
+.budget-summary-title {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.budget-summary-stats {
+    display: flex;
+    gap: 32px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+}
+
+.budget-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.budget-stat-label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.budget-stat-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.budget-stat-value.positive { color: var(--accent-green); }
+.budget-stat-value.negative { color: var(--accent-red); }
+
+.budget-progress-bar {
+    width: 100%;
+    height: 12px;
+    background: var(--bg-tertiary);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.budget-progress-fill {
+    height: 100%;
+    border-radius: 6px;
+    transition: width 0.3s ease;
+}
+
+.budget-progress-fill.green { background: var(--accent-green); }
+.budget-progress-fill.yellow { background: var(--accent-yellow); }
+.budget-progress-fill.red { background: var(--accent-red); }
+
+/* Category rows */
+.budget-categories {
+    background: var(--bg-secondary);
+    border-radius: 16px;
+    padding: 24px;
+}
+
+.budget-categories-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+}
+
+.budget-categories-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.budget-row {
+    display: grid;
+    grid-template-columns: 200px 1fr 120px 80px;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.budget-row:last-child {
+    border-bottom: none;
+}
+
+.budget-row-category {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.budget-row-category .icon {
+    font-size: 1.1rem;
+}
+
+.budget-row-bar {
+    position: relative;
+}
+
+.budget-row-bar .budget-progress-bar {
+    height: 8px;
+}
+
+.budget-row-amounts {
+    text-align: right;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+.budget-row-amounts .spent {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.budget-row-pct {
+    text-align: right;
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.budget-row-pct.green { color: var(--accent-green); }
+.budget-row-pct.yellow { color: var(--accent-yellow); }
+.budget-row-pct.red { color: var(--accent-red); }
+
+/* Target editing */
+.budget-target-input {
+    width: 100px;
+    padding: 4px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    text-align: right;
+}
+
+.budget-target-input:focus {
+    outline: none;
+    border-color: var(--accent-blue);
+}
+
+.budget-row-actions {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+}
+
+.btn-icon {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.btn-icon:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.btn-icon.delete:hover {
+    color: var(--accent-red);
+}
+
+/* Add target form */
+.add-target-form {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-color);
+    flex-wrap: wrap;
+}
+
+.add-target-form select,
+.add-target-form input {
+    padding: 8px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.85rem;
+}
+
+.add-target-form select {
+    min-width: 180px;
+}
+
+.btn-add {
+    padding: 8px 16px;
+    background: var(--accent-blue);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+
+.btn-add:hover {
+    opacity: 0.9;
+}
+
+/* Unbudgeted section */
+.unbudgeted-divider {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 16px 0 8px;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.unbudgeted-divider::after {
+    content: '';
+    flex: 1;
+    border-bottom: 1px dashed var(--border-color);
+}
+
+/* Empty state */
+.budget-empty {
+    text-align: center;
+    padding: 48px 24px;
+    color: var(--text-muted);
+}
+
+.budget-empty h3 {
+    font-size: 1.1rem;
+    margin-bottom: 8px;
+    color: var(--text-secondary);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .budget-row {
+        grid-template-columns: 1fr;
+        gap: 6px;
+    }
+    .budget-row-amounts,
+    .budget-row-pct {
+        text-align: left;
+    }
+    .budget-summary-stats {
+        gap: 16px;
+    }
+    .budget-stat-value {
+        font-size: 1.25rem;
+    }
+}
+</style>
+
+<div class="budget-page">
+    <!-- Summary Card -->
+    {% if total_budget_cents > 0 %}
+    <div class="budget-summary">
+        <div class="budget-summary-header">
+            <span class="budget-summary-title">Monthly Budget</span>
+            <span style="color: var(--text-muted); font-size: 0.85rem;">
+                {{ period_start }} to {{ period_end }}
+            </span>
+        </div>
+        <div class="budget-summary-stats">
+            <div class="budget-stat">
+                <span class="budget-stat-label">Budget</span>
+                <span class="budget-stat-value">${{ "%.0f"|format(total_budget_cents / 100) }}</span>
+            </div>
+            <div class="budget-stat">
+                <span class="budget-stat-label">Spent</span>
+                <span class="budget-stat-value">${{ "%.0f"|format(total_spent_cents / 100) }}</span>
+            </div>
+            <div class="budget-stat">
+                <span class="budget-stat-label">Remaining</span>
+                {% set remaining = total_budget_cents - total_spent_cents %}
+                <span class="budget-stat-value {{ 'positive' if remaining >= 0 else 'negative' }}">
+                    {{ '-' if remaining < 0 else '' }}${{ "%.0f"|format((remaining if remaining >= 0 else -remaining) / 100) }}
+                </span>
+            </div>
+        </div>
+        <div class="budget-progress-bar">
+            {% set pct = [total_percent, 100]|min %}
+            <div class="budget-progress-fill {{ 'green' if total_percent < 80 else ('yellow' if total_percent < 100 else 'red') }}"
+                 style="width: {{ pct }}%"></div>
+        </div>
+        <div style="text-align: right; margin-top: 4px; font-size: 0.8rem; color: var(--text-muted);">
+            {{ total_percent }}% used
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Category Breakdown -->
+    <div class="budget-categories">
+        <div class="budget-categories-header">
+            <span class="budget-categories-title">Category Budgets</span>
+        </div>
+
+        {% set has_budgeted = [] %}
+        {% set has_unbudgeted = [] %}
+        {% for row in budget_rows %}
+            {% if row.target_cents > 0 %}
+                {% if has_budgeted.append(1) %}{% endif %}
+            {% else %}
+                {% if has_unbudgeted.append(1) %}{% endif %}
+            {% endif %}
+        {% endfor %}
+
+        {% if not budget_rows %}
+        <div class="budget-empty">
+            <h3>No budget targets set</h3>
+            <p>Add a target below to start tracking your spending against goals.</p>
+        </div>
+        {% endif %}
+
+        {% for row in budget_rows %}
+            {% if row.target_cents > 0 %}
+            <div class="budget-row" data-category="{{ row.category.id }}">
+                <div class="budget-row-category">
+                    <span class="icon">{{ row.category.icon }}</span>
+                    {{ row.category.name }}
+                </div>
+                <div class="budget-row-bar">
+                    <div class="budget-progress-bar">
+                        {% set pct = [row.percent, 100]|min %}
+                        <div class="budget-progress-fill {{ 'green' if row.percent < 80 else ('yellow' if row.percent < 100 else 'red') }}"
+                             style="width: {{ pct }}%; background: {{ row.category.color if row.percent < 100 else '' }}"></div>
+                    </div>
+                </div>
+                <div class="budget-row-amounts">
+                    <span class="spent">${{ "%.0f"|format(row.spent_cents / 100) }}</span>
+                    / ${{ "%.0f"|format(row.target_cents / 100) }}
+                </div>
+                <div class="budget-row-pct {{ 'green' if row.percent < 80 else ('yellow' if row.percent < 100 else 'red') }}">
+                    {{ "%.0f"|format(row.percent) }}%
+                </div>
+            </div>
+            {% endif %}
+        {% endfor %}
+
+        <!-- Unbudgeted spending -->
+        {% if has_unbudgeted %}
+        <div class="unbudgeted-divider">Unbudgeted spending</div>
+        {% for row in budget_rows %}
+            {% if row.target_cents == 0 and row.spent_cents > 0 %}
+            <div class="budget-row" data-category="{{ row.category.id }}">
+                <div class="budget-row-category" style="color: var(--text-secondary);">
+                    <span class="icon">{{ row.category.icon }}</span>
+                    {{ row.category.name }}
+                </div>
+                <div class="budget-row-bar"></div>
+                <div class="budget-row-amounts">
+                    <span class="spent">${{ "%.0f"|format(row.spent_cents / 100) }}</span>
+                    <span style="color: var(--text-muted);">no target</span>
+                </div>
+                <div class="budget-row-pct" style="color: var(--text-muted);">--</div>
+            </div>
+            {% endif %}
+        {% endfor %}
+        {% endif %}
+
+        <!-- Add/Edit Target Form -->
+        <div class="add-target-form" data-requires-auth="true">
+            <select id="budgetCategorySelect">
+                <option value="">Select category...</option>
+                {% for cat in all_categories %}
+                <option value="{{ cat.id }}">{{ cat.icon }} {{ cat.name }}</option>
+                {% endfor %}
+            </select>
+            <span style="color: var(--text-muted);">$</span>
+            <input type="number" id="budgetAmountInput" placeholder="0" min="0" step="1"
+                   style="width: 100px;" />
+            <span style="color: var(--text-muted); font-size: 0.85rem;">/mo</span>
+            <button class="btn-add" onclick="setBudgetTarget()">Set Target</button>
+        </div>
+    </div>
+</div>
+
+<script>
+async function setBudgetTarget() {
+    const select = document.getElementById('budgetCategorySelect');
+    const input = document.getElementById('budgetAmountInput');
+    const categoryId = select.value;
+    const amount = parseInt(input.value, 10);
+
+    if (!categoryId) { alert('Select a category'); return; }
+    if (!amount || amount < 0) { alert('Enter a valid amount'); return; }
+
+    try {
+        const resp = await fetch('/api/budget/target', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + API_TOKEN,
+                'X-CSRF-Token': CSRF_TOKEN,
+            },
+            body: JSON.stringify({
+                category_id: categoryId,
+                monthly_target_cents: amount * 100,
+            }),
+        });
+        if (!resp.ok) {
+            const err = await resp.json();
+            alert(err.error || 'Failed to set target');
+            return;
+        }
+        location.reload();
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+async function deleteBudgetTarget(categoryId) {
+    if (!confirm('Remove budget target for this category?')) return;
+    try {
+        const resp = await fetch('/api/budget/target/' + encodeURIComponent(categoryId), {
+            method: 'DELETE',
+            headers: {
+                'Authorization': 'Bearer ' + API_TOKEN,
+                'X-CSRF-Token': CSRF_TOKEN,
+            },
+        });
+        if (!resp.ok) {
+            alert('Failed to remove target');
+            return;
+        }
+        location.reload();
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+// Make budget rows clickable to set/edit targets
+document.querySelectorAll('.budget-row').forEach(row => {
+    const catId = row.dataset.category;
+    if (!catId) return;
+
+    // Add edit/delete buttons for budgeted rows
+    const pctCell = row.querySelector('.budget-row-pct');
+    if (pctCell && pctCell.textContent.trim() !== '--') {
+        const actions = document.createElement('div');
+        actions.className = 'budget-row-actions';
+        actions.innerHTML = `
+            <button class="btn-icon delete" onclick="event.stopPropagation(); deleteBudgetTarget('${catId}')" title="Remove target">&#10005;</button>
+        `;
+        row.appendChild(actions);
+        row.style.gridTemplateColumns = '200px 1fr 120px 80px 40px';
+    }
+
+    // Click unbudgeted row to pre-fill the form
+    row.style.cursor = 'pointer';
+    row.addEventListener('click', () => {
+        const select = document.getElementById('budgetCategorySelect');
+        select.value = catId;
+        document.getElementById('budgetAmountInput').focus();
+        select.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+});
+</script>
+{% endblock %}

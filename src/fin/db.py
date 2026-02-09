@@ -133,6 +133,14 @@ CREATE TABLE IF NOT EXISTS txn_type_overrides (
 -- Index for fast fingerprint lookup
 CREATE INDEX IF NOT EXISTS idx_txn_type_overrides_fp ON txn_type_overrides(fingerprint);
 
+-- Budget targets
+CREATE TABLE IF NOT EXISTS budget_targets (
+    category_id TEXT NOT NULL UNIQUE,
+    monthly_target_cents INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Performance indexes for common query patterns
 CREATE INDEX IF NOT EXISTS idx_txn_posted_at ON transactions(posted_at);
 CREATE INDEX IF NOT EXISTS idx_txn_account_posted ON transactions(account_id, posted_at);
@@ -540,6 +548,34 @@ def get_category_overrides(conn: sqlite3.Connection) -> dict[str, str]:
         "SELECT merchant_norm, category_id FROM category_overrides"
     ).fetchall()
     return {r["merchant_norm"]: r["category_id"] for r in rows}
+
+
+def get_budget_targets(conn: sqlite3.Connection) -> dict[str, int]:
+    """Get all budget targets. Returns dict mapping category_id -> monthly_target_cents."""
+    rows = conn.execute("SELECT category_id, monthly_target_cents FROM budget_targets").fetchall()
+    return {r["category_id"]: r["monthly_target_cents"] for r in rows}
+
+
+def set_budget_target(conn: sqlite3.Connection, category_id: str, monthly_target_cents: int) -> None:
+    """Set or update a budget target for a category."""
+    now = _utcnow_iso()
+    conn.execute(
+        """
+        INSERT INTO budget_targets(category_id, monthly_target_cents, created_at, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(category_id) DO UPDATE SET
+            monthly_target_cents = excluded.monthly_target_cents,
+            updated_at = excluded.updated_at
+        """,
+        (category_id, monthly_target_cents, now, now),
+    )
+    conn.commit()
+
+
+def delete_budget_target(conn: sqlite3.Connection, category_id: str) -> None:
+    """Remove a budget target."""
+    conn.execute("DELETE FROM budget_targets WHERE category_id = ?", (category_id,))
+    conn.commit()
 
 
 def dismiss_duplicate(conn: sqlite3.Connection, merchant_norm: str) -> None:

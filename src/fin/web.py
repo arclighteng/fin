@@ -139,6 +139,12 @@ class ReconcileRequest(BaseModel):
     statement_balance: str  # Dollar amount (can be negative)
 
 
+class BudgetTargetRequest(BaseModel):
+    """Request to set a budget target for a category."""
+    category_id: str
+    monthly_target_cents: int
+
+
 class ResolveReconciliationRequest(BaseModel):
     """Request to mark a reconciliation as resolved."""
     account_id: str
@@ -2440,6 +2446,170 @@ def api_report_snapshot(
     snapshot = export_report_snapshot(conn, report)
 
     return JSONResponse(content=snapshot)
+
+
+# ---------------------------------------------------------------------------
+# Budget Targets API
+# ---------------------------------------------------------------------------
+@app.get("/api/budget/targets")
+def api_budget_targets(conn: sqlite3.Connection = Depends(get_db)):
+    """Get all budget targets."""
+    targets = dbmod.get_budget_targets(conn)
+    return JSONResponse(content={
+        "targets": [
+            {"category_id": cid, "monthly_target_cents": cents}
+            for cid, cents in targets.items()
+        ]
+    })
+
+
+@app.post("/api/budget/target")
+def api_set_budget_target(
+    req: BudgetTargetRequest,
+    conn: sqlite3.Connection = Depends(get_db),
+    _auth: bool = Depends(verify_auth_token),
+):
+    """Set or update a budget target for a category."""
+    if req.category_id not in CATEGORIES:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Invalid category: {req.category_id}"},
+        )
+    if req.monthly_target_cents < 0:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Target must be non-negative"},
+        )
+    dbmod.set_budget_target(conn, req.category_id, req.monthly_target_cents)
+    return JSONResponse(content={"status": "ok"})
+
+
+@app.delete("/api/budget/target/{category_id}")
+def api_delete_budget_target(
+    category_id: str,
+    conn: sqlite3.Connection = Depends(get_db),
+    _auth: bool = Depends(verify_auth_token),
+):
+    """Remove a budget target."""
+    dbmod.delete_budget_target(conn, category_id)
+    return JSONResponse(content={"status": "ok"})
+
+
+@app.get("/api/budget/status")
+def api_budget_status(
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Get current month budget status: targets vs actual spending."""
+    from .dates import period_bounds
+
+    start, end = period_bounds(date.today(), TimePeriod.MONTH)
+    report = ReportService(conn).report_period(start, end)
+    breakdown = category_breakdown_from_report(report)
+    targets = dbmod.get_budget_targets(conn)
+
+    # Build status per category that has a target
+    categories_status = []
+    total_budget_cents = 0
+    total_spent_cents = 0
+
+    # Map actuals: category_id -> net_cents
+    actuals = {cat.id: net for cat, net, count, gross, refund in breakdown}
+
+    for cat_id, target_cents in targets.items():
+        cat = CATEGORIES.get(cat_id)
+        if not cat:
+            continue
+        spent = actuals.get(cat_id, 0)
+        pct = round(spent / target_cents * 100, 1) if target_cents > 0 else 0
+        total_budget_cents += target_cents
+        total_spent_cents += spent
+        categories_status.append({
+            "category_id": cat_id,
+            "name": cat.name,
+            "icon": cat.icon,
+            "color": cat.color,
+            "target_cents": target_cents,
+            "spent_cents": spent,
+            "remaining_cents": target_cents - spent,
+            "percent_used": pct,
+        })
+
+    # Sort by percent used descending (most over-budget first)
+    categories_status.sort(key=lambda x: -x["percent_used"])
+
+    total_pct = round(total_spent_cents / total_budget_cents * 100, 1) if total_budget_cents > 0 else 0
+
+    return JSONResponse(content={
+        "period_start": start,
+        "period_end": end,
+        "total_budget_cents": total_budget_cents,
+        "total_spent_cents": total_spent_cents,
+        "total_remaining_cents": total_budget_cents - total_spent_cents,
+        "total_percent_used": total_pct,
+        "categories": categories_status,
+    })
+
+
+@app.get("/budget", response_class=HTMLResponse)
+def budget_page(
+    request: Request,
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Budget management page."""
+    from .dates import period_bounds
+
+    start, end = period_bounds(date.today(), TimePeriod.MONTH)
+    report = ReportService(conn).report_period(start, end)
+    breakdown = category_breakdown_from_report(report)
+    targets = dbmod.get_budget_targets(conn)
+
+    # Build category list with targets and actuals
+    actuals = {cat.id: (net, count) for cat, net, count, gross, refund in breakdown}
+    budget_rows = []
+    total_budget = 0
+    total_spent = 0
+
+    for cat_id, cat in CATEGORIES.items():
+        if cat_id in ("income", "transfer", "one_time_deposit"):
+            continue
+        target = targets.get(cat_id, 0)
+        spent, count = actuals.get(cat_id, (0, 0))
+        if target > 0 or spent > 0:
+            pct = round(spent / target * 100, 1) if target > 0 else 0
+            budget_rows.append({
+                "category": cat,
+                "target_cents": target,
+                "spent_cents": spent,
+                "remaining_cents": target - spent if target > 0 else 0,
+                "percent": pct,
+                "count": count,
+            })
+            total_budget += target
+            total_spent += spent
+
+    # Sort: categories with targets first (by % used desc), then unbudgeted by spend desc
+    budget_rows.sort(key=lambda r: (-1 if r["target_cents"] > 0 else 0, -r["percent"], -r["spent_cents"]))
+
+    total_pct = round(total_spent / total_budget * 100, 1) if total_budget > 0 else 0
+
+    # All categories for the "add target" dropdown
+    all_categories = [
+        {"id": cid, "name": c.name, "icon": c.icon}
+        for cid, c in CATEGORIES.items()
+        if cid not in ("income", "transfer", "one_time_deposit")
+    ]
+
+    return templates.TemplateResponse("budget.html", {
+        "request": request,
+        "budget_rows": budget_rows,
+        "total_budget_cents": total_budget,
+        "total_spent_cents": total_spent,
+        "total_remaining_cents": total_budget - total_spent,
+        "total_percent": total_pct,
+        "all_categories": all_categories,
+        "period_start": start,
+        "period_end": end,
+    })
 
 
 # ---------------------------------------------------------------------------
