@@ -469,6 +469,11 @@
     color: var(--accent-green);
 }
 
+.recurring-badge.cadence {
+    background: rgba(0, 0, 0, 0.06);
+    color: var(--text-muted);
+}
+
 /* Price change alert styling */
 .alert-amount-v2.price-up {
     color: var(--accent-red);
@@ -1074,6 +1079,8 @@
                             {% set price_change.found = pc %}
                         {% endif %}
                     {% endfor %}
+                    {% set cadence = sub[2] %}
+                    {% set cadence_note = 'annually' if cadence == 'annual' else 'quarterly' if cadence == 'quarterly' else 'weekly' if cadence == 'weekly' else '' %}
                     <div class="recurring-item">
                         <span class="recurring-name">{{ display_name }}</span>
                         <div class="recurring-meta">
@@ -1084,7 +1091,8 @@
                             {% elif is_known %}
                             <span class="recurring-badge known">Known</span>
                             {% endif %}
-                            <span class="recurring-amount">${{ "%.2f"|format(sub[9] / 100) }}</span>
+                            {% if cadence_note %}<span class="recurring-badge cadence">{{ cadence_note }}</span>{% endif %}
+                            <span class="recurring-amount">${{ "%.2f"|format(sub[1] / 100) }}/mo</span>
                         </div>
                     </div>
                     {% endfor %}
@@ -1103,9 +1111,14 @@
                 </div>
                 <div class="recurring-list">
                     {% for bill in bills[:3] %}
+                    {% set bill_cadence = bill[2] %}
+                    {% set bill_cadence_note = 'annually' if bill_cadence == 'annual' else 'quarterly' if bill_cadence == 'quarterly' else 'bimonthly' if bill_cadence == 'bimonthly' else '' %}
                     <div class="recurring-item">
                         <span class="recurring-name">{{ bill[0] }}</span>
-                        <span class="recurring-amount">${{ "%.2f"|format(bill[1] / 100) }}</span>
+                        <div class="recurring-meta">
+                            {% if bill_cadence_note %}<span class="recurring-badge cadence">{{ bill_cadence_note }}</span>{% endif %}
+                            <span class="recurring-amount">${{ "%.2f"|format(bill[1] / 100) }}/mo</span>
+                        </div>
                     </div>
                     {% endfor %}
                 </div>

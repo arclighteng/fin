@@ -59,7 +59,7 @@
         {% set is_known = sub[7] %}
         {% set display_name = sub[8] %}
         {% set actual_charge = sub[9] %}
-        {% set cadence_suffix = '/yr' if cadence == 'annual' else '/qtr' if cadence == 'quarterly' else '/wk' if cadence == 'weekly' else '/mo' %}
+        {% set cadence_label = 'Billed annually' if cadence == 'annual' else 'Billed quarterly' if cadence == 'quarterly' else 'Billed weekly' if cadence == 'weekly' else 'Billed biweekly' if cadence == 'biweekly' else '' %}
         <div class="sub-item" data-payee="{{ merchant }}">
             <div class="sub-icon type-toggle" onclick="event.stopPropagation(); toggleType('{{ merchant }}', 'subscription')" title="Click to change to Bill">
                 {% if txn_type == 'insurance' %}&#128737;{% else %}&#128260;{% endif %}
@@ -71,11 +71,11 @@
                     {% if is_dup %}<span class="badge badge-duplicate">duplicate?</span>{% endif %}
                 </div>
                 <div class="sub-meta">
-                    {{ cadence }} &bull; Since {{ first_seen.strftime('%b %Y') }}
+                    {% if cadence_label %}{{ cadence_label }} (${{ "%.2f"|format(actual_charge / 100) }}) &bull; {% endif %}Since {{ first_seen.strftime('%b %Y') }}
                     {% if display_name and display_name != merchant %}&bull; <span style="opacity: 0.7;">{{ merchant }}</span>{% endif %}
                 </div>
             </div>
-            <div class="sub-amount">${{ "%.2f"|format(actual_charge / 100) }}<span class="sub-freq">{{ cadence_suffix }}</span></div>
+            <div class="sub-amount">${{ "%.2f"|format(monthly_cents / 100) }}<span class="sub-freq">/mo</span></div>
             <div class="sub-expand clickable" onclick="drillPayee('{{ merchant }}')">&#9654;</div>
         </div>
         <!-- Drill-down section (hidden by default) -->
@@ -117,10 +117,11 @@
         {% set last_seen = bill[4] %}
         <div class="sub-item bill" data-payee="{{ merchant }}">
             <div class="sub-icon type-toggle" onclick="event.stopPropagation(); toggleType('{{ merchant }}', 'bill')" title="Click to change to Subscription">&#9889;</div>
+            {% set bill_cadence_label = 'Billed annually' if cadence == 'annual' else 'Billed quarterly' if cadence == 'quarterly' else 'Billed bimonthly' if cadence == 'bimonthly' else '' %}
             <div class="sub-info clickable" onclick="drillPayee('{{ merchant }}')">
                 <div class="sub-name">{{ merchant }}</div>
                 <div class="sub-meta">
-                    {{ cadence }} &bull; Since {{ first_seen.strftime('%b %Y') }}
+                    {% if bill_cadence_label %}{{ bill_cadence_label }} &bull; {% endif %}Since {{ first_seen.strftime('%b %Y') }}
                 </div>
             </div>
             <div class="sub-amount">${{ "%.2f"|format(monthly_cents / 100) }}<span class="sub-freq">/mo</span></div>

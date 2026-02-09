@@ -42,8 +42,8 @@ def claim_access_url(setup_token: str) -> str:
     except Exception as e:
         raise ValueError(f"Invalid setup token - must be base64 encoded: {e}")
 
-    if not claim_url.startswith("http"):
-        raise ValueError("Invalid setup token - decoded value doesn't appear to be a URL")
+    if not claim_url.startswith("https://"):
+        raise ValueError("Invalid setup token - claim URL must use HTTPS")
 
     # Only log the hostname, never credentials
     try:
