@@ -1,4 +1,6 @@
+import os
 import sqlite3
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
@@ -152,9 +154,18 @@ def connect(db_path: str, check_same_thread: bool = True) -> sqlite3.Connection:
         db_path: Path to the database file
         check_same_thread: Set to False for multi-threaded access (e.g., FastAPI)
     """
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    db = Path(db_path)
+    db.parent.mkdir(parents=True, exist_ok=True)
+    is_new = not db.exists()
     conn = sqlite3.connect(db_path, check_same_thread=check_same_thread)
+    # Restrict file permissions to owner-only on Unix systems
+    if is_new and sys.platform != "win32":
+        try:
+            os.chmod(db_path, 0o600)
+        except OSError:
+            pass
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
 

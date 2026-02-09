@@ -2750,6 +2750,7 @@
         <div class="nav-links">
             <a href="/dashboard" {% if request.url.path == '/dashboard' %}class="active"{% endif %}>Dashboard</a>
             <a href="/subs" {% if request.url.path == '/subs' %}class="active"{% endif %}>Recurring</a>
+            <a href="/audit" {% if request.url.path == '/audit' %}class="active"{% endif %}>Audit</a>
             <a href="/sync-log" {% if request.url.path == '/sync-log' %}class="active"{% endif %}>Sync Log</a>
         </div>
         <div class="sync-container">
@@ -3178,7 +3179,7 @@
 
                         html += `<div class="drilldown-merchant" style="cursor:pointer;" data-merchant-name="${merchantNameSafe}">
                             <span class="drilldown-expand" onclick="toggleMerchantTxns('${merchantId}')">▶</span>
-                            <span class="drilldown-merchant-name" onclick="toggleMerchantTxns('${merchantId}')">${m.merchant}${multiHint}</span>
+                            <span class="drilldown-merchant-name" onclick="toggleMerchantTxns('${merchantId}')">${finUI.escapeHtml(m.merchant)}${multiHint}</span>
                             <span class="drilldown-merchant-meta">${m.count}x</span>
                             <span class="drilldown-merchant-amount">$${(m.total_cents / 100).toFixed(2)}</span>
                             <button class="btn btn-sm" onclick="event.stopPropagation(); openCategoryModalFromButton(this, '${categoryId}')" title="Change category">✏️</button>
@@ -3187,10 +3188,10 @@
                         m.transactions.forEach(t => {
                             // Show description if it differs from merchant name (contains additional info like card last 4)
                             const descHtml = t.description && t.description.toLowerCase() !== m.merchant ?
-                                `<span class="txn-desc" title="${t.description}">${t.description}</span>` : '';
+                                `<span class="txn-desc" title="${finUI.escapeHtml(t.description)}">${finUI.escapeHtml(t.description)}</span>` : '';
                             html += `<div class="drilldown-txn">
                                 <span class="txn-date">${t.date.substring(0,10)}</span>
-                                <span class="txn-account">${t.account}</span>
+                                <span class="txn-account">${finUI.escapeHtml(t.account)}</span>
                                 ${descHtml}
                                 <span class="txn-amount">$${(t.amount_cents / 100).toFixed(2)}</span>
                             </div>`;
@@ -3204,7 +3205,7 @@
                 }
             } catch (err) {
                 loadingEl.style.display = 'none';
-                contentEl.innerHTML = `<p style="color: var(--accent-red); font-size: 12px;">Error loading data: ${err.message}</p>`;
+                contentEl.innerHTML = `<p style="color: var(--accent-red); font-size: 12px;">Error loading data: ${finUI.escapeHtml(err.message)}</p>`;
             }
         }
 
