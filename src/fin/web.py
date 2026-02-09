@@ -145,6 +145,16 @@ class BudgetTargetRequest(BaseModel):
     monthly_target_cents: int
 
 
+class TransactionNoteRequest(BaseModel):
+    """Request to set a note on a transaction."""
+    note: str
+
+
+class TransactionTagRequest(BaseModel):
+    """Request to add a tag to a transaction."""
+    tag: str
+
+
 class ResolveReconciliationRequest(BaseModel):
     """Request to mark a reconciliation as resolved."""
     account_id: str
@@ -846,8 +856,13 @@ def drilldown(
     # Get existing overrides for these transactions
     fp_overrides, _ = dbmod.get_txn_type_overrides(conn)
 
+    sorted_txns = sorted(transactions, key=lambda t: t.posted_at, reverse=True)
+    all_fps = [txn.fingerprint for txn in sorted_txns]
+    annotations = dbmod.get_notes_and_tags_bulk(conn, all_fps)
+
     txn_list = []
-    for txn in sorted(transactions, key=lambda t: t.posted_at, reverse=True):
+    for txn in sorted_txns:
+        ann = annotations.get(txn.fingerprint, {"note": None, "tags": []})
         txn_list.append({
             "fingerprint": txn.fingerprint,
             "date": txn.posted_at.isoformat(),
@@ -857,6 +872,8 @@ def drilldown(
             "account_id": txn.account_id,
             "account_name": acct_names.get(txn.account_id, "Unknown"),
             "override_type": fp_overrides.get(txn.fingerprint),
+            "note": ann["note"],
+            "tags": ann["tags"],
         })
 
     response_data = {
@@ -2446,6 +2463,85 @@ def api_report_snapshot(
     snapshot = export_report_snapshot(conn, report)
 
     return JSONResponse(content=snapshot)
+
+
+# ---------------------------------------------------------------------------
+# Transaction Notes & Tags API
+# ---------------------------------------------------------------------------
+@app.get("/api/transaction/{fingerprint}/annotations")
+def api_get_annotations(
+    fingerprint: str,
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Get note and tags for a transaction."""
+    note = dbmod.get_transaction_note(conn, fingerprint)
+    tags = dbmod.get_transaction_tags(conn, fingerprint)
+    return JSONResponse(content={"note": note, "tags": tags})
+
+
+@app.post("/api/transaction/{fingerprint}/note")
+def api_set_note(
+    fingerprint: str,
+    req: TransactionNoteRequest,
+    conn: sqlite3.Connection = Depends(get_db),
+    _auth: bool = Depends(verify_auth_token),
+):
+    """Set or update a note on a transaction."""
+    note = req.note.strip()
+    if not note:
+        dbmod.delete_transaction_note(conn, fingerprint)
+    else:
+        dbmod.set_transaction_note(conn, fingerprint, note)
+    return JSONResponse(content={"status": "ok"})
+
+
+@app.delete("/api/transaction/{fingerprint}/note")
+def api_delete_note(
+    fingerprint: str,
+    conn: sqlite3.Connection = Depends(get_db),
+    _auth: bool = Depends(verify_auth_token),
+):
+    """Remove a note from a transaction."""
+    dbmod.delete_transaction_note(conn, fingerprint)
+    return JSONResponse(content={"status": "ok"})
+
+
+@app.post("/api/transaction/{fingerprint}/tag")
+def api_add_tag(
+    fingerprint: str,
+    req: TransactionTagRequest,
+    conn: sqlite3.Connection = Depends(get_db),
+    _auth: bool = Depends(verify_auth_token),
+):
+    """Add a tag to a transaction."""
+    import re
+    tag = req.tag.strip().lower()
+    if not tag or not re.match(r'^[a-z0-9][a-z0-9_ -]{0,48}[a-z0-9]$', tag):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Tag must be 2-50 chars: letters, numbers, spaces, hyphens, underscores"},
+        )
+    dbmod.add_transaction_tag(conn, fingerprint, tag)
+    return JSONResponse(content={"status": "ok"})
+
+
+@app.delete("/api/transaction/{fingerprint}/tag/{tag}")
+def api_remove_tag(
+    fingerprint: str,
+    tag: str,
+    conn: sqlite3.Connection = Depends(get_db),
+    _auth: bool = Depends(verify_auth_token),
+):
+    """Remove a tag from a transaction."""
+    dbmod.remove_transaction_tag(conn, fingerprint, tag)
+    return JSONResponse(content={"status": "ok"})
+
+
+@app.get("/api/tags")
+def api_list_tags(conn: sqlite3.Connection = Depends(get_db)):
+    """List all tags used across transactions (for autocomplete)."""
+    tags = dbmod.get_all_tags(conn)
+    return JSONResponse(content={"tags": tags})
 
 
 # ---------------------------------------------------------------------------

@@ -2067,6 +2067,128 @@
             margin-left: 4px;
         }
 
+        /* Transaction annotation styles (notes & tags) */
+        .txn-row { cursor: pointer; }
+        .txn-row:hover { background: var(--bg-tertiary); }
+        .txn-row.expanded { background: var(--bg-tertiary); }
+
+        .annotation-dot {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--accent-blue);
+            margin-right: 6px;
+            vertical-align: middle;
+        }
+
+        .annotation-row td {
+            padding: 0 !important;
+            background: var(--bg-primary);
+        }
+
+        .annotation-panel {
+            display: flex;
+            gap: 16px;
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .annotation-note {
+            flex: 1;
+        }
+
+        .note-input {
+            width: 100%;
+            min-height: 40px;
+            padding: 6px 8px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            font-size: 0.8rem;
+            font-family: inherit;
+            resize: vertical;
+        }
+
+        .note-input:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+        }
+
+        .annotation-tags {
+            flex: 1;
+        }
+
+        .tags-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-bottom: 6px;
+        }
+
+        .txn-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            background: var(--bg-tertiary);
+            border-radius: 12px;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+
+        .tag-remove {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 0.85rem;
+            padding: 0 2px;
+            line-height: 1;
+        }
+
+        .tag-remove:hover { color: var(--accent-red); }
+
+        .tag-add {
+            display: flex;
+            gap: 4px;
+        }
+
+        .tag-input {
+            flex: 1;
+            padding: 4px 8px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            font-size: 0.8rem;
+        }
+
+        .tag-input:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+        }
+
+        .btn-tag-add {
+            padding: 4px 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            cursor: pointer;
+            font-size: 0.85rem;
+        }
+
+        .btn-tag-add:hover { background: var(--bg-tertiary); }
+
+        @media (max-width: 768px) {
+            .annotation-panel {
+                flex-direction: column;
+                gap: 8px;
+            }
+        }
+
         /* Modal styles */
         .modal {
             position: fixed;

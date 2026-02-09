@@ -141,6 +141,26 @@ CREATE TABLE IF NOT EXISTS budget_targets (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Transaction notes
+CREATE TABLE IF NOT EXISTS transaction_notes (
+    fingerprint TEXT NOT NULL UNIQUE,
+    note TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Transaction tags
+CREATE TABLE IF NOT EXISTS transaction_tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fingerprint TEXT NOT NULL,
+    tag TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(fingerprint, tag)
+);
+
+CREATE INDEX IF NOT EXISTS idx_txn_tags_fp ON transaction_tags(fingerprint);
+CREATE INDEX IF NOT EXISTS idx_txn_tags_tag ON transaction_tags(tag);
+
 -- Performance indexes for common query patterns
 CREATE INDEX IF NOT EXISTS idx_txn_posted_at ON transactions(posted_at);
 CREATE INDEX IF NOT EXISTS idx_txn_account_posted ON transactions(account_id, posted_at);
@@ -576,6 +596,113 @@ def delete_budget_target(conn: sqlite3.Connection, category_id: str) -> None:
     """Remove a budget target."""
     conn.execute("DELETE FROM budget_targets WHERE category_id = ?", (category_id,))
     conn.commit()
+
+
+def get_transaction_note(conn: sqlite3.Connection, fingerprint: str) -> str | None:
+    """Get the note for a transaction, or None if no note exists."""
+    row = conn.execute(
+        "SELECT note FROM transaction_notes WHERE fingerprint = ?", (fingerprint,)
+    ).fetchone()
+    return row["note"] if row else None
+
+
+def set_transaction_note(conn: sqlite3.Connection, fingerprint: str, note: str) -> None:
+    """Set or update a note on a transaction."""
+    now = _utcnow_iso()
+    conn.execute(
+        """
+        INSERT INTO transaction_notes(fingerprint, note, created_at, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(fingerprint) DO UPDATE SET
+            note = excluded.note,
+            updated_at = excluded.updated_at
+        """,
+        (fingerprint, note, now, now),
+    )
+    conn.commit()
+
+
+def delete_transaction_note(conn: sqlite3.Connection, fingerprint: str) -> None:
+    """Remove a note from a transaction."""
+    conn.execute("DELETE FROM transaction_notes WHERE fingerprint = ?", (fingerprint,))
+    conn.commit()
+
+
+def get_transaction_tags(conn: sqlite3.Connection, fingerprint: str) -> list[str]:
+    """Get all tags for a transaction."""
+    rows = conn.execute(
+        "SELECT tag FROM transaction_tags WHERE fingerprint = ? ORDER BY tag",
+        (fingerprint,),
+    ).fetchall()
+    return [r["tag"] for r in rows]
+
+
+def add_transaction_tag(conn: sqlite3.Connection, fingerprint: str, tag: str) -> None:
+    """Add a tag to a transaction."""
+    now = _utcnow_iso()
+    conn.execute(
+        """
+        INSERT INTO transaction_tags(fingerprint, tag, created_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(fingerprint, tag) DO NOTHING
+        """,
+        (fingerprint, tag, now),
+    )
+    conn.commit()
+
+
+def remove_transaction_tag(conn: sqlite3.Connection, fingerprint: str, tag: str) -> None:
+    """Remove a tag from a transaction."""
+    conn.execute(
+        "DELETE FROM transaction_tags WHERE fingerprint = ? AND tag = ?",
+        (fingerprint, tag),
+    )
+    conn.commit()
+
+
+def get_all_tags(conn: sqlite3.Connection) -> list[str]:
+    """Get all distinct tags used across transactions."""
+    rows = conn.execute(
+        "SELECT DISTINCT tag FROM transaction_tags ORDER BY tag"
+    ).fetchall()
+    return [r["tag"] for r in rows]
+
+
+def get_notes_and_tags_bulk(
+    conn: sqlite3.Connection, fingerprints: list[str]
+) -> dict[str, dict]:
+    """
+    Bulk-load notes and tags for a list of fingerprints.
+    Returns dict mapping fingerprint -> {"note": str|None, "tags": list[str]}
+    """
+    if not fingerprints:
+        return {}
+
+    placeholders = ",".join("?" for _ in fingerprints)
+
+    notes = {}
+    rows = conn.execute(
+        f"SELECT fingerprint, note FROM transaction_notes WHERE fingerprint IN ({placeholders})",
+        fingerprints,
+    ).fetchall()
+    for r in rows:
+        notes[r["fingerprint"]] = r["note"]
+
+    tags: dict[str, list[str]] = {}
+    rows = conn.execute(
+        f"SELECT fingerprint, tag FROM transaction_tags WHERE fingerprint IN ({placeholders}) ORDER BY tag",
+        fingerprints,
+    ).fetchall()
+    for r in rows:
+        tags.setdefault(r["fingerprint"], []).append(r["tag"])
+
+    result = {}
+    for fp in fingerprints:
+        result[fp] = {
+            "note": notes.get(fp),
+            "tags": tags.get(fp, []),
+        }
+    return result
 
 
 def dismiss_duplicate(conn: sqlite3.Connection, merchant_norm: str) -> None:

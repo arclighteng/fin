@@ -109,6 +109,9 @@ const finDrilldown = (function() {
         _renderFooter(data);
     }
 
+    // Suggested tags for autocomplete
+    const SUGGESTED_TAGS = ['reimbursable', 'tax-deductible', 'split', 'gift', 'business'];
+
     function _renderTable(transactions, resolutionContext) {
         if (!transactions || transactions.length === 0) {
             document.getElementById('drilldownTable').innerHTML = '<div class="drilldown-empty">No transactions</div>';
@@ -116,6 +119,7 @@ const finDrilldown = (function() {
         }
 
         const showResolution = resolutionContext && resolutionContext.allows_resolution;
+        const colCount = showResolution ? 5 : 5;
 
         let html = '<table><thead><tr><th>Date</th><th>Merchant</th><th class="text-right">Amount</th><th>Account</th>';
         if (!showResolution) html += '<th>Type</th>';
@@ -124,9 +128,14 @@ const finDrilldown = (function() {
 
         transactions.forEach(t => {
             const amtClass = t.amount_cents > 0 ? 'positive' : '';
-            html += `<tr>
+            const hasNote = t.note ? ' has-note' : '';
+            const hasTags = (t.tags && t.tags.length > 0) ? ' has-tags' : '';
+            const annotationIndicator = (t.note || (t.tags && t.tags.length > 0))
+                ? '<span class="annotation-dot" title="Has notes/tags"></span>' : '';
+
+            html += `<tr class="txn-row${hasNote}${hasTags}" data-fp="${finUI.escapeHtml(t.fingerprint)}" onclick="finDrilldown.toggleAnnotation(this)">
                 <td>${finUI.formatDate(t.date)}</td>
-                <td>${finUI.escapeHtml(t.merchant)}</td>
+                <td>${annotationIndicator}${finUI.escapeHtml(t.merchant)}</td>
                 <td class="text-right ${amtClass}">${finUI.formatCents(t.amount_cents)}</td>
                 <td class="muted">${finUI.escapeHtml(t.account_name || '')}</td>`;
 
@@ -136,7 +145,7 @@ const finDrilldown = (function() {
 
             if (showResolution) {
                 const existingOverride = t.override_type || '';
-                html += '<td><select id="resolution-' + finUI.escapeHtml(t.fingerprint) + '" class="resolution-select" onchange="finDrilldown.markChanged()">';
+                html += '<td onclick="event.stopPropagation()"><select id="resolution-' + finUI.escapeHtml(t.fingerprint) + '" class="resolution-select" onchange="finDrilldown.markChanged()">';
                 html += '<option value="">- Select -</option>';
                 resolutionContext.resolution_options.forEach(opt => {
                     const selected = opt.value === existingOverride ? 'selected' : '';
@@ -146,9 +155,151 @@ const finDrilldown = (function() {
             }
 
             html += '</tr>';
+
+            // Annotation row (hidden by default)
+            const tagsHtml = (t.tags || []).map(tag =>
+                `<span class="txn-tag">${finUI.escapeHtml(tag)}<button class="tag-remove" onclick="event.stopPropagation(); finDrilldown.removeTag('${finUI.escapeHtml(t.fingerprint)}', '${finUI.escapeHtml(tag)}')">&times;</button></span>`
+            ).join('');
+
+            html += `<tr class="annotation-row" id="ann-${finUI.escapeHtml(t.fingerprint)}" style="display:none" onclick="event.stopPropagation()">
+                <td colspan="${colCount}">
+                    <div class="annotation-panel">
+                        <div class="annotation-note">
+                            <textarea class="note-input" id="note-${finUI.escapeHtml(t.fingerprint)}"
+                                placeholder="Add a note..." onblur="finDrilldown.saveNote('${finUI.escapeHtml(t.fingerprint)}')">${finUI.escapeHtml(t.note || '')}</textarea>
+                        </div>
+                        <div class="annotation-tags">
+                            <div class="tags-list" id="tags-${finUI.escapeHtml(t.fingerprint)}">${tagsHtml}</div>
+                            <div class="tag-add">
+                                <input type="text" class="tag-input" id="tag-input-${finUI.escapeHtml(t.fingerprint)}"
+                                    placeholder="Add tag..." onkeydown="if(event.key==='Enter'){event.preventDefault(); finDrilldown.addTag('${finUI.escapeHtml(t.fingerprint)}')}" list="tag-suggestions">
+                                <button class="btn-tag-add" onclick="finDrilldown.addTag('${finUI.escapeHtml(t.fingerprint)}')">+</button>
+                            </div>
+                        </div>
+                    </div>
+                </td>
+            </tr>`;
         });
         html += '</tbody></table>';
+
+        // Tag suggestions datalist
+        html += '<datalist id="tag-suggestions">';
+        SUGGESTED_TAGS.forEach(tag => { html += `<option value="${finUI.escapeHtml(tag)}">`; });
+        html += '</datalist>';
+
         document.getElementById('drilldownTable').innerHTML = html;
+    }
+
+    function toggleAnnotation(row) {
+        const fp = row.dataset.fp;
+        const annRow = document.getElementById('ann-' + fp);
+        if (!annRow) return;
+        const isVisible = annRow.style.display !== 'none';
+        // Close all others
+        document.querySelectorAll('.annotation-row').forEach(r => r.style.display = 'none');
+        document.querySelectorAll('.txn-row').forEach(r => r.classList.remove('expanded'));
+        if (!isVisible) {
+            annRow.style.display = 'table-row';
+            row.classList.add('expanded');
+        }
+    }
+
+    async function saveNote(fingerprint) {
+        const textarea = document.getElementById('note-' + fingerprint);
+        if (!textarea) return;
+        const note = textarea.value.trim();
+        try {
+            if (note) {
+                await finApi.postJSON('/api/transaction/' + encodeURIComponent(fingerprint) + '/note', { note });
+            } else {
+                await finApi.delete('/api/transaction/' + encodeURIComponent(fingerprint) + '/note');
+            }
+            // Update dot indicator
+            const row = document.querySelector(`tr[data-fp="${fingerprint}"]`);
+            if (row) {
+                if (note) {
+                    row.classList.add('has-note');
+                    if (!row.querySelector('.annotation-dot')) {
+                        const merchantTd = row.querySelectorAll('td')[1];
+                        merchantTd.insertAdjacentHTML('afterbegin', '<span class="annotation-dot" title="Has notes/tags"></span>');
+                    }
+                } else {
+                    row.classList.remove('has-note');
+                    const hasTags = row.classList.contains('has-tags');
+                    if (!hasTags) {
+                        const dot = row.querySelector('.annotation-dot');
+                        if (dot) dot.remove();
+                    }
+                }
+            }
+        } catch (err) {
+            // Silently handle read-only mode
+        }
+    }
+
+    async function addTag(fingerprint) {
+        const input = document.getElementById('tag-input-' + fingerprint);
+        if (!input) return;
+        const tag = input.value.trim().toLowerCase();
+        if (!tag) return;
+
+        try {
+            const resp = await finApi.postJSON('/api/transaction/' + encodeURIComponent(fingerprint) + '/tag', { tag });
+            if (!resp.ok) {
+                const err = await resp.json();
+                finUI.toast(err.error || 'Invalid tag');
+                return;
+            }
+            input.value = '';
+
+            // Add tag chip to UI
+            const tagsList = document.getElementById('tags-' + fingerprint);
+            const chip = document.createElement('span');
+            chip.className = 'txn-tag';
+            chip.innerHTML = `${finUI.escapeHtml(tag)}<button class="tag-remove" onclick="event.stopPropagation(); finDrilldown.removeTag('${finUI.escapeHtml(fingerprint)}', '${finUI.escapeHtml(tag)}')">&times;</button>`;
+            tagsList.appendChild(chip);
+
+            // Update row indicator
+            const row = document.querySelector(`tr[data-fp="${fingerprint}"]`);
+            if (row) {
+                row.classList.add('has-tags');
+                if (!row.querySelector('.annotation-dot')) {
+                    const merchantTd = row.querySelectorAll('td')[1];
+                    merchantTd.insertAdjacentHTML('afterbegin', '<span class="annotation-dot" title="Has notes/tags"></span>');
+                }
+            }
+        } catch (err) {
+            // Read-only mode
+        }
+    }
+
+    async function removeTag(fingerprint, tag) {
+        try {
+            await finApi.delete('/api/transaction/' + encodeURIComponent(fingerprint) + '/tag/' + encodeURIComponent(tag));
+
+            // Remove chip from UI
+            const tagsList = document.getElementById('tags-' + fingerprint);
+            if (tagsList) {
+                tagsList.querySelectorAll('.txn-tag').forEach(chip => {
+                    if (chip.textContent.replace('\u00d7', '').trim() === tag) chip.remove();
+                });
+            }
+
+            // Update indicator if no tags left
+            const remaining = tagsList ? tagsList.querySelectorAll('.txn-tag').length : 0;
+            if (remaining === 0) {
+                const row = document.querySelector(`tr[data-fp="${fingerprint}"]`);
+                if (row) {
+                    row.classList.remove('has-tags');
+                    if (!row.classList.contains('has-note')) {
+                        const dot = row.querySelector('.annotation-dot');
+                        if (dot) dot.remove();
+                    }
+                }
+            }
+        } catch (err) {
+            // Read-only mode
+        }
     }
 
     function _renderFooter(data) {
@@ -322,5 +473,9 @@ const finDrilldown = (function() {
         exportCSV,
         markChanged,
         saveResolutions,
+        toggleAnnotation,
+        saveNote,
+        addTag,
+        removeTag,
     };
 })();
