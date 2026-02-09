@@ -199,6 +199,45 @@ if static_dir.exists():
 
 
 # ---------------------------------------------------------------------------
+# Observability: request logging with auth failure tracking
+# ---------------------------------------------------------------------------
+import time as _time
+import logging as _logging
+from collections import defaultdict as _defaultdict
+
+_access_log = _logging.getLogger("fin.access")
+_auth_failures: dict[str, int] = _defaultdict(int)
+
+
+@app.middleware("http")
+async def log_requests(request, call_next):
+    start = _time.monotonic()
+    response = await call_next(request)
+    elapsed_ms = (_time.monotonic() - start) * 1000
+    client_ip = request.client.host if request.client else "-"
+    method = request.method
+    path = request.url.path
+    status = response.status_code
+
+    if status in (401, 403):
+        _auth_failures[client_ip] += 1
+        total = _auth_failures[client_ip]
+        _access_log.warning(
+            "%s | %s %s | %d | %.0fms | auth failure #%d from %s",
+            client_ip, method, path, status, elapsed_ms, total, client_ip,
+        )
+    elif path.startswith("/static/"):
+        pass  # skip static file noise
+    else:
+        _access_log.info(
+            "%s | %s %s | %d | %.0fms",
+            client_ip, method, path, status, elapsed_ms,
+        )
+
+    return response
+
+
+# ---------------------------------------------------------------------------
 # Security: Content-Security-Policy header
 # ---------------------------------------------------------------------------
 @app.middleware("http")
