@@ -2769,6 +2769,7 @@
     <!-- Auth config - must be defined before loading JS modules -->
     <script>
         const API_TOKEN = '{{ api_token() or "" }}';
+        const CSRF_TOKEN = '{{ csrf_token() or "" }}';
         const FIN_READ_ONLY = !API_TOKEN;
     </script>
 
