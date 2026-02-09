@@ -82,6 +82,10 @@ def report_period(
     override_registry = OverrideRegistry()
     override_registry.load_from_db(conn)
 
+    # Load category overrides (merchant_norm -> category_id)
+    from . import db as dbmod
+    category_overrides = dbmod.get_category_overrides(conn)
+
     # Detect transfer pairs
     transfer_result = detect_transfer_pairs(conn, start_date, end_date)
     paired_fps = transfer_result.get_paired_fingerprints()
@@ -172,14 +176,14 @@ def report_period(
         )
 
         # Determine category for expenses
+        # Manual overrides take precedence over rule-based categorization
         category_id = None
-        if result.txn_type == TransactionType.EXPENSE:
-            cat_id, _ = categorize_merchant(merchant, row["raw_description"])
-            category_id = cat_id
-        elif result.txn_type == TransactionType.REFUND:
-            # Refunds can inherit category from matched expense or use categorization
-            cat_id, _ = categorize_merchant(merchant, row["raw_description"])
-            category_id = cat_id
+        if result.txn_type in (TransactionType.EXPENSE, TransactionType.REFUND):
+            if merchant in category_overrides:
+                category_id = category_overrides[merchant]
+            else:
+                cat_id, _ = categorize_merchant(merchant, row["raw_description"])
+                category_id = cat_id
 
         # Build classified transaction
         txn = ClassifiedTransaction(
