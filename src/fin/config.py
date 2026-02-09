@@ -15,6 +15,9 @@ class Config:
     log_format: str = "simple"
     timezone: str = "UTC"  # IANA timezone name (e.g., "America/Chicago")
 
+    def __repr__(self) -> str:
+        return f"Config(db_path={self.db_path!r}, log_level={self.log_level!r}, simplefin_access_url='***')"
+
 
 def _get_default_db_path() -> str:
     """
