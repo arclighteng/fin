@@ -828,7 +828,7 @@
             const data = await resp.json();
 
             if (data.error) {
-                bodyEl.innerHTML = '<div class="error">' + data.error + '</div>';
+                bodyEl.innerHTML = '<div class="error">' + finUI.escapeHtml(data.error) + '</div>';
                 return;
             }
 

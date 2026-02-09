@@ -820,11 +820,13 @@ def drilldown_export(
         ])
 
     output.seek(0)
-    safe_scope = scope.replace(":", "_")
+    import re
+    safe = lambda s: re.sub(r'[^a-zA-Z0-9_\-]', '_', s)
+    fname = f"drilldown_{safe(scope)}_{safe(start_date)}_{safe(end_date)}.csv"
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="drilldown_{safe_scope}_{start_date}_{end_date}.csv"'},
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
 
 
@@ -1130,7 +1132,7 @@ def list_accounts(conn: sqlite3.Connection = Depends(get_db)):
 def search_transactions(
     q: str = Query(..., description="Search query"),
     accounts: str | None = Query(None, description="Comma-separated account IDs for primary results"),
-    days: int = Query(365, description="Days to search back"),
+    days: int = Query(365, ge=1, le=3650, description="Days to search back"),
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """
@@ -1631,7 +1633,7 @@ def audit_page(
 @app.get("/api/payee/{payee_norm:path}")
 def get_payee_transactions(
     payee_norm: str,
-    days: int = Query(400, description="Lookback days"),
+    days: int = Query(400, ge=1, le=3650, description="Lookback days"),
     accounts: str | None = Query(None, description="Comma-separated account IDs to filter"),
     conn: sqlite3.Connection = Depends(get_db),
 ):
@@ -1865,10 +1867,12 @@ def export_summary(
         ])
 
     output.seek(0)
+    import re
+    safe_period = re.sub(r'[^a-zA-Z0-9_\-]', '_', period)
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename={period}_summary.csv"},
+        headers={"Content-Disposition": f'attachment; filename="{safe_period}_summary.csv"'},
     )
 
 
@@ -1953,9 +1957,14 @@ def api_sync(_auth: bool = Depends(verify_auth_token)):
         finally:
             client.close()
     except Exception as e:
+        # Sanitize error message to prevent credential leakage
+        # SimpleFIN access URLs contain auth tokens that must not be exposed
+        import re
+        msg = str(e)
+        msg = re.sub(r'https?://[^\s"\'<>]+', '[URL redacted]', msg)
         return JSONResponse(
             status_code=500,
-            content={"error": str(e)},
+            content={"error": msg},
         )
     finally:
         conn.close()
@@ -2000,7 +2009,7 @@ def get_sync_status(conn: sqlite3.Connection = Depends(get_db)):
 
 @app.get("/api/sync-history")
 def get_sync_history(
-    limit: int = Query(20, description="Number of recent syncs to return"),
+    limit: int = Query(20, ge=1, le=500, description="Number of recent syncs to return"),
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """Get sync audit log - history of all sync runs."""
@@ -2118,7 +2127,7 @@ def api_resolve_reconciliation(
 @app.get("/api/reconcile/history")
 def api_reconciliation_history(
     account_id: str | None = Query(None, description="Filter by account"),
-    limit: int = Query(50, description="Number of records to return"),
+    limit: int = Query(50, ge=1, le=500, description="Number of records to return"),
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """Get reconciliation history."""
@@ -2234,7 +2243,7 @@ def api_audit_log(
     entity_type: str | None = Query(None, description="Filter by entity type"),
     entity_id: str | None = Query(None, description="Filter by entity ID"),
     event_type: str | None = Query(None, description="Filter by event type"),
-    limit: int = Query(100, description="Max events to return"),
+    limit: int = Query(100, ge=1, le=1000, description="Max events to return"),
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """Get audit log with optional filters."""
@@ -2355,7 +2364,7 @@ def api_report_snapshot(
 # ---------------------------------------------------------------------------
 @app.get("/api/planner/budget")
 def api_budget_plan(
-    months: int = Query(6, description="Months of history to analyze"),
+    months: int = Query(6, ge=1, le=120, description="Months of history to analyze"),
     accounts: str | None = Query(None, description="Comma-separated account IDs"),
     conn: sqlite3.Connection = Depends(get_db),
 ):
@@ -2399,7 +2408,7 @@ def api_budget_plan(
 @app.get("/api/planner/bucket/{bucket_name}")
 def api_bucket_detail(
     bucket_name: str,
-    months: int = Query(6, description="Months of history"),
+    months: int = Query(6, ge=1, le=120, description="Months of history"),
     accounts: str | None = Query(None, description="Comma-separated account IDs"),
     conn: sqlite3.Connection = Depends(get_db),
 ):
@@ -2426,8 +2435,8 @@ def api_bucket_detail(
 
 @app.get("/api/planner/projection")
 def api_budget_projection(
-    history_months: int = Query(6, description="Months of history to base projection on"),
-    forward_months: int = Query(3, description="Months to project forward"),
+    history_months: int = Query(6, ge=1, le=120, description="Months of history to base projection on"),
+    forward_months: int = Query(3, ge=1, le=24, description="Months to project forward"),
     accounts: str | None = Query(None, description="Comma-separated account IDs"),
     conn: sqlite3.Connection = Depends(get_db),
 ):
@@ -2448,7 +2457,7 @@ def api_budget_projection(
 # ---------------------------------------------------------------------------
 @app.get("/api/cashflow/projection")
 def api_cashflow_projection(
-    days: int = Query(30, description="Days to project forward"),
+    days: int = Query(30, ge=1, le=365, description="Days to project forward"),
     accounts: str | None = Query(None, description="Comma-separated account IDs"),
     conn: sqlite3.Connection = Depends(get_db),
 ):
@@ -2490,7 +2499,7 @@ def api_cashflow_projection(
 
 @app.get("/api/cashflow/alerts")
 def api_cashflow_alerts(
-    days: int = Query(30, description="Days to look ahead"),
+    days: int = Query(30, ge=1, le=365, description="Days to look ahead"),
     accounts: str | None = Query(None, description="Comma-separated account IDs"),
     conn: sqlite3.Connection = Depends(get_db),
 ):

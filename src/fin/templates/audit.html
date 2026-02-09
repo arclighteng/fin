@@ -92,7 +92,7 @@
                     <th class="num">Charges</th>
                     <th class="num">Total</th>
                     <th>Last Seen</th>
-                    <th>Status</th>
+                    <th>Type</th>
                 </tr>
             </thead>
             <tbody>
@@ -103,7 +103,13 @@
                     <td class="num">${{ "%.2f"|format(m.total_cents / 100) }}</td>
                     <td>{{ m.last_seen }}</td>
                     <td>
-                        <span class="status-badge status-{{ m.status }}">{{ m.status }}</span>
+                        {% if m.status == 'tracked' %}
+                        <span class="status-badge status-tracked">Subscription / Bill</span>
+                        {% elif m.status == 'recurring' %}
+                        <span class="status-badge status-recurring">Recurring</span>
+                        {% else %}
+                        <span class="status-badge status-untracked">One-time</span>
+                        {% endif %}
                     </td>
                 </tr>
                 {% endfor %}
