@@ -940,6 +940,21 @@
         </div>
         {% endif %}
 
+        <!-- AUDIT CARD -->
+        {% if audit %}
+        <div class="card-v2">
+            <div class="card-v2-header">
+                <h2 class="card-v2-title">Audit</h2>
+                <a href="/audit" class="card-v2-action">Details</a>
+            </div>
+            <div style="display: flex; gap: 16px; font-size: 14px;">
+                <span style="color: var(--accent-green);">{{ audit.tracked_count }} tracked</span>
+                <span style="color: {% if audit.pending_count > 0 %}var(--accent-yellow){% else %}var(--text-muted){% endif %};">{{ audit.pending_count }} pending</span>
+                <span style="color: {% if audit.review_count > 0 %}var(--accent-yellow){% else %}var(--text-muted){% endif %};">{{ audit.review_count }} need review</span>
+            </div>
+        </div>
+        {% endif %}
+
         <!-- ALERTS CARD -->
         <div class="card-v2">
             <div class="card-v2-header">

@@ -1,0 +1,510 @@
+{% extends "base.html" %}
+
+{% block title %}Audit - fin{% endblock %}
+
+{% block content %}
+<h1>Financial Audit</h1>
+
+<p style="color: var(--text-muted); margin-bottom: 12px;">
+    <a href="/dashboard" style="color: var(--accent-blue);">&#8592; Back to Dashboard</a>
+    &nbsp;|&nbsp; Coverage report for current month
+</p>
+
+<!-- Account Filter -->
+{% if all_accounts %}
+<div class="account-filter" style="margin-bottom: 24px;">
+    <label class="filter-label">Accounts:</label>
+    <div class="account-chips">
+        {% for acc in all_accounts %}
+        {% set is_selected = (acc['account_id'] in selected_accounts) if selected_accounts else (not show_no_data) %}
+        <label class="account-chip{% if is_selected %} selected{% endif %}">
+            <input type="checkbox"
+                   value="{{ acc['account_id'] }}"
+                   {% if is_selected %}checked{% endif %}
+                   onchange="updateAccountFilter()">
+            <span class="chip-text">{{ acc['name'] }}</span>
+        </label>
+        {% endfor %}
+    </div>
+    {% if selected_accounts or show_no_data %}
+    <a href="/audit" class="btn btn-sm" style="margin-left: 8px;">All Accounts</a>
+    {% endif %}
+</div>
+{% endif %}
+
+{% if show_no_data %}
+<div class="card">
+    <div class="card-body">
+        <div class="empty-state"><p>Select accounts to view audit data.</p></div>
+    </div>
+</div>
+{% else %}
+
+<!-- Coverage Summary -->
+<div class="audit-stats">
+    <div class="audit-stat">
+        <div class="audit-stat-value">{{ coverage.total_txns }}</div>
+        <div class="audit-stat-label">Transactions</div>
+    </div>
+    <div class="audit-stat">
+        <div class="audit-stat-value {% if coverage.cat_pct >= 90 %}stat-good{% elif coverage.cat_pct >= 70 %}stat-warn{% else %}stat-bad{% endif %}">{{ coverage.cat_pct }}%</div>
+        <div class="audit-stat-label">Categorized</div>
+    </div>
+    <div class="audit-stat">
+        <div class="audit-stat-value">{{ coverage.tracked_merchants }}</div>
+        <div class="audit-stat-label">Tracked Merchants</div>
+    </div>
+    <div class="audit-stat">
+        <div class="audit-stat-value {% if coverage.low_conf == 0 %}stat-good{% else %}stat-warn{% endif %}">{{ coverage.low_conf }}</div>
+        <div class="audit-stat-label">Low Confidence</div>
+    </div>
+</div>
+
+<!-- Type Breakdown -->
+{% if coverage.by_type %}
+<div class="card">
+    <div class="card-header"><h2>Transaction Types</h2></div>
+    <div class="card-body">
+        <div class="type-breakdown">
+            {% for type_name, count in coverage.by_type.items() %}
+            <div class="type-row">
+                <span class="type-name">{{ type_name }}</span>
+                <span class="type-count">{{ count }}</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Top Merchants Table -->
+<div class="card">
+    <div class="card-header">
+        <h2>Top Merchants by Spend ({{ top_merchants|length }})</h2>
+    </div>
+    <div class="card-body">
+    {% if top_merchants %}
+    <div class="table-wrap">
+        <table class="audit-table">
+            <thead>
+                <tr>
+                    <th>Merchant</th>
+                    <th class="num">Charges</th>
+                    <th class="num">Total</th>
+                    <th>Last Seen</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for m in top_merchants %}
+                <tr>
+                    <td>{{ m.merchant }}</td>
+                    <td class="num">{{ m.count }}</td>
+                    <td class="num">${{ "%.2f"|format(m.total_cents / 100) }}</td>
+                    <td>{{ m.last_seen }}</td>
+                    <td>
+                        <span class="status-badge status-{{ m.status }}">{{ m.status }}</span>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state"><p>No merchant data available.</p></div>
+    {% endif %}
+    </div>
+</div>
+
+<!-- Expected Charges Not Yet Posted -->
+{% if not_yet_posted %}
+<div class="card">
+    <div class="card-header">
+        <h2>Not Yet Posted ({{ not_yet_posted|length }})</h2>
+    </div>
+    <div class="card-body">
+    <div class="table-wrap">
+        <table class="audit-table">
+            <thead>
+                <tr>
+                    <th>Merchant</th>
+                    <th>Cadence</th>
+                    <th class="num">Typical Amount</th>
+                    <th>Last Seen</th>
+                    <th>Expected By</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in not_yet_posted %}
+                <tr>
+                    <td>{{ item.merchant }}</td>
+                    <td>{{ item.cadence }}</td>
+                    <td class="num">${{ "%.2f"|format(item.median_amount / 100) }}</td>
+                    <td>{{ item.last_seen }}</td>
+                    <td>{{ item.expected_date }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Low Confidence Review Queue -->
+{% if low_confidence %}
+<div class="card">
+    <div class="card-header">
+        <h2>Low Confidence ({{ low_confidence|length }})</h2>
+    </div>
+    <div class="card-body">
+    <div class="table-wrap">
+        <table class="audit-table">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Merchant</th>
+                    <th class="num">Amount</th>
+                    <th>Type</th>
+                    <th>Confidence</th>
+                    <th>Reason</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for txn in low_confidence %}
+                <tr>
+                    <td>{{ txn.posted_at }}</td>
+                    <td>{{ txn.merchant_norm }}</td>
+                    <td class="num">${{ "%.2f"|format(txn.amount_cents|abs / 100) }}</td>
+                    <td>{{ txn.txn_type.name }}</td>
+                    <td>
+                        <span class="conf-badge conf-{{ 'low' if txn.reason.confidence < 0.5 else 'med' }}">
+                            {{ "%.0f"|format(txn.reason.confidence * 100) }}%
+                        </span>
+                    </td>
+                    <td class="reason-cell">{{ txn.reason.primary_code }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Ghost Transactions -->
+{% if ghosts %}
+<div class="card">
+    <div class="card-header">
+        <h2>Uncategorized Expenses ({{ ghosts|length }})</h2>
+    </div>
+    <div class="card-body">
+    <div class="table-wrap">
+        <table class="audit-table">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Merchant</th>
+                    <th class="num">Amount</th>
+                    <th>Description</th>
+                    <th>Category</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for txn in ghosts %}
+                <tr id="ghost-{{ loop.index }}">
+                    <td>{{ txn.posted_at }}</td>
+                    <td>{{ txn.merchant_norm }}</td>
+                    <td class="num">${{ "%.2f"|format(txn.amount_cents|abs / 100) }}</td>
+                    <td class="desc-cell">{{ txn.raw_description }}</td>
+                    <td>
+                        <select class="cat-select" onchange="setCategory('{{ txn.merchant_norm }}', this.value, this)">
+                            <option value="">--</option>
+                            {% for cid, cat in categories.items() %}
+                            {% if cid not in ('other', 'income', 'one_time_deposit', 'transfer') %}
+                            <option value="{{ cid }}">{{ cat.name }}</option>
+                            {% endif %}
+                            {% endfor %}
+                        </select>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    </div>
+</div>
+{% endif %}
+
+{% endif %}
+
+<script>
+function updateAccountFilter() {
+    const checked = [...document.querySelectorAll('.account-chip input:checked')].map(el => el.value);
+    const params = new URLSearchParams(window.location.search);
+    if (checked.length === 0) {
+        params.set('accounts', 'none');
+    } else if (checked.length === document.querySelectorAll('.account-chip input').length) {
+        params.delete('accounts');
+    } else {
+        params.set('accounts', checked.join(','));
+    }
+    window.location.search = params.toString();
+}
+
+async function setCategory(merchant, categoryId, selectEl) {
+    if (!categoryId) return;
+    const row = selectEl.closest('tr');
+    try {
+        const headers = getAuthHeaders();
+        headers['Content-Type'] = 'application/json';
+        const resp = await fetch('/api/category-override', {
+            method: 'POST',
+            headers: headers,
+            body: JSON.stringify({merchant: merchant, category_id: categoryId}),
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        selectEl.disabled = true;
+        row.style.opacity = '0.5';
+        const label = selectEl.options[selectEl.selectedIndex].text;
+        selectEl.parentElement.innerHTML = '<span class="status-badge status-tracked">' + label + '</span>';
+    } catch (e) {
+        alert('Failed: ' + e.message);
+        selectEl.value = '';
+    }
+}
+</script>
+
+<style>
+/* Audit Stats Row */
+.audit-stats {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+}
+
+.audit-stat {
+    flex: 1;
+    min-width: 120px;
+    background: var(--card-bg, var(--bg-secondary));
+    border-radius: 12px;
+    padding: 20px;
+    text-align: center;
+}
+
+.audit-stat-value {
+    font-size: 2rem;
+    font-weight: 700;
+    line-height: 1.1;
+}
+
+.audit-stat-label {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+.stat-good { color: var(--accent-green); }
+.stat-warn { color: var(--accent-yellow); }
+.stat-bad { color: var(--accent-red); }
+
+/* Type Breakdown */
+.type-breakdown {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.type-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: var(--bg-primary, var(--bg));
+    border-radius: 6px;
+    font-size: 14px;
+}
+
+.type-name {
+    font-weight: 500;
+}
+
+.type-count {
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+/* Audit Table */
+.table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+.audit-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+}
+
+.audit-table th {
+    text-align: left;
+    padding: 8px 12px;
+    border-bottom: 2px solid var(--border-color);
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+
+.audit-table th.num,
+.audit-table td.num {
+    text-align: right;
+}
+
+.audit-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-color);
+    vertical-align: middle;
+}
+
+.audit-table tbody tr:hover {
+    background: var(--hover-bg, rgba(0,0,0,0.02));
+}
+
+/* Status Badges */
+.status-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.status-tracked {
+    background: var(--accent-green-dim, #c6f6d5);
+    color: var(--accent-green);
+}
+
+.status-recurring {
+    background: rgba(37, 99, 235, 0.1);
+    color: var(--accent-blue);
+}
+
+.status-known {
+    background: rgba(183, 121, 31, 0.1);
+    color: var(--accent-yellow);
+}
+
+.status-untracked {
+    background: rgba(0, 0, 0, 0.05);
+    color: var(--text-muted);
+}
+
+.status-upcoming {
+    background: rgba(183, 121, 31, 0.1);
+    color: var(--accent-yellow);
+}
+
+/* Confidence Badge */
+.conf-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.conf-low {
+    background: var(--accent-red-dim, #fed7d7);
+    color: var(--accent-red);
+}
+
+.conf-med {
+    background: rgba(183, 121, 31, 0.1);
+    color: var(--accent-yellow);
+}
+
+/* Category select */
+.cat-select {
+    font-size: 13px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-primary, var(--bg));
+    color: var(--text-primary);
+    cursor: pointer;
+    max-width: 160px;
+}
+
+/* Cell helpers */
+.reason-cell {
+    font-family: monospace;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.desc-cell {
+    max-width: 250px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+/* Card styles matching subs.html */
+.card {
+    background: var(--card-bg, var(--bg-secondary));
+    border-radius: 12px;
+    margin-bottom: 16px;
+    overflow: hidden;
+}
+
+.card-header {
+    padding: 16px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.card-header h2 {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 0;
+}
+
+.card-body {
+    padding: 0 20px 20px;
+}
+
+.empty-state {
+    text-align: center;
+    padding: 24px;
+    color: var(--text-muted);
+}
+
+/* Mobile */
+@media (max-width: 640px) {
+    .audit-stats {
+        gap: 8px;
+    }
+    .audit-stat {
+        min-width: 80px;
+        padding: 12px;
+    }
+    .audit-stat-value {
+        font-size: 1.5rem;
+    }
+    .audit-table {
+        font-size: 13px;
+    }
+    .audit-table th,
+    .audit-table td {
+        padding: 6px 8px;
+    }
+}
+</style>
+{% endblock %}

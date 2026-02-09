@@ -360,6 +360,7 @@ def dashboard(
             "timedelta": timedelta,
             "closed_period": None,
             "pending_adjustments_count": 0,
+            "audit": None,
         })
 
     # Initialize ReportService - THE canonical source of truth
@@ -530,6 +531,37 @@ def dashboard(
         integrity_data["badge_text"] = badge_text
         integrity_data["badge_class"] = badge_class
 
+    # Audit summary (3 headline numbers for compact dashboard card)
+    audit_summary = None
+    if current_report:
+        tracked_set = set(s[0] for s in subscriptions) | set(b[0] for b in bills)
+        # Count recurring items not yet posted this month
+        cadence_days = {"weekly": 7, "biweekly": 14, "monthly": 30, "bimonthly": 60,
+                        "quarterly": 91, "annual": 365}
+        pending_not_posted = 0
+        month_start = date(today.year, today.month, 1)
+        for items in (subscriptions, bills):
+            for item in items:
+                last_seen = item[4]
+                interval = cadence_days.get(item[2], 30)
+                expected = last_seen + timedelta(days=interval)
+                days_since = (today - expected).days
+                if days_since <= 7 or days_since > 90:
+                    continue
+                has_it = any(t.merchant_norm == item[0] and t.posted_at >= month_start
+                             for t in current_report.transactions)
+                if not has_it:
+                    pending_not_posted += 1
+        review_count = sum(
+            1 for t in current_report.transactions
+            if t.reason.confidence < 0.8 and t.reason.primary_code != "USER_OVERRIDE"
+        )
+        audit_summary = {
+            "tracked_count": len(tracked_set),
+            "pending_count": pending_not_posted,
+            "review_count": review_count,
+        }
+
     return templates.TemplateResponse("dashboard_v2.html", {
         "request": request,
         "period_type": period,
@@ -562,6 +594,8 @@ def dashboard(
         "pending_adjustments_count": pending_adjustments_count,
         # Trust / Integrity assessment
         "integrity": integrity_data,
+        # Audit summary
+        "audit": audit_summary,
     })
 
 
@@ -896,6 +930,7 @@ def set_category_override(
         )
 
     dbmod.set_category_override(conn, req.merchant, req.category_id)
+    invalidate_report_cache()
     return JSONResponse(content={
         "status": "ok",
         "merchant": req.merchant,
@@ -1414,6 +1449,182 @@ def subs(
         "all_accounts": all_accounts,
         "selected_accounts": account_filter or [],
         "show_no_data": False,
+    })
+
+
+@app.get("/audit", response_class=HTMLResponse)
+def audit_page(
+    request: Request,
+    accounts: str | None = Query(None, description="Comma-separated account IDs to filter"),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Financial audit page — coverage report, missing charges, ghost transactions."""
+    from .reporting_models import TransactionType
+
+    account_filter, show_no_data = parse_account_filter(accounts)
+
+    all_accounts = conn.execute(
+        "SELECT account_id, name, institution, type FROM accounts ORDER BY institution, name"
+    ).fetchall()
+
+    if show_no_data:
+        return templates.TemplateResponse("audit.html", {
+            "request": request,
+            "all_accounts": all_accounts,
+            "selected_accounts": [],
+            "show_no_data": True,
+            "coverage": {},
+            "top_merchants": [],
+            "not_yet_posted": [],
+            "low_confidence": [],
+            "ghosts": [],
+            "categories": CATEGORIES,
+        })
+
+    today = date.today()
+    month_start = date(today.year, today.month, 1)
+    month_end = today + timedelta(days=1)  # exclusive
+
+    # Build report for current month
+    report_service = ReportService(conn)
+    report = report_service.report_period(month_start, month_end, account_filter=account_filter)
+
+    # Get tracked items (uses allowed public APIs, not _detect_patterns)
+    subscriptions = get_subscriptions(conn, days=400, account_filter=account_filter)
+    bills = get_bills(conn, days=400, account_filter=account_filter)
+
+    tracked_merchants = set()
+    for sub in subscriptions:
+        tracked_merchants.add(sub[0])
+    for bill in bills:
+        tracked_merchants.add(bill[0])
+
+    # --- Coverage ---
+    total_txns = len(report.transactions)
+    by_type: dict[str, int] = {}
+    categorized = 0
+    uncategorized = 0
+    for txn in report.transactions:
+        type_name = txn.txn_type.name
+        by_type[type_name] = by_type.get(type_name, 0) + 1
+        if txn.txn_type == TransactionType.EXPENSE:
+            if txn.category_id and txn.category_id != "other":
+                categorized += 1
+            else:
+                uncategorized += 1
+
+    expense_total = by_type.get("EXPENSE", 0)
+    cat_pct = round(categorized / expense_total * 100) if expense_total else 100
+
+    high_conf = sum(1 for t in report.transactions if t.reason.confidence >= 0.8)
+    low_conf_count = total_txns - high_conf
+
+    coverage = {
+        "total_txns": total_txns,
+        "by_type": by_type,
+        "categorized": categorized,
+        "uncategorized": uncategorized,
+        "cat_pct": cat_pct,
+        "high_conf": high_conf,
+        "low_conf": low_conf_count,
+        "tracked_merchants": len(tracked_merchants),
+    }
+
+    # --- Top merchants by spend ---
+    merchant_norm_expr = "TRIM(LOWER(COALESCE(NULLIF(merchant,''), NULLIF(description,''), '')))"
+    top_sql = f"""
+        SELECT {merchant_norm_expr} AS merchant_norm,
+               COUNT(*) as cnt, SUM(ABS(amount_cents)) as total,
+               MAX(posted_at) as last_seen
+        FROM transactions
+        WHERE amount_cents < 0 AND COALESCE(pending, 0) = 0
+    """
+    top_params: list = []
+    if account_filter:
+        placeholders = ",".join("?" * len(account_filter))
+        top_sql += f" AND account_id IN ({placeholders})"
+        top_params.extend(account_filter)
+    top_sql += " GROUP BY merchant_norm ORDER BY total DESC LIMIT 20"
+    rows = conn.execute(top_sql, top_params).fetchall()
+
+    # Build set of recurring merchants from subs/bills for status
+    recurring_merchants = set()
+    for sub in subscriptions:
+        recurring_merchants.add(sub[0])
+    for bill in bills:
+        recurring_merchants.add(bill[0])
+
+    top_merchants = []
+    for row in rows:
+        merchant = row[0]
+        if merchant in tracked_merchants:
+            status = "tracked"
+        elif merchant in recurring_merchants:
+            status = "recurring"
+        else:
+            status = "untracked"
+        top_merchants.append({
+            "merchant": merchant,
+            "count": row[1],
+            "total_cents": row[2],
+            "last_seen": row[3],
+            "status": status,
+        })
+
+    # --- Not yet posted (expected recurring charges not seen this month) ---
+    cadence_days_map = {"weekly": 7, "biweekly": 14, "monthly": 30, "bimonthly": 60,
+                        "quarterly": 91, "annual": 365}
+    not_yet_posted = []
+    for items in (subscriptions, bills):
+        for item in items:
+            merchant_name = item[0]
+            cadence = item[2]
+            last_seen = item[4]
+            median_amount = item[1]
+            interval = cadence_days_map.get(cadence, 30)
+            expected_next = last_seen + timedelta(days=interval)
+            days_since = (today - expected_next).days
+            if days_since <= 7 or days_since > 90:
+                continue
+            has_current = any(
+                t.merchant_norm == merchant_name and t.posted_at >= month_start
+                for t in report.transactions
+            )
+            if has_current:
+                continue
+            not_yet_posted.append({
+                "merchant": merchant_name,
+                "cadence": cadence,
+                "median_amount": median_amount,
+                "last_seen": last_seen,
+                "expected_date": expected_next,
+            })
+    not_yet_posted.sort(key=lambda x: x["expected_date"])
+
+    # --- Low confidence transactions ---
+    low_confidence = []
+    for txn in report.transactions:
+        if txn.reason.confidence < 0.8 and txn.reason.primary_code != "USER_OVERRIDE":
+            low_confidence.append(txn)
+    low_confidence.sort(key=lambda t: t.reason.confidence)
+
+    # --- Ghost transactions (uncategorized expenses) ---
+    ghosts = []
+    for txn in report.transactions:
+        if txn.txn_type == TransactionType.EXPENSE and txn.category_id in (None, "other"):
+            ghosts.append(txn)
+
+    return templates.TemplateResponse("audit.html", {
+        "request": request,
+        "all_accounts": all_accounts,
+        "selected_accounts": account_filter or [],
+        "show_no_data": False,
+        "coverage": coverage,
+        "top_merchants": top_merchants,
+        "not_yet_posted": not_yet_posted,
+        "low_confidence": low_confidence,
+        "ghosts": ghosts,
+        "categories": CATEGORIES,
     })
 
 
