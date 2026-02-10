@@ -544,7 +544,6 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-left: auto;
 }
 
 .date-inputs label {
@@ -564,9 +563,9 @@
 /* Transaction search */
 .search-container {
     position: relative;
-    flex: 1;
+    margin-left: auto;
     min-width: 180px;
-    max-width: 320px;
+    max-width: 280px;
 }
 
 .search-input {
@@ -716,8 +715,12 @@
     }
 
     .date-inputs {
-        margin-left: 0;
         flex-wrap: wrap;
+    }
+
+    .search-container {
+        margin-left: 0;
+        max-width: none;
     }
 
     .breakdown-label {
