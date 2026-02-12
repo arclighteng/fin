@@ -13,6 +13,7 @@ from tenacity import (
     before_sleep_log,
 )
 
+from . import dates as dates_mod
 from .config import Config
 
 log = logging.getLogger(__name__)
@@ -212,8 +213,8 @@ class SimpleFinClient:
         This is the preferred method for sync - simple and complete.
         """
         # Request 2 years back - banks will return whatever they have
-        start_date = date.today() - timedelta(days=730)
-        end_date_exclusive = date.today() + timedelta(days=1)
+        start_date = dates_mod.today() - timedelta(days=730)
+        end_date_exclusive = dates_mod.today() + timedelta(days=1)
         return self.fetch_account_set_range(start_date, end_date_exclusive)
 
     def close(self) -> None:

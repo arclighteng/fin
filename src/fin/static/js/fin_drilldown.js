@@ -145,7 +145,7 @@ const finDrilldown = (function() {
 
             if (showResolution) {
                 const existingOverride = t.override_type || '';
-                html += '<td onclick="event.stopPropagation()"><select id="resolution-' + finUI.escapeHtml(t.fingerprint) + '" class="resolution-select" onchange="finDrilldown.markChanged()">';
+                html += '<td onclick="event.stopPropagation()"><select id="resolution-' + finUI.escapeHtml(t.fingerprint) + '" class="resolution-select" data-fp="' + finUI.escapeHtml(t.fingerprint) + '" onchange="finDrilldown.autoSaveClassification(this)">';
                 html += '<option value="">- Select -</option>';
                 resolutionContext.resolution_options.forEach(opt => {
                     const selected = opt.value === existingOverride ? 'selected' : '';
@@ -373,90 +373,98 @@ const finDrilldown = (function() {
             summaryEl.after(container);
         }
 
-        // Bulk action bar
+        // Bulk action bar (auto-saves each individually)
         let html = '<div class="resolution-bulk-bar">';
         html += '<span class="resolution-bulk-label">Classify all as:</span>';
         context.resolution_options.forEach(opt => {
-            if (opt.value !== 'CREDIT_OTHER') {  // Don't show "Keep Unclassified" for bulk
+            if (opt.value !== 'CREDIT_OTHER') {
                 html += `<button class="btn-resolution-bulk" data-type="${finUI.escapeHtml(opt.value)}">${finUI.escapeHtml(opt.label)}</button>`;
             }
         });
         html += '</div>';
 
-        // Save button (initially hidden)
-        html += '<button id="resolutionSaveBtn" class="btn btn-primary" style="display:none;" onclick="finDrilldown.saveResolutions()">Save Changes</button>';
-
         container.innerHTML = html;
 
-        // Bind bulk action buttons
+        // Bind bulk action buttons - set all selects then auto-save each
         document.querySelectorAll('.btn-resolution-bulk').forEach(btn => {
-            btn.onclick = () => {
+            btn.onclick = async () => {
                 const targetType = btn.getAttribute('data-type');
+                btn.disabled = true;
+                btn.textContent = 'Saving...';
+
+                const overrides = [];
                 transactions.forEach(txn => {
                     const selectEl = document.getElementById(`resolution-${txn.fingerprint}`);
-                    if (selectEl) selectEl.value = targetType;
+                    if (selectEl) {
+                        selectEl.value = targetType;
+                        overrides.push({
+                            fingerprint: txn.fingerprint,
+                            target_type: targetType,
+                            reason: `Bulk: ${currentData.scope_label}`
+                        });
+                    }
                 });
-                // Show save button
-                document.getElementById('resolutionSaveBtn').style.display = 'block';
+
+                try {
+                    const resp = await finApi.postJSON('/api/txn-type-override/bulk', {
+                        overrides: overrides,
+                        reason: `Bulk resolution from dashboard`
+                    });
+                    if (resp.ok) {
+                        // Flash all selects green
+                        transactions.forEach(txn => {
+                            const selectEl = document.getElementById(`resolution-${txn.fingerprint}`);
+                            if (selectEl) _flashSaved(selectEl);
+                        });
+                        finUI.toast(`${overrides.length} transactions classified`);
+                    }
+                } catch (err) {
+                    finUI.toast(`Error: ${err.message}`, 5000);
+                }
+                btn.disabled = false;
+                btn.textContent = btn.getAttribute('data-type').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
             };
         });
     }
 
-    function markChanged() {
-        const saveBtn = document.getElementById('resolutionSaveBtn');
-        if (saveBtn) saveBtn.style.display = 'block';
-    }
+    async function autoSaveClassification(selectEl) {
+        const fingerprint = selectEl.dataset.fp;
+        const targetType = selectEl.value;
 
-    async function saveResolutions() {
-        if (!currentData || !currentData.transactions) return;
+        if (!targetType || !fingerprint) return;
 
-        const overrides = [];
-
-        currentData.transactions.forEach(txn => {
-            const selectEl = document.getElementById(`resolution-${txn.fingerprint}`);
-            if (selectEl && selectEl.value && selectEl.value !== '') {
-                overrides.push({
-                    fingerprint: txn.fingerprint,
-                    target_type: selectEl.value,
-                    reason: `Resolved from ${currentData.scope_label} (${currentParams.startDate} to ${currentParams.endDate})`
-                });
-            }
-        });
-
-        if (overrides.length === 0) {
-            finUI.toast('No changes to save');
-            return;
-        }
-
-        // Show loading state
-        const saveBtn = document.getElementById('resolutionSaveBtn');
-        saveBtn.disabled = true;
-        saveBtn.textContent = 'Saving...';
+        selectEl.disabled = true;
 
         try {
-            const resp = await finApi.postJSON('/api/txn-type-override/bulk', {
-                overrides: overrides,
-                reason: `Bulk resolution from dashboard (${new Date().toISOString()})`
+            const resp = await finApi.postJSON('/api/txn-type-override', {
+                fingerprint: fingerprint,
+                target_type: targetType,
+                reason: `Classified from ${currentData ? currentData.scope_label : 'drilldown'}`
             });
 
-            const data = await resp.json();
-
             if (resp.ok) {
-                finUI.toast(`${data.overrides_applied} transactions reclassified. Integrity score: ${data.integrity_percent}%`, 3000);
-                close();  // Close modal
-
-                // Refresh dashboard to show updated integrity score
-                setTimeout(() => window.location.reload(), 1000);
+                _flashSaved(selectEl);
             } else {
-                finUI.toast(`Error: ${data.error || 'Unknown error'}`, 5000);
-                saveBtn.disabled = false;
-                saveBtn.textContent = 'Save Changes';
+                const data = await resp.json();
+                finUI.toast(`Error: ${data.error || 'Failed'}`, 3000);
+                selectEl.style.borderColor = 'var(--accent-red)';
             }
         } catch (err) {
-            finUI.toast(`Error: ${err.message}`, 5000);
-            saveBtn.disabled = false;
-            saveBtn.textContent = 'Save Changes';
+            finUI.toast(`Error: ${err.message}`, 3000);
+            selectEl.style.borderColor = 'var(--accent-red)';
         }
+
+        selectEl.disabled = false;
+    }
+
+    function _flashSaved(el) {
+        el.style.transition = 'background 300ms ease, border-color 300ms ease';
+        el.style.background = 'var(--accent-green-dim)';
+        el.style.borderColor = 'var(--accent-green)';
+        setTimeout(() => {
+            el.style.background = '';
+            el.style.borderColor = '';
+        }, 1200);
     }
 
     function close() {
@@ -471,8 +479,7 @@ const finDrilldown = (function() {
         applyFilters,
         toggleFilters,
         exportCSV,
-        markChanged,
-        saveResolutions,
+        autoSaveClassification,
         toggleAnnotation,
         saveNote,
         addTag,

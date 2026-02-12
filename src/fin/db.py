@@ -756,6 +756,8 @@ def set_txn_type_override_fingerprint(
     fingerprint: str,
     target_type: str,
     reason: str | None = None,
+    *,
+    commit: bool = True,
 ) -> None:
     """
     Set transaction type override for a specific transaction by fingerprint.
@@ -764,6 +766,7 @@ def set_txn_type_override_fingerprint(
         fingerprint: Transaction fingerprint
         target_type: One of INCOME, EXPENSE, TRANSFER, REFUND, CREDIT_OTHER
         reason: Optional user note
+        commit: Whether to commit immediately (set False for batch operations)
     """
     if target_type not in VALID_TXN_TYPES:
         raise ValueError(f"Invalid target_type: {target_type}. Must be one of {VALID_TXN_TYPES}")
@@ -780,7 +783,8 @@ def set_txn_type_override_fingerprint(
         """,
         (fingerprint, target_type, reason, now, now),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def set_txn_type_override_merchant(

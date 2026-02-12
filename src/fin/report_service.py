@@ -22,6 +22,7 @@ from typing import Optional
 from .reporting import report_period as _report_period, report_month as _report_month
 from .reporting_models import Report, PeriodTotals, IntegrityReport, IntegrityFlag
 from .versioning import compute_snapshot_id, SnapshotInfo, CLASSIFIER_VERSION, REPORT_VERSION
+from . import dates as dates_mod
 from .dates import period_bounds, period_label, TimePeriod
 from .cache import get_report_cache, cache_key
 
@@ -171,7 +172,7 @@ class ReportService:
             List of Reports, most recent first
         """
         if end_date is None:
-            end_date = date.today()
+            end_date = dates_mod.today()
 
         reports: list[Report] = []
 
@@ -203,7 +204,7 @@ class ReportService:
         account_filter: Optional[list[str]] = None,
     ) -> Report:
         """Generate report for current month."""
-        today = date.today()
+        today = dates_mod.today()
         return self.report_month(today.year, today.month, include_pending, account_filter)
 
     def invalidate_cache(self) -> None:

@@ -32,6 +32,7 @@ from .reporting_models import (
     IntegrityReport,
     Report,
 )
+from . import dates as dates_mod
 from .dates import period_bounds, period_label, TimePeriod
 from .classifier import (
     classify_transaction,
@@ -86,9 +87,20 @@ def report_period(
     from . import db as dbmod
     category_overrides = dbmod.get_category_overrides(conn)
 
-    # Detect transfer pairs
+    # Detect transfer pairs (filter to visible accounts so a transfer
+    # is only hidden when the user can see both legs)
     transfer_result = detect_transfer_pairs(conn, start_date, end_date)
-    paired_fps = transfer_result.get_paired_fingerprints()
+    if account_filter is not None:
+        acct_set = set(account_filter)
+        paired_fps = {
+            fp
+            for pair in transfer_result.matched_pairs
+            if pair.outflow.account_id in acct_set
+            and pair.inflow.account_id in acct_set
+            for fp in (pair.outflow.fingerprint, pair.inflow.fingerprint)
+        }
+    else:
+        paired_fps = transfer_result.get_paired_fingerprints()
 
     # Detect refund matches
     refund_result = detect_refund_matches(conn, start_date, end_date)
@@ -299,7 +311,7 @@ def report_this_month(
     account_filter: Optional[list[str]] = None,
 ) -> Report:
     """Generate report for current month."""
-    today = date.today()
+    today = dates_mod.today()
     return report_month(conn, today.year, today.month, include_pending, account_filter)
 
 

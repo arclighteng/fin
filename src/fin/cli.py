@@ -13,6 +13,7 @@ import typer
 from rich.console import Console
 
 from . import db as dbmod
+from . import dates as dates_mod
 from .dates import TimePeriod
 from .report_service import ReportService
 from .view_models import PeriodViewModel, compute_period_trends
@@ -250,8 +251,8 @@ def sync(
         effective_lookback = 14
     else:
         effective_lookback = lookback_days
-    start = date.today() - timedelta(days=effective_lookback)
-    end_exclusive = date.today() + timedelta(days=1)
+    start = dates_mod.today() - timedelta(days=effective_lookback)
+    end_exclusive = dates_mod.today() + timedelta(days=1)
 
     conn = dbmod.connect(cfg.db_path)
     dbmod.init_db(conn)
@@ -375,7 +376,7 @@ def report(
         return median([abs(x - m) for x in xs])
 
     try:
-        since = (date.today() - timedelta(days=days)).isoformat()
+        since = (dates_mod.today() - timedelta(days=days)).isoformat()
 
         rows = conn.execute(
             """
@@ -456,7 +457,7 @@ def report(
             confidence = 0.0
             confidence += 0.5 * fit
             confidence += 0.3 if stable else 0.0
-            confidence += 0.2 if (date.today() - last_seen).days <= (cadence + tol) else 0.0
+            confidence += 0.2 if (dates_mod.today() - last_seen).days <= (cadence + tol) else 0.0
 
             subs.append(
                 {
@@ -476,7 +477,7 @@ def report(
         # --------------------
         # Anomalies
         # --------------------
-        today = date.today()
+        today = dates_mod.today()
         recent_cut = today - timedelta(days=14)
         prior_cut = today - timedelta(days=104)
 
@@ -868,7 +869,7 @@ def export_csv(
         return ("other", "other")
 
     try:
-        since = (date.today() - timedelta(days=days)).isoformat()
+        since = (dates_mod.today() - timedelta(days=days)).isoformat()
 
         # ---- transactions.csv (enriched + family/subtype)
         tx = conn.execute(
@@ -1076,7 +1077,7 @@ def export_csv(
             confidence = 0.0
             confidence += 0.55 * fit
             confidence += 0.35 if stable else 0.0
-            confidence += 0.10 if (date.today() - last_seen).days <= (step + tol) else 0.0
+            confidence += 0.10 if (dates_mod.today() - last_seen).days <= (step + tol) else 0.0
 
             family, subtype = classify_family(label)
 
@@ -1293,7 +1294,7 @@ def bundle_check(
     }
 
     try:
-        since = (date.today() - timedelta(days=days)).isoformat()
+        since = (dates_mod.today() - timedelta(days=days)).isoformat()
         rows = conn.execute(
             """
             SELECT
@@ -1627,7 +1628,7 @@ def month_close(
         state.setdefault("closed_months", {})
         state["last_closed_month"] = month
         state["closed_months"][month] = {
-            "closed_at": date.today().isoformat(),
+            "closed_at": dates_mod.today().isoformat(),
             "start": start_iso,
             "end": end_iso,
             "txn_count": len(rows),
@@ -2379,7 +2380,7 @@ def export_backup(
 
     # Generate output filename if not provided
     if not output:
-        today_str = date.today().strftime("%Y%m%d")
+        today_str = dates_mod.today().strftime("%Y%m%d")
         output = f"fin_backup_{today_str}.db.age"
 
     output_path = Path(output)

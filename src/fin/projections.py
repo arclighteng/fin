@@ -13,10 +13,13 @@ to predict future charges. Results are estimates, not canonical numbers.
 
 TODO: Migrate subscription detection to canonical source when available.
 """
+import calendar
 import sqlite3
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Optional
+
+from . import dates as dates_mod
 
 from .reporting_models import SpendingBucket
 
@@ -90,7 +93,7 @@ def project_cash_flow(
     """
     from .legacy_classify import _detect_patterns, _match_known_subscription, get_subscriptions, get_bills
 
-    today = date.today()
+    today = dates_mod.today()
     end_date = today + timedelta(days=days_forward)
 
     # Get patterns for projection
@@ -241,7 +244,7 @@ def detect_cash_flow_alerts(
         return [CashFlowAlert(
             alert_type="resolution_needed",
             severity="medium",
-            date=date.today(),
+            date=dates_mod.today(),
             message="Resolve data quality issues before viewing projections. "
                     f"Integrity score: {report.integrity.score:.0%}",
             amount_cents=None,
@@ -249,7 +252,7 @@ def detect_cash_flow_alerts(
         )]
 
     alerts: list[CashFlowAlert] = []
-    today = date.today()
+    today = dates_mod.today()
 
     projection = project_cash_flow(conn, days_forward, account_filter)
 
@@ -319,8 +322,6 @@ def detect_cash_flow_alerts(
 
 def _next_monthly_date(last_date: date, after: date) -> date:
     """Calculate next monthly occurrence after a given date."""
-    day = min(last_date.day, 28)  # Handle months with fewer days
-
     # Start with the month after last_date
     year = last_date.year
     month = last_date.month + 1
@@ -328,6 +329,8 @@ def _next_monthly_date(last_date: date, after: date) -> date:
         month = 1
         year += 1
 
+    _, last_day = calendar.monthrange(year, month)
+    day = min(last_date.day, last_day)
     candidate = date(year, month, day)
 
     # Keep advancing until we're after the target date
@@ -336,6 +339,8 @@ def _next_monthly_date(last_date: date, after: date) -> date:
         if month > 12:
             month = 1
             year += 1
+        _, last_day = calendar.monthrange(year, month)
+        day = min(last_date.day, last_day)
         candidate = date(year, month, day)
 
     return candidate

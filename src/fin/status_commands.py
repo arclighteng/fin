@@ -8,6 +8,8 @@ ALL totals come from ReportService - the canonical truth engine.
 import calendar
 from datetime import date
 
+from . import dates as dates_mod
+
 import typer
 from rich.console import Console
 from rich.panel import Panel
@@ -155,7 +157,7 @@ def status_command(
                 console.print("[red]Invalid month format. Use YYYY-MM.[/red]")
                 raise typer.Exit(1)
         else:
-            today = date.today()
+            today = dates_mod.today()
             year, mon = today.year, today.month
 
         # Check for data
@@ -294,7 +296,7 @@ def drill_command(
                 console.print("[red]Invalid month format. Use YYYY-MM.[/red]")
                 raise typer.Exit(1)
         else:
-            today = date.today()
+            today = dates_mod.today()
             year, mon = today.year, today.month
 
         # Get report and summary using canonical ReportService

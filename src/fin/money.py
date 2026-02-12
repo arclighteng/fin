@@ -104,7 +104,7 @@ def cents_to_dollars(cents: int) -> Decimal:
     Returns:
         Decimal dollars with 2 decimal places (e.g., Decimal("-12.99"))
     """
-    return Decimal(cents) / 100
+    return (Decimal(cents) / 100).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 def format_usd(cents: int, *, show_sign: bool = False) -> str:
@@ -126,7 +126,7 @@ def format_usd(cents: int, *, show_sign: bool = False) -> str:
         >>> format_usd(1299, show_sign=True)
         '+$12.99'
     """
-    dollars = abs(cents) / 100
+    dollars = Decimal(abs(cents)) / 100
     negative = cents < 0
     positive = cents > 0
 
@@ -151,7 +151,7 @@ def format_usd_compact(cents: int) -> str:
     Returns:
         Formatted string (e.g., "$12", "$12.99")
     """
-    dollars = abs(cents) / 100
+    dollars = Decimal(abs(cents)) / 100
     negative = cents < 0
 
     if cents % 100 == 0:

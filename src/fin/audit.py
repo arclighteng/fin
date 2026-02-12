@@ -17,7 +17,7 @@ Audit events:
 import json
 import sqlite3
 from dataclasses import dataclass, asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
 
@@ -107,7 +107,7 @@ def log_audit_event(
     """
     init_audit_tables(conn)
 
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     meta_json = json.dumps(metadata) if metadata else None
 
     cursor = conn.execute(
@@ -245,7 +245,7 @@ def export_report_snapshot(
 
     snapshot = {
         "snapshot_version": "1.0.0",
-        "generated_at": datetime.now().isoformat(),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
         "classifier_version": CLASSIFIER_VERSION,
         "report_version": REPORT_VERSION,
         "report": {

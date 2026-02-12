@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Optional
 
+from . import dates as dates_mod
 from .reporting_models import SpendingBucket
 
 
@@ -74,7 +75,7 @@ def analyze_spending_buckets(
     from .classifier import classify_transaction, OverrideRegistry, _detect_patterns
 
     # Calculate date range
-    today = date.today()
+    today = dates_mod.today()
     start_date = date(today.year, today.month, 1) - timedelta(days=30 * months)
     end_date = date(today.year, today.month, 1)
 
@@ -86,6 +87,7 @@ def analyze_spending_buckets(
     # Query transactions
     query = """
         SELECT
+            t.fingerprint,
             t.posted_at,
             t.amount_cents,
             TRIM(LOWER(COALESCE(NULLIF(t.merchant,''), NULLIF(t.description,''), ''))) AS merchant_norm,
@@ -123,11 +125,11 @@ def analyze_spending_buckets(
             merchant_norm=merchant,
             is_credit_card_account=False,
             override_registry=override_registry,
+            fingerprint=row["fingerprint"],
             pattern=pattern,
         )
 
-        if amount > 0:
-            # Income
+        if result.is_income:
             income_by_month[posted] = income_by_month.get(posted, 0) + amount
         elif result.spending_bucket:
             bucket = result.spending_bucket
@@ -155,7 +157,7 @@ def analyze_spending_buckets(
         monthly_amounts = list(data["by_month"].values())
 
         if monthly_amounts:
-            monthly_avg = sum(monthly_amounts) // len(monthly_amounts)
+            monthly_avg = round(sum(monthly_amounts) / len(monthly_amounts))
             monthly_min = min(monthly_amounts)
             monthly_max = max(monthly_amounts)
 
@@ -291,7 +293,7 @@ def get_bucket_detail(
     from .classifier import classify_transaction, OverrideRegistry, _detect_patterns
 
     # Calculate date range
-    today = date.today()
+    today = dates_mod.today()
     start_date = date(today.year, today.month, 1) - timedelta(days=30 * months)
     end_date = date(today.year, today.month, 1)
 
@@ -394,7 +396,7 @@ def project_monthly_budget(
 
     # Project forward
     projections = []
-    today = date.today()
+    today = dates_mod.today()
 
     for i in range(months_forward):
         future_month = date(today.year, today.month, 1) + timedelta(days=30 * i)

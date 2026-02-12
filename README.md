@@ -158,6 +158,45 @@ We chose OS-level encryption + encrypted exports over SQLCipher because:
 3. `age` is a modern, audited tool with better key management
 4. You control when encryption happens (backups) vs always-on overhead
 
+## Web Dashboard
+
+The dashboard at `http://127.0.0.1:8000/dashboard` displays your financial overview in a 5-card responsive layout.
+
+### Card 1: Cash Flow (Hero)
+Shows income vs expenses side-by-side with a big "Kept $X" or "Over $X" number, savings rate, and a 3-month rolling comparison. Mid-month pacing projection appears if you're still in the current month. Pending transactions show a warning if they exceed the typical threshold.
+
+### Card 2: Monthly Commitments
+Lists detected subscriptions and utility bills (using pattern detection over 400 days). Click any item to see all transactions from that merchant. Shows total committed this month as a percentage of income with a color-coded bar (green under 50%, yellow 50-70%, red over 70%). Inline price change alerts flag recent increases. Footer breaks down subscription vs bill totals.
+
+### Card 3: Spending Breakdown
+Top 7 spending categories with horizontal bars and 3-month averages. Click any category to drill down to merchants and transactions. Outlier badges (+X%) highlight categories that exceed their 3-month average. Footer shows total vs 3-month comparison.
+
+### Card 4: Heads Up
+Shows unusual charges with dismiss actions ("Looks fine" / "Flag it"), multi-month spending trends, and bill deviation alerts. When empty, displays "Nothing unusual this month."
+
+### Card 5: Your Trend
+6-month bar chart of net cash flow (kept vs over). Green bars for positive months, red for negative. Current month shown as dashed outline. Click any bar to navigate to that month. Footer shows 6-month average.
+
+### Navigation & Controls
+- **Month navigation**: Previous/next buttons with current month indicator dot
+- **Account filter**: Multi-select dropdown to focus on specific accounts
+- **Transaction search**: Live results dropdown—type a merchant name or amount to find transactions
+- **Keyboard accessible**: Tab navigation, Enter to select, Escape to close dropdowns
+
+### Drilldown System
+Click any number, bar, category, or merchant to open a modal with the full transaction list. Sortable columns, account filtering, and scopes including income, spend, recurring, discretionary, net, merchant, and category.
+
+## Other Pages
+
+**Recurring Charges** (`/subs`)
+Dedicated page for subscriptions and utility bills. Filter by account, see payment history, toggle between subscription and bill types, and export to CSV.
+
+**Budget** (`/budget`)
+Set spending targets by category. Compare targets vs actual spending with visual indicators.
+
+**Audit** (`/audit`)
+Review and correct transaction categorization. Manages override history for future reference.
+
 ## Subscription Detection
 
 fin uses a two-tier approach to find subscriptions:
@@ -196,36 +235,6 @@ fin bundle-check
 ```
 
 Flags vendor families where you might be paying twice (Disney+/Hulu/ESPN+, Apple services, etc.)
-
-## Web Dashboard
-
-The dashboard at `http://127.0.0.1:8000/dashboard` shows:
-
-### Financial Health Banner
-- Net position for the selected period
-- Savings rate percentage
-- Quick health indicators
-
-### Spending by Category
-- Click any category to drill down to merchants
-- Click the pencil icon to change a merchant's category
-- Categories auto-expand to show individual transactions
-
-### Alerts
-- Duplicate charges
-- Unusual amounts (>2x your typical spend)
-- Test charges ($0.01-$1.00)
-
-### Date Selection
-- **This Month / Last Month**: Quick period toggles
-- **Custom dates**: Date pickers for any range
-- **Account filter**: Focus on specific accounts
-
-### Subscriptions & Bills
-- **Subscriptions**: Netflix, Spotify, software services
-- **Bills**: Electric, gas, internet (utility services)
-- Click the type badge to change between Subscription/Bill
-- Click "View All" to see the dedicated Recurring page
 
 ## CLI Commands
 
@@ -302,16 +311,16 @@ See [docs/SIMPLEFIN_SETUP.md](docs/SIMPLEFIN_SETUP.md) for detailed instructions
 Run `fin sync --full` to pull more history.
 
 ### Categories are wrong
-Click the category, then the pencil icon to override.
+Click the category in the dashboard, then click the edit icon to override.
 
 ### Subscription showing as Bill (or vice versa)
-Click the type badge to toggle.
+Click the type badge on the Recurring page to toggle.
 
 ### Suspicious subscription detection
 Run `fin audit-subs` to verify what's being detected.
 
 ### Alerts not showing expected transactions
-Use the date pickers to select a custom range, or click "This Month" / "Last Month" to reset.
+Use the date pickers to select a custom range, or click the month navigation to reset to the current month.
 
 ## Development
 

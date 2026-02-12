@@ -15,7 +15,7 @@ Reconciliation process:
 """
 import sqlite3
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
 from typing import Optional
@@ -193,7 +193,7 @@ def save_reconciliation(
     init_reconciliation_tables(conn)
 
     status = ReconciliationStatus.MATCHED if result.is_matched else ReconciliationStatus.DISCREPANCY
-    now = datetime.now().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
 
     conn.execute(
         """
@@ -254,7 +254,7 @@ def resolve_reconciliation(
     notes: Optional[str] = None,
 ) -> None:
     """Mark a reconciliation as resolved."""
-    now = datetime.now().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     conn.execute(
         """
         UPDATE reconciliation_events

@@ -16,7 +16,7 @@ Transfer detection:
 import sqlite3
 import uuid
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from .reporting_models import TransferStatus
@@ -354,7 +354,7 @@ def store_transfer_pairs(
         )
     """)
 
-    now = datetime.now().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
 
     for pair in result.matched_pairs:
         status = "MATCHED" if pair.confidence >= 0.8 else "SUSPECTED"

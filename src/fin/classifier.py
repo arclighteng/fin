@@ -141,26 +141,39 @@ class OverrideRegistry:
         self._excluded_merchants.add(merchant_pattern.lower())
 
     def load_from_db(self, conn) -> None:
-        """Load overrides from database."""
-        # Load income sources
-        try:
-            rows = conn.execute(
-                "SELECT merchant_pattern FROM income_sources"
-            ).fetchall()
-            for row in rows:
-                self._income_merchants.add(row[0].lower())
-        except Exception:
-            pass  # Table may not exist
+        """Load all overrides from database."""
+        # Load income/not-income rules from merchant_rules
+        rows = conn.execute(
+            "SELECT merchant_pattern, rule_type FROM merchant_rules "
+            "WHERE rule_type IN ('income', 'not_income')"
+        ).fetchall()
+        for row in rows:
+            pattern = (row[0] if isinstance(row, (list, tuple)) else row["merchant_pattern"]).lower()
+            rule_type = row[1] if isinstance(row, (list, tuple)) else row["rule_type"]
+            if rule_type == "income":
+                self._income_merchants.add(pattern)
+            elif rule_type == "not_income":
+                self._excluded_merchants.add(pattern)
 
-        # Load excluded merchants
-        try:
-            rows = conn.execute(
-                "SELECT merchant_pattern FROM excluded_income"
-            ).fetchall()
-            for row in rows:
-                self._excluded_merchants.add(row[0].lower())
-        except Exception:
-            pass  # Table may not exist
+        # Load transaction type overrides (fingerprint + merchant pattern)
+        override_rows = conn.execute(
+            "SELECT fingerprint, merchant_pattern, target_type FROM txn_type_overrides"
+        ).fetchall()
+        for row in override_rows:
+            fp = row[0] if isinstance(row, (list, tuple)) else row["fingerprint"]
+            mp = row[1] if isinstance(row, (list, tuple)) else row["merchant_pattern"]
+            tt = row[2] if isinstance(row, (list, tuple)) else row["target_type"]
+            target_type = TransactionType[tt]
+            if fp:
+                self._fingerprint_overrides[fp] = UserOverride(
+                    fingerprint=fp,
+                    target_type=target_type,
+                )
+            elif mp:
+                self._merchant_overrides.append(UserOverride(
+                    merchant_pattern=mp.lower(),
+                    target_type=target_type,
+                ))
 
     def get_override(
         self,

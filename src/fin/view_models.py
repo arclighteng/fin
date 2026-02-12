@@ -138,6 +138,7 @@ class PeriodViewModel:
         """Convert to dict for JSON serialization (e.g., for Chart.js)."""
         return {
             "period_label": self.period_label,
+            "start_date": self.start_date.isoformat(),
             "income_cents": self.income_cents,
             "credit_cents": self.credit_cents,
             "recurring_cents": self.recurring_cents,

@@ -4,6 +4,7 @@ import html
 import io
 import secrets
 import sqlite3
+from decimal import Decimal
 from contextlib import contextmanager
 from datetime import date, timedelta
 from pathlib import Path
@@ -17,6 +18,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from . import db as dbmod
+from . import dates as dates_mod
 from .dates import TimePeriod  # Use canonical TimePeriod from dates module
 from .categorize import CATEGORIES
 from .legacy_classify import detect_alerts, detect_duplicates, detect_sketchy, get_subscriptions, get_bills, detect_cross_account_duplicates, detect_price_changes
@@ -52,7 +54,7 @@ from .projections import (
     detect_cash_flow_alerts,
 )
 from .cache import get_cache_stats, invalidate_pattern_cache, invalidate_report_cache
-from .reporting_models import SpendingBucket
+from .reporting_models import SpendingBucket, TransactionType
 from .security import verify_auth_token
 from .close_books import (
     close_period,
@@ -435,19 +437,16 @@ def dashboard(
             "period_type": period,
             "current_period": None,
             "periods": [],
-            "alerts": [],
-            "total_alerts": 0,
-            "duplicates": [],
-            "cross_account_dups": [],
+            "savings_rate_pct": 0,
+            "avg_net_cents": 0,
+            "prev_category_map": {},
+            "attention_items": [],
             "subscriptions": [],
             "bills": [],
-            "price_changes": [],
-            "show_dismissed": show_dismissed,
+            "price_changes_by_merchant": {},
+            "total_recurring_cents": 0,
             "start_date": start_date or "",
             "end_date": end_date or "",
-            "income_breakdown": [],
-            "income_sources": set(),
-            "excluded_sources": set(),
             "category_breakdown": [],
             "categories": CATEGORIES,
             "all_accounts": all_accounts,
@@ -455,18 +454,16 @@ def dashboard(
             "show_no_data": True,
             "expense_only_view": False,
             "pending_count": 0,
-            "today": date.today(),
+            "today": dates_mod.today(),
             "timedelta": timedelta,
             "closed_period": None,
-            "pending_adjustments_count": 0,
-            "audit": None,
         })
 
     # Initialize ReportService - THE canonical source of truth
     report_service = ReportService(conn)
 
     # Compute date range based on period type
-    today = date.today()
+    today = dates_mod.today()
     custom_start = None
     custom_end = None
     current_period = None
@@ -517,7 +514,8 @@ def dashboard(
     reports = report_service.report_periods(
         TimePeriod.MONTH, num_periods=6, account_filter=account_filter
     )
-    periods_json = reports_to_json(reports)
+    period_vms = compute_period_trends(reports)
+    periods_json = [vm.to_json_dict() for vm in period_vms]
 
     # Use current_period from custom range, or first historical period
     if current_period is None and reports:
@@ -536,14 +534,14 @@ def dashboard(
         alert_end = current_period.end_date
     else:
         # Default to last 60 days if no period
-        alert_end = date.today()
+        alert_end = dates_mod.today()
         alert_start = alert_end - timedelta(days=60)
 
     # Generate alert keys and filter by date range
     alerts_with_keys = []
     for alert in all_alerts:
         # Filter by date range
-        if alert.posted_at < alert_start or alert.posted_at > alert_end:
+        if alert.posted_at < alert_start or alert.posted_at >= alert_end:
             continue
         # Create unique key: pattern_type|merchant|amount|date
         # Using | as delimiter because merchant names may contain colons (e.g., "BEST:BUY")
@@ -559,25 +557,11 @@ def dashboard(
             "action": action,
         })
 
-    # Get duplicate subscriptions
-    duplicates = detect_duplicates(conn, days=400, account_filter=account_filter)
-
-    # Get cross-account duplicates (potential double-counted transactions)
-    cross_account_dups = detect_cross_account_duplicates(conn, days=60, account_filter=account_filter)
-
     # Get all subscriptions with duplicate flags
     subscriptions = get_subscriptions(conn, days=400, account_filter=account_filter)
 
     # Get utility bills (separate from subscriptions)
     bills = get_bills(conn, days=400, account_filter=account_filter)
-
-    # Get income breakdown for the current period
-    income_breakdown = []
-    if current_period and hasattr(current_period, 'income_items'):
-        income_breakdown = current_period.income_items or []
-
-    # Get income rules for UI state
-    income_sources, excluded_sources = dbmod.get_income_rules(conn)
 
     # Get category breakdown from canonical Report (not separate DB query)
     category_breakdown = []
@@ -622,63 +606,264 @@ def dashboard(
         all_pending = get_pending_adjustments(conn)
         pending_adjustments_count = len(all_pending)
 
-    # Integrity / Trust assessment
+    # Savings rate
+    savings_rate_pct = 0.0
+    if current_period and current_period.income_cents > 0:
+        savings_rate_pct = round(current_period.net_cents / current_period.income_cents * 100, 1)
+
+    # Previous month category breakdown for month-over-month comparison
+    prev_category_map: dict[str, int] = {}
+    if len(reports) > 1:
+        for cat, net_cents, count, gross, refunds in category_breakdown_from_report(reports[1]):
+            prev_category_map[cat.id] = net_cents
+
+    # 3-month average net for comparison
+    avg_net_cents = 0
+    if period_vms:
+        vm0 = period_vms[0]
+        avg_net_cents = vm0.avg_income_cents - vm0.avg_recurring_cents - vm0.avg_discretionary_cents
+
+    # V3 DASHBOARD METRICS
+    # =====================================================================
+    # 1. Compute 3-month category averages from historical reports
+    # This provides a stable baseline for comparison (not volatile month-to-month)
+    category_averages: dict[str, int] = {}
+    if len(reports) >= 4:
+        # Use reports 1, 2, 3 (skip current month at index 0 for true historical avg)
+        category_totals: dict[str, list[int]] = {}
+        for report in reports[1:4]:
+            for cat, net_cents, count, gross, refunds in category_breakdown_from_report(report):
+                cat_id = cat.id
+                if cat_id not in category_totals:
+                    category_totals[cat_id] = []
+                category_totals[cat_id].append(net_cents)
+
+        # Compute averages
+        for cat_id, amounts in category_totals.items():
+            category_averages[cat_id] = sum(amounts) // len(amounts)
+
+    # 2. Compute outlier percentages for current month categories
+    # Compare current month spending to 3-month average
+    category_outliers: dict[str, int] = {}
+    if category_averages and current_report:
+        for cat, net_cents, count, gross, refunds in category_breakdown_from_report(current_report):
+            cat_id = cat.id
+            avg = category_averages.get(cat_id, 0)
+            if avg > 0:
+                # Percentage deviation: +33% means spending 33% more than average
+                pct_deviation = int((net_cents - avg) * 100 / avg)
+                if pct_deviation > 0:  # Only flag above-average spending
+                    category_outliers[cat_id] = pct_deviation
+
+    # 3. Multi-month category trend detection: 3+ consecutive increases
+    category_trends: list[dict] = []
+    if len(reports) >= 4:
+        # Check last 4 months for consecutive increases
+        category_histories: dict[str, list[int]] = {}
+        for i, report in enumerate(reports[:4]):
+            for cat, net_cents, count, gross, refunds in category_breakdown_from_report(report):
+                cat_id = cat.id
+                if cat_id not in category_histories:
+                    category_histories[cat_id] = []
+                category_histories[cat_id].append(net_cents)
+
+        # Detect 3+ consecutive increases (most recent to oldest)
+        for cat_id, amounts in category_histories.items():
+            if len(amounts) >= 3:
+                # Check if each month is greater than the next (amounts[0] is current month)
+                consecutive_increases = 0
+                for i in range(len(amounts) - 1):
+                    if amounts[i] > amounts[i + 1]:
+                        consecutive_increases += 1
+                    else:
+                        break
+
+                if consecutive_increases >= 3:
+                    category = CATEGORIES.get(cat_id, CATEGORIES["other"])
+                    historical = amounts[1:4]
+                    avg_3mo = sum(historical) // len(historical) if historical else 0
+                    category_trends.append({
+                        "category_id": cat_id,
+                        "category_name": category.name,
+                        "current_amount": amounts[0],
+                        "avg_3mo": avg_3mo,
+                        "months_increasing": consecutive_increases,
+                    })
+
+    # 4. Bill deviation detection: >15% from rolling average
+    bill_deviations: list[dict] = []
+    if bills and len(reports) >= 4:
+        # Build set of bill merchants (normalized)
+        bill_merchants = set()
+        bill_display_names = {}
+        for bill_merchant, _, _, _, _, _ in bills:
+            merchant_norm = bill_merchant.lower()
+            bill_merchants.add(merchant_norm)
+            bill_display_names[merchant_norm] = bill_merchant
+
+        # Compute rolling average for each bill merchant over last 4 months
+        bill_histories: dict[str, list[int]] = {}
+        for i, report in enumerate(reports[:4]):
+            for txn in report.transactions:
+                if txn.txn_type == TransactionType.EXPENSE:
+                    merchant = txn.merchant_norm
+                    if merchant in bill_merchants:
+                        if merchant not in bill_histories:
+                            bill_histories[merchant] = []
+                        # Store (month_index, amount) to track which month it came from
+                        bill_histories[merchant].append((i, abs(txn.amount_cents)))
+
+        # Check current month bills (index 0) against their 3-month rolling average
+        checked_merchants = set()
+        for merchant, history in bill_histories.items():
+            # Get current month charges (index 0)
+            current_charges = [amt for idx, amt in history if idx == 0]
+            if not current_charges:
+                continue
+
+            # Get historical charges (indices 1, 2, 3)
+            historical_charges = [amt for idx, amt in history if idx > 0]
+            if len(historical_charges) < 2:  # Need at least 2 months of history
+                continue
+
+            # Use most recent charge in current month (in case of multiple bills)
+            current_amount = current_charges[0]
+
+            # Compute average of historical charges
+            avg_amount = sum(historical_charges) // len(historical_charges)
+
+            if avg_amount > 0 and merchant not in checked_merchants:
+                pct_deviation = abs(current_amount - avg_amount) * 100 / avg_amount
+                if pct_deviation > 15:
+                    display_name = bill_display_names.get(merchant, merchant)
+                    bill_deviations.append({
+                        "merchant": merchant,
+                        "display_name": display_name,
+                        "current_amount": current_amount,
+                        "avg_amount": avg_amount,
+                        "pct_deviation": int(pct_deviation),
+                    })
+                    checked_merchants.add(merchant)
+
+    # 5. Restructured attention_items for v3
+    # REMOVE: integrity tasks, price changes, cross-account duplicates, duplicate subs
+    # KEEP: suspicious/unusual charges
+    # ADD: bill deviations, multi-month category trends
+    # MAX: 4 items total
+    attention_items: list[dict] = []
+
+    # Add suspicious charges (from alerts)
+    for item in alerts_with_keys:
+        alert = item["alert"]
+        # Only include genuinely suspicious items (not routine)
+        if alert.pattern_type in ["new_merchant", "unusual_amount", "suspicious_pattern"]:
+            attention_items.append({
+                "type": "alert",
+                "title": f"New charge: {alert.merchant_norm}",
+                "detail": f"${abs(alert.amount_cents)/100:.2f} on {alert.posted_at.strftime('%b %d')}",
+                "severity": alert.severity,
+                "action_type": "alert",
+                "key": item["key"],
+                "actioned": item["action"],
+                "drilldown_scope": f"merchant:{alert.merchant_norm}",
+            })
+
+    # Add multi-month category trends
+    for trend in category_trends[:2]:  # Max 2 trend items
+        attention_items.append({
+            "type": "category_trend",
+            "title": f"{trend['category_name']} is up over the last {trend['months_increasing']} months",
+            "detail": f"Your average was ${trend['avg_3mo']/100:.0f}/mo, now ${trend['current_amount']/100:.0f}",
+            "severity": "warning",
+            "action_type": "dismiss",
+            "key": f"trend_{trend['category_id']}",
+            "drilldown_scope": f"category:{trend['category_id']}",
+        })
+
+    # Add bill deviations
+    for deviation in bill_deviations[:2]:  # Max 2 bill items
+        diff = abs(deviation['current_amount'] - deviation['avg_amount'])
+        direction = "above" if deviation['current_amount'] > deviation['avg_amount'] else "below"
+        attention_items.append({
+            "type": "bill_deviation",
+            "title": f"Your {deviation['display_name']} bill was ${deviation['current_amount']/100:.2f}",
+            "detail": f"${diff/100:.0f} {direction} avg (${deviation['avg_amount']/100:.2f})",
+            "severity": "warning",
+            "action_type": "dismiss",
+            "key": f"bill_{deviation['merchant']}",
+            "drilldown_scope": f"merchant:{deviation['merchant']}",
+        })
+
+    # Limit to 4 items total
+    attention_items = attention_items[:4]
+
+    # 6. Price changes (keep for inline display in Commitments card, not in attention_items)
+    price_changes_by_merchant: dict[str, dict] = {}
+    for pc in price_changes:
+        price_changes_by_merchant[pc["merchant"]] = pc
+
+    # 7. Compute 3-month cash flow average for comparison
+    # Average of (income - expenses) over last 3 complete months
+    avg_cash_flow_cents = 0
+    if len(reports) >= 4:
+        cash_flows = []
+        for report in reports[1:4]:  # Skip current month, use previous 3
+            vm = PeriodViewModel.from_report(report)
+            cash_flow = vm.income_cents - vm.recurring_cents - vm.discretionary_cents
+            cash_flows.append(cash_flow)
+        avg_cash_flow_cents = sum(cash_flows) // len(cash_flows)
+
+    # 8. Integrity data (kept for integrity banner, not in attention_items)
     integrity_data = None
     if current_report:
         integrity_data = get_resolution_summary(current_report)
-        badge_text, badge_class = format_integrity_badge(current_report.integrity.score)
-        integrity_data["badge_text"] = badge_text
-        integrity_data["badge_class"] = badge_class
 
-    # Audit summary (3 headline numbers for compact dashboard card)
-    audit_summary = None
-    if current_report:
-        tracked_set = set(s[0] for s in subscriptions) | set(b[0] for b in bills)
-        # Count recurring items not yet posted this month
-        cadence_days = {"weekly": 7, "biweekly": 14, "monthly": 30, "bimonthly": 60,
-                        "quarterly": 91, "annual": 365}
-        pending_not_posted = 0
-        month_start = date(today.year, today.month, 1)
-        for items in (subscriptions, bills):
-            for item in items:
-                last_seen = item[4]
-                interval = cadence_days.get(item[2], 30)
-                expected = last_seen + timedelta(days=interval)
-                days_since = (today - expected).days
-                if days_since <= 7 or days_since > 90:
-                    continue
-                has_it = any(t.merchant_norm == item[0] and t.posted_at >= month_start
-                             for t in current_report.transactions)
-                if not has_it:
-                    pending_not_posted += 1
-        review_count = sum(
-            1 for t in current_report.transactions
-            if t.reason.confidence < 0.8 and t.reason.primary_code != "USER_OVERRIDE"
-        )
-        audit_summary = {
-            "tracked_count": len(tracked_set),
-            "pending_count": pending_not_posted,
-            "review_count": review_count,
-        }
+    # Recurring total
+    total_recurring_cents = sum(abs(s[1]) for s in subscriptions) + sum(abs(b[1]) for b in bills)
+
+    # V3 DASHBOARD TEMPLATE CONTEXT
+    # =====================================================================
+    # New template variables for v3 dashboard redesign:
+    #
+    # category_averages: dict[str, int]
+    #   - 3-month rolling average spending per category (in cents)
+    #   - Key: category_id, Value: average spending
+    #   - Used in CARD 3 (Spending) to show "avg $640" next to each category
+    #
+    # category_outliers: dict[str, int]
+    #   - Percentage deviation from 3-month average (only positive deviations)
+    #   - Key: category_id, Value: percentage (+33 means 33% above average)
+    #   - Used in CARD 3 for outlier indicators
+    #
+    # avg_cash_flow_cents: int
+    #   - 3-month average of (income - expenses)
+    #   - Used in CARD 1 (Cash Flow) for comparison text
+    #
+    # attention_items: list[dict]
+    #   - Restructured for v3: suspicious charges, multi-month trends, bill deviations
+    #   - NO integrity tasks, NO price changes (moved inline to CARD 2)
+    #   - Max 4 items
+    #   - Used in CARD 4 (Heads Up) - only renders if items exist
+    #
+    # integrity_data: dict | None
+    #   - Used for top-of-page integrity banner when score < 0.8
+    #   - NOT shown in attention_items card anymore
 
     return templates.TemplateResponse("dashboard_v2.html", {
         "request": request,
         "period_type": period,
         "current_period": current_period,
         "periods": periods_json,
-        "alerts": alerts_with_keys,
-        "total_alerts": len(alerts_with_keys),
-        "duplicates": duplicates,
-        "cross_account_dups": cross_account_dups,
+        "savings_rate_pct": savings_rate_pct,
+        "avg_net_cents": avg_net_cents,
+        "prev_category_map": prev_category_map,
+        "attention_items": attention_items,
         "subscriptions": subscriptions,
         "bills": bills,
-        "price_changes": price_changes,
-        "show_dismissed": show_dismissed,
+        "price_changes_by_merchant": price_changes_by_merchant,
+        "total_recurring_cents": total_recurring_cents,
         "start_date": start_date or "",
         "end_date": end_date or "",
-        "income_breakdown": income_breakdown,
-        "income_sources": income_sources,
-        "excluded_sources": excluded_sources,
         "category_breakdown": category_breakdown,
         "categories": CATEGORIES,
         "all_accounts": all_accounts,
@@ -686,15 +871,14 @@ def dashboard(
         "show_no_data": False,
         "expense_only_view": expense_only_view,
         "pending_count": pending_count,
-        "today": date.today(),
+        "today": dates_mod.today(),
         "timedelta": timedelta,
-        # Close-the-books context
         "closed_period": closed_period,
-        "pending_adjustments_count": pending_adjustments_count,
-        # Trust / Integrity assessment
-        "integrity": integrity_data,
-        # Audit summary
-        "audit": audit_summary,
+        # V3 new variables:
+        "category_averages": category_averages,
+        "category_outliers": category_outliers,
+        "avg_cash_flow_cents": avg_cash_flow_cents,
+        "integrity_data": integrity_data,
     })
 
 
@@ -769,6 +953,14 @@ def _drilldown_filter(report, scope: str):
         inclusion_rules = [f"Category: {cat.name if cat else cat_id}", "Expenses and refunds"]
         for txn in report.transactions:
             if txn.category_id == cat_id:
+                transactions.append(txn)
+                scope_total += abs(txn.amount_cents)
+    elif scope.startswith("merchant:"):
+        merchant_name = scope.split(":", 1)[1]
+        scope_label = f"Merchant: {merchant_name}"
+        inclusion_rules = [f"Transactions from {merchant_name}", "All types"]
+        for txn in report.transactions:
+            if txn.merchant_norm and txn.merchant_norm.lower() == merchant_name.lower():
                 transactions.append(txn)
                 scope_total += abs(txn.amount_cents)
     else:
@@ -918,7 +1110,7 @@ def drilldown_export(
         writer.writerow([
             txn.posted_at.isoformat(),
             _sanitize_csv_field(txn.merchant_norm or txn.raw_description or "Unknown"),
-            f"{txn.amount_cents / 100:.2f}",
+            str(Decimal(txn.amount_cents) / 100),
             txn.txn_type.value if txn.txn_type else "unknown",
             txn.category_id or "",
             _sanitize_csv_field(acct_names.get(txn.account_id, "Unknown")),
@@ -980,6 +1172,7 @@ def alert_action(
     if merchant_norm and pattern_type and req.action in ("not_suspicious", "confirmed"):
         dbmod.learn_from_alert_action(conn, merchant_norm, pattern_type, req.action)
 
+    invalidate_report_cache()
     return JSONResponse(content={"status": "ok", "alert_key": req.alert_key, "action": req.action})
 
 
@@ -991,6 +1184,7 @@ def income_source(
 ):
     """Mark a merchant as income or not-income."""
     dbmod.mark_income_source(conn, req.merchant, req.is_income)
+    invalidate_report_cache()
     return JSONResponse(content={"status": "ok", "merchant": req.merchant, "is_income": req.is_income})
 
 
@@ -1016,6 +1210,7 @@ def set_type_override(
         )
 
     dbmod.set_recurring_type_override(conn, req.merchant, req.override_type)
+    invalidate_report_cache()
     return JSONResponse(content={
         "status": "ok",
         "merchant": req.merchant,
@@ -1101,6 +1296,7 @@ def set_txn_type_override(
         dbmod.set_txn_type_override_fingerprint(
             conn, req.fingerprint, req.target_type, req.reason
         )
+        invalidate_report_cache()
         return JSONResponse(content={
             "status": "ok",
             "fingerprint": req.fingerprint,
@@ -1110,6 +1306,7 @@ def set_txn_type_override(
         dbmod.set_txn_type_override_merchant(
             conn, req.merchant_pattern, req.target_type, req.reason
         )
+        invalidate_report_cache()
         return JSONResponse(content={
             "status": "ok",
             "merchant_pattern": req.merchant_pattern,
@@ -1139,12 +1336,14 @@ def set_bulk_txn_type_override(
                 content={"error": f"Invalid target_type: {override.target_type}"},
             )
 
-    # Apply all overrides
+    # Apply all overrides atomically (defer commits until all succeed)
     for override in req.overrides:
         reason = override.reason or req.reason
         dbmod.set_txn_type_override_fingerprint(
-            conn, override.fingerprint, override.target_type, reason
+            conn, override.fingerprint, override.target_type, reason,
+            commit=False,
         )
+    conn.commit()
 
     # Invalidate report cache to force recalculation
     invalidate_report_cache()
@@ -1154,7 +1353,7 @@ def set_bulk_txn_type_override(
     from .dates import period_bounds
 
     # Default to current month for score calculation
-    start, end = period_bounds(TimePeriod.MONTH, date.today())
+    start, end = period_bounds(TimePeriod.MONTH, dates_mod.today())
     report = ReportService(conn).report_period(start, end)
 
     return JSONResponse(content={
@@ -1268,7 +1467,7 @@ def search_transactions(
     all_account_ids = set(all_accounts.keys())
 
     # Search query
-    cutoff_date = (date.today() - timedelta(days=days)).isoformat()
+    cutoff_date = (dates_mod.today() - timedelta(days=days)).isoformat()
     query = """
         SELECT
             t.id,
@@ -1589,7 +1788,7 @@ def audit_page(
             "categories": CATEGORIES,
         })
 
-    today = date.today()
+    today = dates_mod.today()
     month_start = date(today.year, today.month, 1)
     month_end = today + timedelta(days=1)  # exclusive
 
@@ -1746,7 +1945,7 @@ def get_payee_transactions(
     """Get transactions for a specific payee (drill-down) with enhanced details."""
     from .legacy_classify import _match_known_subscription
 
-    since = (date.today() - timedelta(days=days)).isoformat()
+    since = (dates_mod.today() - timedelta(days=days)).isoformat()
 
     # Parse account filter
     account_filter, _ = parse_account_filter(accounts)
@@ -1827,7 +2026,7 @@ def watchlist():
 
 @app.get("/anomalies", response_class=HTMLResponse)
 def anomalies(days: int = 60, limit: int = 50, conn: sqlite3.Connection = Depends(get_db)):
-    since = (date.today() - timedelta(days=days)).isoformat()
+    since = (dates_mod.today() - timedelta(days=days)).isoformat()
     rows = conn.execute(
         """
         SELECT
@@ -1864,7 +2063,7 @@ def export_sketchy(conn: sqlite3.Connection = Depends(get_db)):
         writer.writerow([
             alert.posted_at.isoformat(),
             _sanitize_csv_field(alert.merchant_norm),
-            f"{alert.amount_cents / 100:.2f}",
+            str(Decimal(alert.amount_cents) / 100),
             alert.pattern_type,
             alert.severity,
             _sanitize_csv_field(alert.detail),
@@ -2598,7 +2797,7 @@ def api_budget_status(
     """Get current month budget status: targets vs actual spending."""
     from .dates import period_bounds
 
-    start, end = period_bounds(TimePeriod.MONTH, date.today())
+    start, end = period_bounds(TimePeriod.MONTH, dates_mod.today())
     report = ReportService(conn).report_period(start, end)
     breakdown = category_breakdown_from_report(report)
     targets = dbmod.get_budget_targets(conn)
@@ -2654,7 +2853,7 @@ def budget_page(
     """Budget management page."""
     from .dates import period_bounds
 
-    start, end = period_bounds(TimePeriod.MONTH, date.today())
+    start, end = period_bounds(TimePeriod.MONTH, dates_mod.today())
     report = ReportService(conn).report_period(start, end)
     breakdown = category_breakdown_from_report(report)
     targets = dbmod.get_budget_targets(conn)

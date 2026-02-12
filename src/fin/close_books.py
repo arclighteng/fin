@@ -14,7 +14,7 @@ import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from .report_service import ReportService
@@ -261,7 +261,7 @@ def close_period(
             (existing["id"],),
         )
 
-    now = datetime.now().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
 
     # Insert new closed period
     cursor = conn.execute(
@@ -410,7 +410,7 @@ def detect_post_close_adjustments(
 
     # Detect new transactions (not yet recorded as adjustments)
     new_adjustments = []
-    now = datetime.now().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
 
     # Simple heuristic: if transaction count increased, we have new txns
     # More sophisticated: track all fingerprints at close time
@@ -499,7 +499,7 @@ def acknowledge_adjustment(
     notes: Optional[str] = None,
 ) -> None:
     """Acknowledge an adjustment (user has seen it, accepts it)."""
-    now = datetime.now().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
 
     conn.execute(
         """
@@ -572,7 +572,7 @@ def save_statement_match(
     """Save a user-confirmed statement-to-transaction match."""
     init_close_books_schema(conn)
 
-    now = datetime.now().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
 
     conn.execute(
         """

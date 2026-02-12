@@ -5,174 +5,829 @@
 {% block content %}
 <style>
 /* ============================================
-   DASHBOARD V2 - Modern Bento Grid Layout
-   Mobile-first, accessible, 2026 design
+   DASHBOARD V3 - Financial Planner View
+   5-card bento layout with cash flow focus
    ============================================ */
 
-/* CSS Custom Properties for dashboard */
-.dashboard {
+:root {
     --card-bg: var(--bg-secondary);
     --card-radius: 16px;
     --card-padding: 24px;
     --card-gap: 16px;
-    --hero-size: 3rem;
-    --transition-fast: 150ms ease;
-    --transition-med: 250ms ease;
 }
 
-/* Bento Grid Container */
-.bento-grid {
-    display: grid;
-    gap: var(--card-gap);
-    grid-template-columns: 1fr;
-    margin-bottom: 24px;
-}
-
-/* Desktop: 2-column bento */
-@media (min-width: 1024px) {
-    .bento-grid {
-        grid-template-columns: 1.5fr 1fr;
-    }
-    .bento-grid .card-hero {
-        grid-row: span 2;
-    }
-}
-
-/* Card Base - Modern, minimal */
-.card-v2 {
-    background: var(--card-bg);
-    border-radius: var(--card-radius);
-    padding: var(--card-padding);
-    position: relative;
-    overflow: hidden;
-}
-
-/* Subtle card differentiation (accessibility) */
-@media (prefers-color-scheme: light) {
-    .card-v2 {
-        box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.06);
-    }
-}
-
-/* Card Header */
-.card-v2-header {
+/* Period controls - flattened, minimal */
+.period-controls-v3 {
     display: flex;
-    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
     align-items: center;
-    margin-bottom: 20px;
+    margin-bottom: 16px;
+    padding: 8px 0;
 }
 
-.card-v2-title {
-    font-size: 13px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
+.month-nav-v3 {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.month-nav-btn-v3 {
+    background: none;
+    border: none;
+    padding: 6px 10px;
+    font-size: 18px;
     color: var(--text-muted);
-    margin: 0;
-}
-
-.card-v2-action {
-    font-size: 13px;
-    color: var(--accent-blue);
-    text-decoration: none;
-    padding: 4px 8px;
+    cursor: pointer;
     border-radius: 6px;
-    transition: background var(--transition-fast);
+    line-height: 1;
 }
 
-.card-v2-action:hover {
+.month-nav-btn-v3:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.month-label-v3 {
+    font-size: 14px;
+    font-weight: 400;
+    color: var(--text-secondary);
+    min-width: 140px;
+    text-align: center;
+}
+
+.now-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    background: var(--accent-green);
+    border-radius: 50%;
+    margin-left: 6px;
+    vertical-align: middle;
+}
+
+.controls-right-v3 {
+    display: flex;
+    gap: 8px;
+    margin-left: auto;
+    align-items: center;
+    position: relative;
+}
+
+.search-input-v3 {
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    padding: 7px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    width: 100%;
+    outline: none;
+}
+
+.search-input-v3::placeholder {
+    color: var(--text-muted);
+}
+
+.account-toggle-v3 {
+    background: var(--bg-hover);
+    border: 1px solid var(--border, #30363d);
+    color: var(--text-muted);
+    padding: 6px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    cursor: pointer;
+    position: relative;
+}
+
+.account-toggle-v3:hover {
+    border-color: var(--text-secondary);
+}
+
+.account-dropdown-v3 {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: var(--shadow-md);
+    padding: 8px;
+    z-index: 50;
+    display: none;
+    min-width: 200px;
+}
+
+.account-dropdown-v3.open {
+    display: block;
+}
+
+.account-dropdown-v3 label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.account-dropdown-v3 label:hover {
     background: var(--bg-hover);
 }
 
-/* ============================================
-   HERO CARD - Primary Financial Summary
-   ============================================ */
+.account-dropdown-v3 label.selected {
+    color: var(--text-primary);
+    font-weight: 500;
+}
 
-.hero-number {
-    font-size: var(--hero-size);
+.account-dropdown-v3 input[type="checkbox"] {
+    accent-color: var(--accent-blue);
+}
+
+/* Integrity banner */
+.integrity-banner-v3 {
+    background: var(--accent-yellow-dim, rgba(255, 201, 51, 0.12));
+    border: 1px solid rgba(255, 201, 51, 0.2);
+    border-radius: 10px;
+    padding: 10px 16px;
+    margin-bottom: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.integrity-banner-v3 a {
+    color: var(--accent-yellow, #ffc933);
+    text-decoration: none;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+/* Bento grid */
+.bento-grid-v3 {
+    display: grid;
+    gap: var(--card-gap);
+    grid-template-columns: 1fr;
+}
+
+@media (min-width: 768px) {
+    .bento-grid-v3 {
+        grid-template-columns: 1fr 1fr;
+    }
+    .card-hero-v3,
+    .card-full-v3 {
+        grid-column: 1 / -1;
+    }
+}
+
+/* Card base */
+.card-v3 {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--card-radius);
+    padding: var(--card-padding);
+    position: relative;
+    box-shadow: var(--shadow-sm);
+}
+
+.card-title-v3 {
+    font-size: 11px;
     font-weight: 700;
-    font-variant-numeric: tabular-nums;
-    line-height: 1.1;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+}
+
+.card-title-right-v3 {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 400;
+}
+
+/* ==================== CARD 1: CASH FLOW ==================== */
+.cf-bars {
+    margin: 8px 0 20px;
+}
+
+.cf-bar-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 8px;
+    gap: 12px;
+}
+
+.cf-bar-label {
+    font-size: 13px;
+    color: var(--text-secondary);
+    width: 70px;
+    flex-shrink: 0;
+}
+
+.cf-bar-track {
+    flex: 1;
+    height: 28px;
+    background: var(--bg-tertiary);
+    border-radius: 6px;
+    position: relative;
+    overflow: hidden;
+    cursor: pointer;
+}
+
+.cf-bar-track:hover {
+    background: var(--bg-hover);
+}
+
+.cf-bar-fill {
+    height: 100%;
+    border-radius: 6px;
+    transition: width 0.6s ease;
+}
+
+.cf-bar-fill.income {
+    background: var(--accent-green, #4aba6f);
+}
+
+.cf-bar-fill.expenses {
+    background: var(--accent-blue, #4a90d9);
+}
+
+.cf-bar-amount {
+    font-size: 14px;
+    font-weight: 600;
+    width: 70px;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+.cf-gap {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    margin: 20px 0 8px;
+    padding-left: 82px;
+}
+
+.cf-kept {
+    font-size: 2.8rem;
+    font-weight: 700;
+    color: var(--accent-green, #4aba6f);
+    line-height: 1.2;
+}
+
+.cf-kept.negative {
+    color: var(--accent-red, #ea4335);
+}
+
+.cf-rate {
+    font-size: 15px;
+    color: var(--text-secondary);
+}
+
+.cf-comparison {
+    padding-left: 82px;
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+}
+
+.cf-comparison span {
+    color: var(--text-secondary);
+}
+
+.cf-pacing {
+    padding-left: 82px;
+    font-size: 12px;
+    color: var(--text-muted);
+    font-style: italic;
+    margin-top: 8px;
+}
+
+.cf-pending {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 12px;
+    padding-left: 82px;
+}
+
+.cf-pending.warning {
+    color: var(--accent-yellow, #ffc933);
+    padding-left: 0;
+    background: var(--accent-yellow-dim, rgba(255, 201, 51, 0.12));
+    border-radius: 8px;
+    padding: 8px 14px;
+    margin-top: 16px;
+}
+
+.info-tip {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--bg-hover);
+    color: var(--text-muted);
+    font-size: 10px;
+    text-align: center;
+    line-height: 14px;
+    cursor: help;
+    margin-left: 4px;
+    vertical-align: middle;
+}
+
+/* ==================== CARD 2: COMMITMENTS ==================== */
+.commit-total {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.commit-pct-text {
+    font-size: 13px;
+    color: var(--text-secondary);
     margin-bottom: 8px;
 }
 
-.hero-number.positive { color: var(--accent-green); }
-.hero-number.negative { color: var(--accent-red); }
+.commit-bar-track {
+    height: 8px;
+    background: var(--bg-tertiary);
+    border-radius: 4px;
+    margin-bottom: 20px;
+    overflow: hidden;
+}
 
-.hero-label {
-    font-size: 15px;
+.commit-bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    background: var(--accent-green, #4aba6f);
+}
+
+.commit-bar-fill.yellow {
+    background: var(--accent-yellow, #ffc933);
+}
+
+.commit-bar-fill.red {
+    background: var(--accent-red, #ea4335);
+}
+
+.commit-list {
+    list-style: none;
+}
+
+.commit-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 8px 0;
+    min-height: 44px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.commit-item:hover {
+    background: var(--bg-hover);
+    margin: 0 -8px;
+    padding: 8px;
+    border-radius: 6px;
+    border-color: transparent;
+}
+
+.commit-item:last-child {
+    border-bottom: none;
+}
+
+.commit-name {
+    font-size: 14px;
+    color: var(--text-primary);
+}
+
+.commit-amount {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+}
+
+.commit-note {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+.commit-note.price-change {
+    color: var(--accent-yellow, #ffc933);
+}
+
+.commit-footer {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 14px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.commit-more {
+    font-size: 12px;
+    color: var(--text-muted);
+    padding: 8px 0;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+}
+
+.commit-more:hover {
+    color: var(--accent-blue, #4a90d9);
+}
+
+/* ==================== CARD 3: SPENDING ==================== */
+.spend-total {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.spend-list {
+    list-style: none;
+}
+
+.spend-item {
+    padding: 8px 0;
+    min-height: 44px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.spend-item:hover {
+    background: var(--bg-hover);
+    margin: 0 -8px;
+    padding: 8px;
+    border-radius: 6px;
+    border-color: transparent;
+}
+
+.spend-item:last-child {
+    border-bottom: none;
+}
+
+.spend-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.spend-name {
+    font-size: 14px;
+    color: var(--text-primary);
+    width: 90px;
+    flex-shrink: 0;
+}
+
+.spend-bar-track {
+    flex: 1;
+    height: 14px;
+    background: var(--bg-tertiary);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.spend-bar-fill {
+    height: 100%;
+    background: var(--accent-blue, #4a90d9);
+    border-radius: 3px;
+    opacity: 0.8;
+}
+
+.spend-amount {
+    font-size: 14px;
+    font-weight: 600;
+    width: 55px;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+.spend-outlier {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent-yellow, #ffc933);
+    background: var(--accent-yellow-dim, rgba(255, 201, 51, 0.12));
+    padding: 1px 6px;
+    border-radius: 4px;
+    flex-shrink: 0;
+    min-width: 40px;
+    text-align: center;
+}
+
+.spend-outlier-spacer {
+    min-width: 40px;
+    flex-shrink: 0;
+}
+
+.spend-avg {
+    font-size: 12px;
+    color: var(--text-muted);
+    padding-left: 98px;
+    margin-top: 4px;
+}
+
+.spend-footer {
+    margin-top: 14px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+.spend-footer .above {
+    color: var(--accent-yellow, #ffc933);
+}
+
+.spend-footer .below {
+    color: var(--accent-green, #4aba6f);
+}
+
+/* ==================== CARD 4: HEADS UP ==================== */
+.heads-up-empty {
+    text-align: center;
+    padding: 20px;
+    color: var(--text-muted);
+    font-size: 14px;
+}
+
+.hu-item {
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.hu-item:last-child {
+    border-bottom: none;
+}
+
+.hu-item-title {
+    font-size: 14px;
+    color: var(--text-primary);
+    margin-bottom: 2px;
+}
+
+.hu-item-detail {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+}
+
+.hu-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.hu-btn {
+    font-size: 13px;
+    padding: 8px 16px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg-hover);
+    color: var(--text-secondary);
+    cursor: pointer;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+}
+
+.hu-btn:hover {
+    color: var(--text-primary);
+    border-color: var(--text-muted);
+}
+
+.hu-btn.primary {
+    background: var(--accent-green-dim, rgba(74, 186, 111, 0.15));
+    border-color: var(--accent-green, #4aba6f);
+    color: var(--accent-green, #4aba6f);
+}
+
+/* ==================== CARD 5: TREND ==================== */
+.trend-chart {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    height: 160px;
+    padding: 0 4px;
+    margin-bottom: 12px;
+}
+
+.trend-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 100%;
+    justify-content: flex-end;
+    cursor: pointer;
+}
+
+.trend-val {
+    font-size: 11px;
+    font-weight: 600;
     color: var(--text-secondary);
     margin-bottom: 4px;
 }
 
-.hero-comparison {
-    font-size: 14px;
+.trend-bar {
+    width: 100%;
+    max-width: 56px;
+    border-radius: 4px 4px 0 0;
+    background: var(--accent-green, #4aba6f);
+    min-height: 4px;
+    transition: filter 0.15s;
+}
+
+.trend-bar.negative {
+    background: var(--accent-red, #ea4335);
+}
+
+.trend-bar.in-progress {
+    background: transparent;
+    border: 2px dashed var(--accent-green, #4aba6f);
+}
+
+.trend-month {
+    font-size: 11px;
     color: var(--text-muted);
-    display: flex;
-    align-items: center;
-    gap: 6px;
+    margin-top: 6px;
 }
 
-.hero-comparison .trend-up { color: var(--accent-green); }
-.hero-comparison .trend-down { color: var(--accent-red); }
-
-/* Financial Breakdown - Horizontal bar style */
-.breakdown {
-    margin-top: 28px;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-}
-
-.breakdown-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
-.breakdown-label {
-    font-size: 14px;
+.trend-month.current {
     color: var(--text-secondary);
-    min-width: 100px;
-}
-
-.breakdown-bar-container {
-    flex: 1;
-    height: 8px;
-    background: var(--bg-tertiary);
-    border-radius: 4px;
-    overflow: hidden;
-}
-
-.breakdown-bar {
-    height: 100%;
-    border-radius: 4px;
-    transition: width var(--transition-med);
-}
-
-.breakdown-bar.income { background: var(--accent-green); }
-.breakdown-bar.recurring { background: var(--accent-blue); }
-.breakdown-bar.discretionary { background: var(--accent-purple); }
-
-.breakdown-value {
-    font-size: 14px;
     font-weight: 600;
-    font-variant-numeric: tabular-nums;
-    min-width: 80px;
-    text-align: right;
 }
 
-/* ============================================
-   SPENDING TREND CHART
-   ============================================ */
-
-.trend-chart-container {
-    position: relative;
-    height: 200px;
-    margin-top: 8px;
+.trend-col:hover .trend-bar {
+    filter: brightness(1.3);
 }
 
-/* Accessible: Text summary for screen readers */
+.trend-col:hover .trend-val {
+    color: var(--text-primary);
+}
+
+.trend-label {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: 2px;
+    font-style: italic;
+}
+
+.trend-footer {
+    text-align: center;
+    font-size: 13px;
+    color: var(--text-muted);
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+}
+
+/* Search results */
+.search-results-v3 {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    margin-top: 4px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: var(--shadow-md);
+    max-height: 400px;
+    overflow-y: auto;
+    z-index: 100;
+}
+
+.search-result-item-v3 {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    min-height: 44px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+}
+
+.search-result-item-v3:last-child {
+    border-bottom: none;
+}
+
+.search-result-item-v3:hover {
+    background: var(--bg-hover);
+}
+
+.search-result-info-v3 {
+    flex: 1;
+    min-width: 0;
+}
+
+.search-result-merchant-v3 {
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.search-result-meta-v3 {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+.search-result-amount-v3 {
+    font-weight: 600;
+    white-space: nowrap;
+    margin-left: 12px;
+}
+
+.search-result-amount-v3.positive { color: var(--accent-green); }
+.search-result-amount-v3.negative { color: var(--accent-red); }
+
+.search-empty-v3 {
+    padding: 16px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+/* Mobile responsive */
+@media (max-width: 767px) {
+    :root {
+        --card-padding: 18px;
+    }
+
+    .period-controls-v3 {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .controls-right-v3 {
+        margin-left: 0;
+        flex: 1 1 100%;
+    }
+
+    .card-title-v3 {
+        margin-bottom: 12px;
+    }
+
+    .cf-kept {
+        font-size: 2.2rem;
+    }
+
+    .cf-gap,
+    .cf-comparison,
+    .cf-pacing,
+    .cf-pending:not(.warning) {
+        padding-left: 0;
+    }
+
+    .cf-bar-label {
+        width: 60px;
+        font-size: 12px;
+    }
+
+    .spend-name {
+        width: 72px;
+        font-size: 13px;
+    }
+
+    .spend-avg {
+        padding-left: 80px;
+    }
+
+    .trend-chart {
+        height: 120px;
+    }
+
+    .trend-val {
+        display: none;
+    }
+
+    .hu-actions {
+        flex-direction: column;
+    }
+
+    .hu-btn {
+        justify-content: center;
+    }
+}
+
+/* Accessibility */
 .sr-only {
     position: absolute;
     width: 1px;
@@ -185,1111 +840,324 @@
     border: 0;
 }
 
-/* Category change pills */
-.category-changes {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 16px;
-}
-
-.category-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 12px;
-    background: var(--bg-tertiary);
-    border-radius: 20px;
-    font-size: 13px;
-}
-
-.category-pill .change {
-    font-weight: 600;
-}
-
-.category-pill .change.up { color: var(--accent-red); }
-.category-pill .change.down { color: var(--accent-green); }
-
-/* ============================================
-   DATA TRUST WIDGET
-   ============================================ */
-
-.card-trust {
-    background: var(--bg-secondary);
-}
-
-.trust-badge {
-    font-size: 12px;
-    font-weight: 600;
-    padding: 4px 10px;
-    border-radius: 12px;
-}
-
-.trust-badge.badge-success { background: rgba(14, 98, 69, 0.15); color: var(--accent-green); }
-.trust-badge.badge-info { background: rgba(37, 99, 235, 0.15); color: var(--accent-blue); }
-.trust-badge.badge-warning { background: rgba(183, 121, 31, 0.15); color: var(--accent-yellow); }
-.trust-badge.badge-danger { background: rgba(197, 48, 48, 0.15); color: var(--accent-red); }
-
-.trust-issues {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin-top: 12px;
-}
-
-.trust-issue {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 13px;
-}
-
-.trust-issue-priority {
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 11px;
-    font-weight: 600;
-    flex-shrink: 0;
-}
-
-.trust-issue-priority.priority-1 { background: var(--accent-red); color: white; }
-.trust-issue-priority.priority-2 { background: var(--accent-yellow); color: #1a1f36; }
-.trust-issue-priority.priority-3 { background: var(--text-muted); color: white; }
-
-.trust-issue-text {
-    color: var(--text-secondary);
-    line-height: 1.4;
-}
-
-.trust-blocked-notice {
-    margin-top: 12px;
-    padding: 8px 12px;
-    background: rgba(183, 121, 31, 0.1);
-    border-radius: 8px;
-    font-size: 12px;
-    color: var(--accent-yellow);
-}
-
-.trust-ok {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-top: 8px;
-    color: var(--accent-green);
-    font-size: 14px;
-}
-
-.trust-ok-icon {
-    font-size: 16px;
-}
-
-/* ============================================
-   ALERTS CARD
-   ============================================ */
-
-.alert-list-v2 {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-}
-
-.alert-item-v2 {
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-    padding: 12px;
-    background: var(--bg-tertiary);
-    border-radius: 10px;
-    transition: background var(--transition-fast);
-}
-
-.alert-item-v2:hover {
-    background: var(--bg-hover);
-}
-
-.alert-icon-v2 {
-    font-size: 18px;
-    line-height: 1;
-    flex-shrink: 0;
-    width: 24px;
-    text-align: center;
-}
-
-.alert-content-v2 {
-    flex: 1;
-    min-width: 0;
-}
-
-.alert-title-v2 {
-    font-size: 14px;
-    font-weight: 500;
-    color: var(--text-primary);
-    margin-bottom: 2px;
-}
-
-.alert-detail-v2 {
-    font-size: 13px;
-    color: var(--text-muted);
-}
-
-.alert-amount-v2 {
-    font-weight: 600;
-    font-variant-numeric: tabular-nums;
-    color: var(--text-primary);
-}
-
-.alert-actions-v2 {
-    display: flex;
-    gap: 6px;
-    flex-shrink: 0;
-}
-
-.alert-btn {
-    padding: 6px 10px;
-    font-size: 12px;
-    border-radius: 6px;
-    border: none;
-    cursor: pointer;
-    transition: all var(--transition-fast);
-    background: var(--bg-secondary);
-    color: var(--text-secondary);
-}
-
-.alert-btn:hover {
-    background: var(--accent-blue);
-    color: white;
-}
-
-.alert-btn.danger:hover {
-    background: var(--accent-red);
-}
-
-/* ============================================
-   RECURRING CHARGES - Compact List
-   ============================================ */
-
-.recurring-summary {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    margin-bottom: 16px;
-    padding-bottom: 12px;
-    border-bottom: 1px solid var(--border);
-}
-
-.recurring-total {
-    font-size: 24px;
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
-}
-
-.recurring-total small {
-    font-size: 14px;
-    font-weight: 400;
-    color: var(--text-muted);
-}
-
-.recurring-section {
-    margin-bottom: 20px;
-}
-
-.recurring-section:last-child {
-    margin-bottom: 0;
-}
-
-.recurring-section-header {
-    font-size: 12px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: var(--text-muted);
-    margin-bottom: 10px;
-    display: flex;
-    justify-content: space-between;
-}
-
-.recurring-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.recurring-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 8px 0;
-    border-bottom: 1px solid var(--border);
-}
-
-.recurring-item:last-child {
-    border-bottom: none;
-}
-
-.recurring-name {
-    font-size: 14px;
-    color: var(--text-primary);
-}
-
-.recurring-meta {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.recurring-amount {
-    font-size: 14px;
-    font-weight: 600;
-    font-variant-numeric: tabular-nums;
-}
-
-.recurring-badge {
-    font-size: 11px;
-    padding: 2px 6px;
-    border-radius: 4px;
-    font-weight: 500;
-}
-
-.recurring-badge.price-up {
-    background: var(--accent-red-dim);
-    color: var(--accent-red);
-}
-
-.recurring-badge.price-down {
-    background: var(--accent-green-dim);
-    color: var(--accent-green);
-}
-
-.recurring-badge.known {
-    background: var(--accent-green-dim);
-    color: var(--accent-green);
-}
-
-.recurring-badge.cadence {
-    background: rgba(0, 0, 0, 0.06);
-    color: var(--text-muted);
-}
-
-/* Price change alert styling */
-.alert-amount-v2.price-up {
-    color: var(--accent-red);
-}
-
-.alert-amount-v2.price-down {
-    color: var(--accent-green);
-}
-
-.price-change-alert {
-    border-left: 3px solid var(--accent-blue);
-}
-
-.more-link {
-    font-size: 13px;
-    color: var(--accent-blue);
-    text-decoration: none;
-    display: inline-block;
-    margin-top: 8px;
-}
-
-/* ============================================
-   PERIOD CONTROLS - Top of page
-   ============================================ */
-
-.period-controls {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-    align-items: center;
-    margin-bottom: 20px;
-    padding: 16px;
-    background: var(--card-bg);
-    border-radius: var(--card-radius);
-}
-
-.period-tabs {
-    display: flex;
-    background: var(--bg-tertiary);
-    border-radius: 8px;
-    padding: 4px;
-}
-
-.period-tab {
-    padding: 8px 16px;
-    font-size: 14px;
-    font-weight: 500;
-    color: var(--text-secondary);
-    background: none;
-    border: none;
-    border-radius: 6px;
-    cursor: pointer;
-    text-decoration: none;
-    transition: all var(--transition-fast);
-}
-
-.period-tab:hover {
-    color: var(--text-primary);
-}
-
-.period-tab.active {
-    background: var(--bg-secondary);
-    color: var(--text-primary);
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-}
-
-.date-inputs {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.date-inputs label {
-    font-size: 13px;
-    color: var(--text-muted);
-}
-
-.date-inputs input[type="date"] {
-    padding: 8px 12px;
-    font-size: 14px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--bg-secondary);
-    color: var(--text-primary);
-}
-
-/* Transaction search */
-.search-container {
-    position: relative;
-    margin-left: auto;
-    min-width: 180px;
-    max-width: 280px;
-}
-
-.search-input {
-    width: 100%;
-    padding: 8px 12px;
-    font-size: 14px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--bg-secondary);
-    color: var(--text-primary);
-    outline: none;
-}
-
-.search-input:focus {
-    border-color: var(--accent-blue);
-    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
-}
-
-.search-results {
-    position: absolute;
-    top: 100%;
-    left: 0;
-    right: 0;
-    margin-top: 4px;
-    background: var(--card-bg);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.15);
-    max-height: 400px;
-    overflow-y: auto;
-    z-index: 100;
-}
-
-.search-result-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 10px 14px;
-    cursor: pointer;
-    border-bottom: 1px solid var(--border);
-    font-size: 13px;
-}
-
-.search-result-item:last-child { border-bottom: none; }
-.search-result-item:hover { background: var(--hover-bg); }
-
-.search-result-info {
-    flex: 1;
-    min-width: 0;
-}
-
-.search-result-merchant {
-    font-weight: 500;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.search-result-meta {
-    font-size: 11px;
-    color: var(--text-muted);
-    margin-top: 2px;
-}
-
-.search-result-amount {
-    font-weight: 600;
-    white-space: nowrap;
-    margin-left: 12px;
-}
-
-.search-empty {
-    padding: 16px;
-    text-align: center;
-    color: var(--text-muted);
-    font-size: 13px;
-}
-
-/* Account filter chips */
-.account-chips-v2 {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 12px;
-}
-
-.account-chip-v2 {
-    display: inline-flex;
-    align-items: center;
-    padding: 6px 12px;
-    font-size: 13px;
-    background: var(--bg-tertiary);
-    border-radius: 20px;
-    cursor: pointer;
-    transition: all var(--transition-fast);
-    border: 2px solid transparent;
-}
-
-.account-chip-v2.selected {
-    background: var(--accent-blue);
-    color: white;
-}
-
-.account-chip-v2:hover:not(.selected) {
-    border-color: var(--accent-blue);
-}
-
-/* ============================================
-   EMPTY STATES
-   ============================================ */
-
-.empty-state-v2 {
-    text-align: center;
-    padding: 32px 16px;
-    color: var(--text-muted);
-}
-
-.empty-state-v2 .icon {
-    font-size: 48px;
-    margin-bottom: 12px;
-    opacity: 0.5;
-}
-
-/* ============================================
-   REDUCED MOTION
-   ============================================ */
-
 @media (prefers-reduced-motion: reduce) {
     * {
         transition-duration: 0.01ms !important;
         animation-duration: 0.01ms !important;
     }
 }
-
-/* ============================================
-   MOBILE ADJUSTMENTS
-   ============================================ */
-
-@media (max-width: 640px) {
-    .dashboard {
-        --card-padding: 16px;
-        --hero-size: 2.25rem;
-    }
-
-    .period-controls {
-        flex-direction: column;
-        align-items: stretch;
-    }
-
-    .date-inputs {
-        flex-wrap: wrap;
-    }
-
-    .search-container {
-        margin-left: 0;
-        max-width: none;
-    }
-
-    .breakdown-label {
-        min-width: 80px;
-        font-size: 13px;
-    }
-
-    .alert-item-v2 {
-        flex-wrap: wrap;
-    }
-
-    .alert-actions-v2 {
-        width: 100%;
-        margin-top: 8px;
-    }
-}
-
-/* ============================================
-   CLOSE-THE-BOOKS UI
-   ============================================ */
-
-.closed-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 4px 10px;
-    background: var(--accent-green-dim, rgba(34, 197, 94, 0.15));
-    color: var(--accent-green);
-    border-radius: 6px;
-    font-size: 12px;
-    font-weight: 600;
-}
-
-.closed-icon {
-    font-size: 11px;
-}
-
-.btn-outline {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--text-secondary);
-}
-
-.btn-outline:hover {
-    background: var(--bg-hover);
-    border-color: var(--accent-blue);
-    color: var(--accent-blue);
-}
-
-.adjustment-alert {
-    background: var(--accent-orange-dim, rgba(249, 115, 22, 0.1));
-    border-left: 3px solid var(--accent-orange, #f97316);
-}
-
-.adjustment-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 2px 8px;
-    background: var(--accent-orange, #f97316);
-    color: white;
-    border-radius: 10px;
-    font-size: 11px;
-    font-weight: 600;
-}
-
-/* Resolution Controls */
-.drilldown-resolution-controls {
-    border-top: 1px solid var(--border);
-    border-bottom: 1px solid var(--border);
-    padding: 16px;
-    background: var(--bg-tertiary);
-    margin-bottom: 16px;
-}
-
-.resolution-bulk-bar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 12px;
-}
-
-.resolution-bulk-label {
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text-secondary);
-}
-
-.btn-resolution-bulk {
-    padding: 6px 12px;
-    font-size: 12px;
-    border: 1px solid var(--border);
-    background: var(--bg-secondary);
-    border-radius: 6px;
-    cursor: pointer;
-    transition: all var(--transition-fast);
-}
-
-.btn-resolution-bulk:hover {
-    background: var(--accent-blue);
-    color: white;
-    border-color: var(--accent-blue);
-}
-
-.resolution-select {
-    padding: 4px 8px;
-    font-size: 12px;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--bg-secondary);
-    color: var(--text-primary);
-    min-width: 140px;
-}
-
-.resolution-select:focus {
-    outline: 2px solid var(--accent-blue);
-    outline-offset: 2px;
-}
-
-#resolutionSaveBtn {
-    width: 100%;
-    padding: 10px;
-    font-size: 14px;
-    font-weight: 600;
-}
 </style>
 
 <div class="dashboard">
     <!-- Period Controls -->
-    <div class="period-controls">
-        <div class="period-tabs">
-            <a href="?period=this_month{% if selected_accounts %}&accounts={{ selected_accounts|join(',') }}{% endif %}"
-               class="period-tab {% if period_type == 'this_month' and not start_date %}active{% endif %}">This Month</a>
-            <a href="?period=last_month{% if selected_accounts %}&accounts={{ selected_accounts|join(',') }}{% endif %}"
-               class="period-tab {% if period_type == 'last_month' and not start_date %}active{% endif %}">Last Month</a>
+    <div class="period-controls-v3">
+        <div class="month-nav-v3">
+            <button class="month-nav-btn-v3" onclick="navigateMonth(-1)" title="Previous month" aria-label="Previous month">&lsaquo;</button>
+            <span class="month-label-v3">
+                {% if current_period %}
+                    {{ current_period.period_label }}
+                    {% if period_type == 'this_month' %}
+                        <span class="now-dot" title="Current month"></span>
+                    {% endif %}
+                {% else %}
+                    No data
+                {% endif %}
+            </span>
+            <button class="month-nav-btn-v3" onclick="navigateMonth(1)" title="Next month" aria-label="Next month">&rsaquo;</button>
         </div>
 
-        <form class="date-inputs" method="get" action="/dashboard" id="dashboardForm">
-            <input type="hidden" name="period" value="{{ period_type }}">
-            <label>From</label>
-            <input type="date" name="start_date" value="{{ start_date }}" onchange="this.form.submit()">
-            <label>to</label>
-            <input type="date" name="end_date" value="{{ end_date }}" onchange="this.form.submit()">
-            {% if start_date and end_date %}
-            <a href="?period={{ period_type }}{% if selected_accounts %}&accounts={{ selected_accounts|join(',') }}{% endif %}" class="period-tab">Clear</a>
+        <div class="controls-right-v3">
+            {% if all_accounts and all_accounts|length > 1 %}
+            <div style="position: relative;">
+                <button class="account-toggle-v3" onclick="toggleAccounts(event)" id="accountToggle">
+                    {% if selected_accounts and selected_accounts|length > 0 and selected_accounts|length != all_accounts|length %}
+                        {{ selected_accounts|length }} account{{ 's' if selected_accounts|length != 1 else '' }}
+                    {% else %}
+                        All accounts
+                    {% endif %} &#9662;
+                </button>
+                <div class="account-dropdown-v3" id="accountDropdown">
+                    {% set all_selected = not selected_accounts or selected_accounts|length == 0 or selected_accounts|length == all_accounts|length %}
+                    {% for acc in all_accounts %}
+                    {% set is_selected = all_selected or (acc['account_id'] in selected_accounts) %}
+                    <label class="{% if is_selected %}selected{% endif %}">
+                        <input type="checkbox" value="{{ acc['account_id'] }}"
+                               {% if is_selected %}checked{% endif %}
+                               onchange="updateAccountFilter()">
+                        {{ acc['name'] or acc['account_id'][:12] }}
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
             {% endif %}
-        </form>
-
-        <div class="search-container">
-            <input type="search" id="txn-search" class="search-input" placeholder="Search transactions..." autocomplete="off">
-            <div id="search-results" class="search-results" style="display: none;"></div>
+            <div style="position: relative; flex: 1; min-width: 160px;">
+                <input type="search" id="txnSearchV3" class="search-input-v3" placeholder="Search transactions..." autocomplete="off">
+            </div>
         </div>
-
-        {% if all_accounts and all_accounts|length > 1 %}
-        <div class="account-chips-v2">
-            {# "All" chip - shown when filtering, clears to show all accounts #}
-            {% set all_selected = not selected_accounts or selected_accounts|length == all_accounts|length %}
-            <label class="account-chip-v2 {% if all_selected %}selected{% endif %}" onclick="selectAllAccounts()">
-                All
-            </label>
-            {% for acc in all_accounts %}
-            {% set is_selected = (acc['account_id'] in selected_accounts) if selected_accounts else true %}
-            <label class="account-chip-v2 {% if is_selected %}selected{% endif %}">
-                <input type="checkbox" value="{{ acc['account_id'] }}" {% if is_selected %}checked{% endif %}
-                       onchange="updateAccountFilter()" style="display:none;">
-                {{ acc['name'] }}
-            </label>
-            {% endfor %}
-        </div>
-        {% endif %}
     </div>
+
+    <!-- Integrity Banner (conditional) -->
+    {% if integrity_data and integrity_data.integrity_score < 0.8 %}
+    <div class="integrity-banner-v3">
+        <span>Some transactions need classification. The numbers below may be incomplete.</span>
+        <a href="#" onclick="finDrilldown.open('credit_other'); return false;">Review items &rarr;</a>
+    </div>
+    {% endif %}
 
     {% if current_period %}
     <!-- Bento Grid -->
-    <div class="bento-grid">
+    <div class="bento-grid-v3">
 
-        <!-- HERO CARD: This Month at a Glance -->
-        <div class="card-v2 card-hero">
-            <div class="card-v2-header">
-                <h2 class="card-v2-title">{{ current_period.period_label }}</h2>
-                {% if closed_period %}
-                <span class="closed-badge" title="Closed {{ closed_period.closed_at.strftime('%b %d, %Y') }}">
-                    <span class="closed-icon">&#128274;</span> Closed
-                </span>
+        <!-- ==================== CARD 1: CASH FLOW (Hero) ==================== -->
+        <div class="card-v3 card-hero-v3">
+            <div class="card-title-v3">
+                Cash Flow
+                <span class="card-title-right-v3">{{ current_period.period_label }}</span>
+            </div>
+
+            {% set max_amount = [current_period.income_cents, current_period.recurring_cents + current_period.discretionary_cents] | max %}
+            {% set income_width = 100 if max_amount > 0 else 0 %}
+            {% set expense_width = ((current_period.recurring_cents + current_period.discretionary_cents) / max_amount * 100) | int if max_amount > 0 else 0 %}
+
+            <div class="cf-bars">
+                <div class="cf-bar-row">
+                    <span class="cf-bar-label">Income</span>
+                    <div class="cf-bar-track" onclick="finDrilldown.open('income')" onkeydown="if(event.key==='Enter')this.click()" role="button" tabindex="0" title="Click for details">
+                        <div class="cf-bar-fill income" style="width: {{ income_width }}%"></div>
+                    </div>
+                    <span class="cf-bar-amount">${{ "%.0f"|format(current_period.income_cents / 100) }}</span>
+                </div>
+                <div class="cf-bar-row">
+                    <span class="cf-bar-label">Expenses</span>
+                    <div class="cf-bar-track" onclick="finDrilldown.open('spend')" onkeydown="if(event.key==='Enter')this.click()" role="button" tabindex="0" title="Click for details">
+                        <div class="cf-bar-fill expenses" style="width: {{ expense_width }}%"></div>
+                    </div>
+                    <span class="cf-bar-amount">${{ "%.0f"|format((current_period.recurring_cents + current_period.discretionary_cents) / 100) }}</span>
+                </div>
+            </div>
+
+            <div class="cf-gap">
+                {% set net_amount = (current_period.net_cents / 100) | abs %}
+                {% if current_period.net_cents >= 0 %}
+                    <span class="cf-kept">Kept ${{ "%.0f"|format(net_amount) }}</span>
                 {% else %}
-                <button class="btn btn-sm btn-outline" onclick="closePeriod()" title="Close this period to lock in totals" data-requires-auth="true">
-                    Close Period
-                </button>
+                    <span class="cf-kept negative">Over ${{ "%.0f"|format(net_amount) }}</span>
+                {% endif %}
+                {% if savings_rate_pct %}
+                    <span class="cf-rate">{{ "%.0f"|format(savings_rate_pct) }}% of income</span>
                 {% endif %}
             </div>
 
-            {% if not expense_only_view %}
-            <!-- Full view with income -->
-            <div class="hero-label">
-                {% if current_period.net_cents >= 0 %}You saved{% else %}You overspent{% endif %}
-            </div>
-            <div class="hero-number {{ 'positive' if current_period.net_cents >= 0 else 'negative' }}" style="cursor:pointer" onclick="finDrilldown.open('net')" title="Click to see all transactions">
-                ${{ "%.0f"|format((current_period.net_cents if current_period.net_cents >= 0 else -current_period.net_cents) / 100) }}
-            </div>
-
-            {% set avg_net = current_period.avg_income_cents - current_period.avg_recurring_cents - current_period.avg_discretionary_cents %}
-            {% if avg_net != 0 %}
-            {% set diff = current_period.net_cents - avg_net %}
-            <div class="hero-comparison">
-                {% if diff > 0 %}
-                <span class="trend-up">+${{ "%.0f"|format(diff / 100) }}</span> vs 3-month avg
-                {% elif diff < 0 %}
-                <span class="trend-down">-${{ "%.0f"|format((-diff) / 100) }}</span> vs 3-month avg
-                {% else %}
-                Same as your average
-                {% endif %}
-            </div>
+            {% if avg_cash_flow_cents != 0 %}
+                {% set diff = current_period.net_cents - avg_cash_flow_cents %}
+                <div class="cf-comparison">
+                    <span>3-month avg<span class="info-tip" title="Compared to your last 3 months to smooth out seasonal variation">?</span>: {{ '+' if avg_cash_flow_cents >= 0 else '-' }}${{ "%.0f"|format((avg_cash_flow_cents / 100) | abs) }}/mo</span>
+                    &middot;
+                    {% if diff > 0 %}
+                        You kept ${{ "%.0f"|format(diff / 100) }} more than usual
+                    {% elif diff < 0 %}
+                        You kept ${{ "%.0f"|format((-diff) / 100) }} less than usual
+                    {% else %}
+                        On track with your average
+                    {% endif %}
+                </div>
             {% endif %}
 
-            <!-- Financial Breakdown -->
-            {% set max_val = [current_period.income_cents, current_period.recurring_cents, current_period.discretionary_cents]|max %}
-            <div class="breakdown">
-                <div class="breakdown-row" style="cursor:pointer" onclick="finDrilldown.open('income')" title="Click to see transactions">
-                    <span class="breakdown-label">Income</span>
-                    <div class="breakdown-bar-container">
-                        <div class="breakdown-bar income" style="width: {{ (current_period.income_cents / max_val * 100)|int if max_val else 0 }}%"></div>
-                    </div>
-                    <span class="breakdown-value" style="color: var(--accent-green)">+${{ "%.0f"|format(current_period.income_cents / 100) }}</span>
-                </div>
-                <div class="breakdown-row" style="cursor:pointer" onclick="finDrilldown.open('recurring')" title="Click to see transactions">
-                    <span class="breakdown-label">Recurring</span>
-                    <div class="breakdown-bar-container">
-                        <div class="breakdown-bar recurring" style="width: {{ (current_period.recurring_cents / max_val * 100)|int if max_val else 0 }}%"></div>
-                    </div>
-                    <span class="breakdown-value">-${{ "%.0f"|format(current_period.recurring_cents / 100) }}</span>
-                </div>
-                <div class="breakdown-row" style="cursor:pointer" onclick="finDrilldown.open('discretionary')" title="Click to see transactions">
-                    <span class="breakdown-label">One-time</span>
-                    <div class="breakdown-bar-container">
-                        <div class="breakdown-bar discretionary" style="width: {{ (current_period.discretionary_cents / max_val * 100)|int if max_val else 0 }}%"></div>
-                    </div>
-                    <span class="breakdown-value">-${{ "%.0f"|format(current_period.discretionary_cents / 100) }}</span>
-                </div>
+            <div class="cf-pacing" id="cfPacing" style="display:none;">
+                <!-- Filled by JavaScript for mid-month pacing -->
             </div>
 
-            {% else %}
-            <!-- Credit card only view -->
-            <div class="hero-label">Total Spending</div>
-            <div class="hero-number">
-                ${{ "%.0f"|format((current_period.recurring_cents + current_period.discretionary_cents) / 100) }}
-            </div>
-            <div class="hero-comparison">
-                {{ current_period.transaction_count }} transactions
-            </div>
+            {% if pending_count > 0 %}
+                {% set pending_warning = pending_count > 5 or (current_period.income_cents > 0 and pending_count > (current_period.income_cents / 100 * 0.05)) %}
+                <div class="cf-pending {% if pending_warning %}warning{% endif %}">
+                    {% if pending_warning %}&#9888;{% endif %}
+                    {{ pending_count }} pending transaction{{ 's' if pending_count != 1 else '' }} not included
+                </div>
             {% endif %}
 
-            <!-- Checksum indicator - warn if data integrity issue -->
-            {% if current_period.checksum_valid is defined and not current_period.checksum_valid %}
-            <div class="checksum-warning" style="margin-top: 12px; padding: 8px 12px; background: var(--accent-red-dim); color: var(--accent-red); border-radius: 6px; font-size: 13px;">
-                ⚠️ Data mismatch detected - totals may be inaccurate
-            </div>
-            {% endif %}
-
-            <!-- Closed period indicator -->
-            {% if closed_period %}
-            <div class="closed-period-notice" style="margin-top: 12px; padding: 10px 14px; background: var(--accent-green-dim, rgba(34, 197, 94, 0.1)); border: 1px solid var(--accent-green); border-radius: 8px; font-size: 13px;">
-                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
-                    <span style="color: var(--accent-green);">&#128274;</span>
-                    <strong style="color: var(--accent-green);">Period Closed</strong>
-                    <span style="color: var(--text-muted);">{{ closed_period.closed_at.strftime('%b %d, %Y at %H:%M') }}</span>
-                </div>
-                <div style="font-size: 12px; color: var(--text-secondary);">
-                    Snapshot: ${{ "%.0f"|format(closed_period.income_cents / 100) }} income,
-                    ${{ "%.0f"|format(closed_period.total_expenses_cents / 100) }} expenses
-                    ({{ closed_period.transaction_count }} txns)
-                </div>
-            </div>
-            {% endif %}
-
-            <!-- Screen reader summary -->
             <p class="sr-only">
-                Financial summary for {{ current_period.period_label }}:
+                Cash flow for {{ current_period.period_label }}:
                 Income ${{ "%.0f"|format(current_period.income_cents / 100) }},
-                Recurring expenses ${{ "%.0f"|format(current_period.recurring_cents / 100) }},
-                One-time spending ${{ "%.0f"|format(current_period.discretionary_cents / 100) }},
-                Net {{ 'savings' if current_period.net_cents >= 0 else 'loss' }} ${{ "%.0f"|format((current_period.net_cents if current_period.net_cents >= 0 else -current_period.net_cents) / 100) }}.
+                Expenses ${{ "%.0f"|format((current_period.recurring_cents + current_period.discretionary_cents) / 100) }},
+                Net {{ 'kept' if current_period.net_cents >= 0 else 'over' }} ${{ "%.0f"|format((current_period.net_cents / 100) | abs) }}.
             </p>
         </div>
 
-        <!-- DATA TRUST WIDGET -->
-        {% if integrity %}
-        <div class="card-v2 card-trust">
-            <div class="card-v2-header">
-                <h2 class="card-v2-title">Data Trust</h2>
-                <span class="trust-badge {{ integrity.badge_class }}">{{ integrity.badge_text }}</span>
+        <!-- ==================== CARD 2: COMMITMENTS ==================== -->
+        <div class="card-v3">
+            <div class="card-title-v3">
+                Monthly Commitments
+                <span class="commit-total">${{ "%.0f"|format(current_period.recurring_cents / 100) }} this month</span>
             </div>
 
-            {% if integrity.tasks %}
-            <div class="trust-issues">
-                {% for task in integrity.tasks[:3] %}
-                <div class="trust-issue"{% if task.type == 'CLASSIFY_CREDIT' %} style="cursor:pointer" onclick="finDrilldown.open('credit_other')"{% elif task.type == 'MATCH_TRANSFER' %} style="cursor:pointer" onclick="finDrilldown.open('unmatched_transfers')"{% endif %}>
-                    <span class="trust-issue-priority priority-{{ task.priority }}">{{ task.priority_label[0] }}</span>
-                    <span class="trust-issue-text">{{ task.description }}</span>
-                </div>
-                {% endfor %}
+            {% set income_amount = current_period.income_cents / 100 %}
+            {% set commit_pct = (current_period.recurring_cents / current_period.income_cents * 100) | int if current_period.income_cents > 0 else 0 %}
+            <div class="commit-pct-text">That's {{ commit_pct }}% of your income</div>
+            <div class="commit-bar-track">
+                {% set bar_color_class = 'red' if commit_pct > 70 else ('yellow' if commit_pct > 50 else '') %}
+                <div class="commit-bar-fill {{ bar_color_class }}" style="width: {{ commit_pct }}%"></div>
             </div>
-            {% if not integrity.is_actionable %}
-            <div class="trust-blocked-notice">
-                &#128274; Forecasts locked until issues resolved
+
+            {% set all_recurring = (subscriptions + bills) | sort(attribute='1', reverse=True) %}
+            <ul class="commit-list">
+                {% for item in all_recurring[:8] %}
+                    {% set display_name = item[8] if item|length > 8 and item[8] else item[0] %}
+                    {% set merchant = item[0] %}
+                    {% set amount = item[1] %}
+                    {% set pc = price_changes_by_merchant.get(merchant) %}
+                    <li class="commit-item" onclick="finDrilldown.open('merchant:{{ merchant | lower }}')" onkeydown="if(event.key==='Enter')this.click()" role="button" tabindex="0" title="Click for details">
+                        <div>
+                            <div class="commit-name">{{ display_name }}</div>
+                            {% if pc %}
+                                <div class="commit-note price-change">was ${{ "%.2f"|format(pc['old_amount'] / 100) }}</div>
+                            {% elif item|length > 2 and item[2] %}
+                                {% set cadence_labels = {'monthly': 'Monthly', 'quarterly': 'Quarterly', 'yearly': 'Yearly', 'annual': 'Annual', 'biweekly': 'Every 2 weeks', 'weekly': 'Weekly', 'semi-monthly': 'Twice a month', 'recurring': 'Recurring'} %}
+                                <div class="commit-note">{{ cadence_labels.get(item[2]|lower, item[2]|capitalize) }}</div>
+                            {% endif %}
+                        </div>
+                        <span class="commit-amount">${{ "%.2f"|format(amount / 100) }}</span>
+                    </li>
+                {% endfor %}
+                {% if all_recurring|length > 8 %}
+                    <li class="commit-more" onclick="finDrilldown.open('recurring')" onkeydown="if(event.key==='Enter')this.click()" role="button" tabindex="0">View all recurring this month</li>
+                {% endif %}
+            </ul>
+
+            {% set subs_total = subscriptions | sum(attribute='1') %}
+            {% set bills_total = bills | sum(attribute='1') %}
+            {% if subscriptions and bills %}
+            <div class="commit-footer">
+                <span>${{ "%.0f"|format(subs_total / 100) }}/mo subscriptions</span>
+                <span>${{ "%.0f"|format(bills_total / 100) }}/mo bills</span>
             </div>
             {% endif %}
-            {% else %}
-            <div class="trust-ok">
-                <span class="trust-ok-icon">&#10003;</span>
-                <span>All transactions classified</span>
+        </div>
+
+        <!-- ==================== CARD 3: SPENDING BREAKDOWN ==================== -->
+        {% if category_breakdown %}
+        <div class="card-v3">
+            <div class="card-title-v3">
+                Spending
+                <span class="spend-total">${{ "%.0f"|format((current_period.discretionary_cents + current_period.recurring_cents) / 100) }}</span>
             </div>
+
+            {% set top_categories = category_breakdown[:7] %}
+            {% set max_category_amount = top_categories[0][1] if top_categories else 0 %}
+            <ul class="spend-list">
+                {% for category, net_cents, count, gross_cents, refund_cents in top_categories %}
+                    {% set bar_width = (net_cents / max_category_amount * 100) | int if max_category_amount > 0 else 0 %}
+                    {% set avg_cents = category_averages.get(category.id, 0) if category_averages else prev_category_map.get(category.id, 0) %}
+                    {% set outlier_pct = category_outliers.get(category.id, 0) if category_outliers else (((net_cents - avg_cents) / avg_cents * 100) | int if avg_cents > 0 else 0) %}
+                    <li class="spend-item" onclick="finDrilldown.open('category:{{ category.id }}')" onkeydown="if(event.key==='Enter')this.click()" role="button" tabindex="0" title="Click for details">
+                        <div class="spend-row">
+                            <span class="spend-name">{{ category.name }}</span>
+                            <div class="spend-bar-track">
+                                <div class="spend-bar-fill" style="width: {{ bar_width }}%"></div>
+                            </div>
+                            <span class="spend-amount">${{ "%.0f"|format(net_cents / 100) }}</span>
+                            {% if outlier_pct > 10 %}
+                                <span class="spend-outlier">+{{ outlier_pct }}%</span>
+                            {% else %}
+                                <span class="spend-outlier-spacer"></span>
+                            {% endif %}
+                        </div>
+                        {% if avg_cents > 0 %}
+                            <div class="spend-avg">avg ${{ "%.0f"|format(avg_cents / 100) }}</div>
+                        {% endif %}
+                    </li>
+                {% endfor %}
+            </ul>
+
+            {% if category_averages or prev_category_map %}
+                {% set total_avg = (category_averages.values() | sum) if category_averages else (prev_category_map.values() | sum) %}
+                {% set total_current = current_period.discretionary_cents + current_period.recurring_cents %}
+                {% set total_diff = total_current - total_avg %}
+                <div class="spend-footer">
+                    Total is
+                    {% if total_diff > 0 %}
+                        <span class="above">${{ "%.0f"|format(total_diff / 100) }} more</span>
+                    {% elif total_diff < 0 %}
+                        <span class="below">${{ "%.0f"|format((-total_diff) / 100) }} less</span>
+                    {% else %}
+                        <span>on track with</span>
+                    {% endif %}
+                    than your 3-month average
+                </div>
             {% endif %}
         </div>
         {% endif %}
 
-        <!-- AUDIT CARD -->
-        {% if audit %}
-        <div class="card-v2">
-            <div class="card-v2-header">
-                <h2 class="card-v2-title">Audit</h2>
-                <a href="/audit" class="card-v2-action">Details</a>
-            </div>
-            <div style="display: flex; gap: 16px; font-size: 14px;">
-                <span style="color: var(--accent-green);">{{ audit.tracked_count }} tracked</span>
-                <span style="color: {% if audit.pending_count > 0 %}var(--accent-yellow){% else %}var(--text-muted){% endif %};">{{ audit.pending_count }} pending</span>
-                <span style="color: {% if audit.review_count > 0 %}var(--accent-yellow){% else %}var(--text-muted){% endif %};">{{ audit.review_count }} need review</span>
-            </div>
-        </div>
-        {% endif %}
+        <!-- ==================== CARD 4: HEADS UP (Always rendered) ==================== -->
+        <div class="card-v3 card-full-v3">
+            <div class="card-title-v3">Heads Up</div>
 
-        <!-- ALERTS CARD -->
-        <div class="card-v2">
-            <div class="card-v2-header">
-                {% set total_alert_count = alerts|length + price_changes|length + pending_adjustments_count %}
-                <h2 class="card-v2-title">Alerts ({{ total_alert_count }})</h2>
-                {% if alerts %}
-                <a href="/export/sketchy" class="card-v2-action">Export</a>
-                {% endif %}
-            </div>
-
-            {% if alerts or price_changes or pending_adjustments_count > 0 %}
-            <div class="alert-list-v2">
-                {# Post-close adjustments first - highest priority #}
-                {% if pending_adjustments_count > 0 %}
-                <div class="alert-item-v2 adjustment-alert">
-                    <span class="alert-icon-v2">&#9888;</span>
-                    <div class="alert-content-v2">
-                        <div class="alert-title-v2">
-                            Post-close adjustments
-                            <span class="adjustment-badge">{{ pending_adjustments_count }}</span>
+            {% set display_items = attention_items | rejectattr('type', 'equalto', 'integrity') | list %}
+            {% if display_items %}
+                <div id="headsUpContent">
+                    {% for item in display_items[:4] %}
+                    <div class="hu-item" id="huItem{{ loop.index }}" {% if item.drilldown_scope %}onclick="finDrilldown.open('{{ item.drilldown_scope }}')" onkeydown="if(event.key==='Enter')this.click()" role="button" tabindex="0" style="cursor:pointer"{% endif %}>
+                        <div class="hu-item-title">{{ item.title }}</div>
+                        {% if item.detail %}
+                        <div class="hu-item-detail">{{ item.detail }}</div>
+                        {% endif %}
+                        {% if item.action_type == 'alert' and not item.actioned %}
+                        <div class="hu-actions">
+                            <button class="hu-btn primary" onclick="event.stopPropagation(); dismissAlert('{{ item.key }}', 'not_suspicious', {{ loop.index }})">Looks fine</button>
+                            <button class="hu-btn" onclick="event.stopPropagation(); dismissAlert('{{ item.key }}', 'confirmed', {{ loop.index }})">Flag it</button>
                         </div>
-                        <div class="alert-detail-v2">
-                            New transactions landed in closed period{{ 's' if pending_adjustments_count > 1 else '' }}.
-                            Review and re-close to update snapshot.
-                        </div>
+                        {% endif %}
                     </div>
-                    <div class="alert-actions-v2">
-                        <button class="alert-btn" onclick="viewAdjustments()">Review</button>
-                    </div>
-                </div>
-                {% endif %}
-
-                {# Price changes - these are actionable #}
-                {% for pc in price_changes[:3] %}
-                <div class="alert-item-v2 price-change-alert">
-                    <span class="alert-icon-v2">{% if pc.change_pct > 0 %}&#128200;{% else %}&#128201;{% endif %}</span>
-                    <div class="alert-content-v2">
-                        <div class="alert-title-v2">
-                            Price {% if pc.change_pct > 0 %}increase{% else %}decrease{% endif %}
-                            <span class="alert-amount-v2 {% if pc.change_pct > 0 %}price-up{% else %}price-down{% endif %}">
-                                {% if pc.change_pct > 0 %}+{% endif %}{{ "%.0f"|format(pc.change_pct) }}%
-                            </span>
-                        </div>
-                        <div class="alert-detail-v2">
-                            {{ pc.display_name or pc.merchant }}
-                            &middot; ${{ "%.2f"|format(pc.old_amount / 100) }} &rarr; ${{ "%.2f"|format(pc.new_amount / 100) }}
-                        </div>
-                    </div>
-                </div>
-                {% endfor %}
-
-                {# Regular alerts #}
-                {% for item in alerts[:5] %}
-                <div class="alert-item-v2" data-alert-key="{{ item.key }}">
-                    <span class="alert-icon-v2">
-                        {% if item.alert.severity == 'high' %}&#128308;{% elif item.alert.severity == 'medium' %}&#128993;{% else %}&#9898;{% endif %}
-                    </span>
-                    <div class="alert-content-v2">
-                        <div class="alert-title-v2">
-                            {{ item.alert.pattern_type|replace('_', ' ')|title }}
-                            <span class="alert-amount-v2">${{ "%.2f"|format(item.alert.amount_cents / 100) }}</span>
-                        </div>
-                        <div class="alert-detail-v2">{{ item.alert.merchant_norm }} &middot; {{ item.alert.posted_at.strftime('%b %d') }}</div>
-                    </div>
-                    {% if not item.action %}
-                    <div class="alert-actions-v2">
-                        <button class="alert-btn" onclick="alertAction('{{ item.key }}', 'not_suspicious')" title="Not suspicious">OK</button>
-                        <button class="alert-btn danger" onclick="alertAction('{{ item.key }}', 'confirmed')" title="Confirmed issue">Flag</button>
+                    {% endfor %}
+                    {% if display_items|length > 4 %}
+                    <div style="text-align: center; margin-top: 12px; font-size: 13px; color: var(--text-muted);">
+                        + {{ display_items|length - 4 }} more items
                     </div>
                     {% endif %}
                 </div>
-                {% endfor %}
-            </div>
-            {% set extra_alerts = [alerts|length - 5, 0]|max %}
-            {% set extra_price = [price_changes|length - 3, 0]|max %}
-            {% if extra_alerts + extra_price > 0 %}
-            <a href="/subs" class="more-link">+ {{ extra_alerts + extra_price }} more</a>
-            {% endif %}
             {% else %}
-            <div class="empty-state-v2">
-                <div class="icon">&#10004;</div>
-                <p>No issues detected</p>
-            </div>
+                <div class="heads-up-empty">
+                    Nothing unusual this month. Looking good.
+                </div>
             {% endif %}
         </div>
 
-        <!-- RECURRING CHARGES CARD -->
-        <div class="card-v2">
-            <div class="card-v2-header">
-                <h2 class="card-v2-title">Recurring</h2>
-                <span>
-                    <a href="#" class="card-v2-action" onclick="event.preventDefault(); finDrilldown.open('recurring')">Explain</a>
-                    <a href="/subs" class="card-v2-action">View All</a>
-                </span>
-            </div>
+        <!-- ==================== CARD 5: YOUR TREND ==================== -->
+        {% if periods and periods|length > 1 %}
+        <div class="card-v3 card-full-v3">
+            <div class="card-title-v3">Your Trend</div>
 
-            {% set total_recurring = subscriptions|sum(attribute='1') + bills|sum(attribute='1') %}
-            <div class="recurring-summary">
-                <span class="recurring-total">${{ "%.0f"|format(total_recurring / 100) }}<small>/mo</small></span>
-            </div>
-
-            {% if subscriptions %}
-            <div class="recurring-section">
-                <div class="recurring-section-header">
-                    <span>Subscriptions ({{ subscriptions|length }})</span>
-                    <span>${{ "%.0f"|format(subscriptions|sum(attribute='1') / 100) }}/mo</span>
-                </div>
-                <div class="recurring-list">
-                    {% for sub in subscriptions[:4] %}
-                    {% set display_name = sub[8] or sub[0] %}
-                    {% set merchant = sub[0] %}
-                    {% set is_known = sub[7] %}
-                    {# Check if this subscription has a price change #}
-                    {% set price_change = namespace(found=none) %}
-                    {% for pc in price_changes %}
-                        {% if pc.merchant == merchant %}
-                            {% set price_change.found = pc %}
+            <div class="trend-chart">
+                {% set trend_periods = periods[:6] | reverse | list %}
+                {% set max_kept = trend_periods | map(attribute='net_cents') | map('abs') | max %}
+                {% for p in trend_periods %}
+                    {% set is_current = loop.last %}
+                    {% set kept_amt = p.net_cents / 100 %}
+                    {% set bar_height = ((p.net_cents | abs) / max_kept * 100) | int if max_kept > 0 else 10 %}
+                    <div class="trend-col" onclick="navigateToMonth('{{ p.start_date }}')" onkeydown="if(event.key==='Enter')this.click()" role="button" tabindex="0" title="Click to view {{ p.period_label }}">
+                        <span class="trend-val">{{ '+' if kept_amt >= 0 else '-' }}${{ "%.0f"|format(kept_amt | abs) }}</span>
+                        <div class="trend-bar {% if kept_amt < 0 %}negative{% endif %} {% if is_current and period_type == 'this_month' %}in-progress{% endif %}" style="height: {{ bar_height }}%"></div>
+                        <span class="trend-month {% if is_current %}current{% endif %}">{{ p.period_label.split()[0][:3] }}</span>
+                        {% if is_current and period_type == 'this_month' %}
+                        <span class="trend-label">In progress</span>
                         {% endif %}
-                    {% endfor %}
-                    {% set cadence = sub[2] %}
-                    {% set cadence_note = 'annually' if cadence == 'annual' else 'quarterly' if cadence == 'quarterly' else 'weekly' if cadence == 'weekly' else '' %}
-                    <div class="recurring-item">
-                        <span class="recurring-name">{{ display_name }}</span>
-                        <div class="recurring-meta">
-                            {% if price_change.found %}
-                            <span class="recurring-badge {% if price_change.found.change_pct > 0 %}price-up{% else %}price-down{% endif %}" title="${{ '%.2f'|format(price_change.found.old_amount / 100) }} → ${{ '%.2f'|format(price_change.found.new_amount / 100) }}">
-                                {% if price_change.found.change_pct > 0 %}+{% endif %}{{ "%.0f"|format(price_change.found.change_pct) }}%
-                            </span>
-                            {% elif is_known %}
-                            <span class="recurring-badge known">Known</span>
-                            {% endif %}
-                            {% if cadence_note %}<span class="recurring-badge cadence">{{ cadence_note }}</span>{% endif %}
-                            <span class="recurring-amount">${{ "%.2f"|format(sub[1] / 100) }}/mo</span>
-                        </div>
                     </div>
-                    {% endfor %}
-                </div>
-                {% if subscriptions|length > 4 %}
-                <a href="/subs" class="more-link">+ {{ subscriptions|length - 4 }} more</a>
-                {% endif %}
-            </div>
-            {% endif %}
-
-            {% if bills %}
-            <div class="recurring-section">
-                <div class="recurring-section-header">
-                    <span>Bills ({{ bills|length }})</span>
-                    <span>${{ "%.0f"|format(bills|sum(attribute='1') / 100) }}/mo</span>
-                </div>
-                <div class="recurring-list">
-                    {% for bill in bills[:3] %}
-                    {% set bill_cadence = bill[2] %}
-                    {% set bill_cadence_note = 'annually' if bill_cadence == 'annual' else 'quarterly' if bill_cadence == 'quarterly' else 'bimonthly' if bill_cadence == 'bimonthly' else '' %}
-                    <div class="recurring-item">
-                        <span class="recurring-name">{{ bill[0] }}</span>
-                        <div class="recurring-meta">
-                            {% if bill_cadence_note %}<span class="recurring-badge cadence">{{ bill_cadence_note }}</span>{% endif %}
-                            <span class="recurring-amount">${{ "%.2f"|format(bill[1] / 100) }}/mo</span>
-                        </div>
-                    </div>
-                    {% endfor %}
-                </div>
-                {% if bills|length > 3 %}
-                <a href="/subs" class="more-link">+ {{ bills|length - 3 }} more</a>
-                {% endif %}
-            </div>
-            {% endif %}
-
-            {% if not subscriptions and not bills %}
-            <div class="empty-state-v2">
-                <p>No recurring charges detected yet</p>
-            </div>
-            {% endif %}
-        </div>
-
-        <!-- SPENDING TREND CARD -->
-        <div class="card-v2">
-            <div class="card-v2-header">
-                <h2 class="card-v2-title">Spending Trend</h2>
-                <a href="/export/summary" class="card-v2-action">Export</a>
-            </div>
-
-            {% if periods|length > 1 %}
-            <div class="trend-chart-container">
-                <canvas id="spendingTrendChart" aria-label="Monthly spending trend chart" role="img"></canvas>
-            </div>
-
-            <!-- Screen reader text alternative -->
-            <p class="sr-only">
-                Spending trend:
-                {% for p in periods[:4]|reverse %}
-                {{ p.period_label }}: ${{ "%.0f"|format((p.recurring_cents + p.discretionary_cents) / 100) }}{% if not loop.last %}, {% endif %}
-                {% endfor %}
-            </p>
-            {% else %}
-            <div class="empty-state-v2">
-                <p>More data needed for trends</p>
-            </div>
-            {% endif %}
-        </div>
-
-        <!-- CATEGORY BREAKDOWN CARD -->
-        {% if category_breakdown %}
-        <div class="card-v2">
-            <div class="card-v2-header">
-                <h2 class="card-v2-title">By Category</h2>
-                <span style="color: var(--text-muted); font-size: 13px;">
-                    {{ category_breakdown|length }} categories
-                </span>
-            </div>
-            <div class="category-list">
-                {% for category, net_cents, count, gross_cents, refund_cents in category_breakdown[:6] %}
-                <div class="breakdown-row" style="margin-bottom: 10px; cursor: pointer;" onclick="finDrilldown.open('category:{{ category.id }}')">
-                    <span class="breakdown-label">{{ category.icon }} {{ category.name }}</span>
-                    <div class="breakdown-bar-container">
-                        {% set max_cat = category_breakdown[0][1] if category_breakdown else 1 %}
-                        <div class="breakdown-bar" style="width: {{ (net_cents / max_cat * 100)|int if max_cat > 0 else 0 }}%; background: {{ category.color }};"></div>
-                    </div>
-                    <span class="breakdown-value">
-                        ${{ "%.0f"|format(net_cents / 100) }}
-                        {% if refund_cents > 0 %}
-                        <span style="color: #22c55e; font-size: 11px; margin-left: 4px;" title="Includes ${{ "%.0f"|format(refund_cents / 100) }} in refunds">*</span>
-                        {% endif %}
-                    </span>
-                </div>
                 {% endfor %}
             </div>
-            {% if category_breakdown|length > 6 %}
-            <a href="/categories" class="more-link">+ {{ category_breakdown|length - 6 }} more</a>
-            {% endif %}
+
+            {% set avg_kept = (periods | map(attribute='net_cents') | sum) / (periods | length) %}
+            <div class="trend-footer">
+                Average: <strong>{{ '+' if avg_kept >= 0 else '-' }}${{ "%.0f"|format((avg_kept / 100) | abs) }}/mo</strong> kept over {{ periods|length }} months
+            </div>
         </div>
         {% endif %}
+
     </div>
 
     {% else %}
     <!-- No data state -->
-    <div class="card-v2">
-        <div class="empty-state-v2" style="padding: 64px 16px;">
-            <div class="icon">&#128202;</div>
+    <div class="card-v3">
+        <div style="text-align: center; padding: 64px 16px; color: var(--text-muted);">
+            <div style="font-size: 48px; margin-bottom: 12px; opacity: 0.5;">&#128202;</div>
             <p style="font-size: 16px; margin-bottom: 8px;">No data for this period</p>
             <p>Try syncing your transactions or selecting a different date range.</p>
         </div>
@@ -1298,18 +1166,156 @@
 </div>
 
 <script>
-// Select all accounts (clear filter)
-function selectAllAccounts() {
+if (typeof finDrilldown === 'undefined') {
+    window.finDrilldown = { open: function(s) { console.warn('Drilldown not available for scope:', s); } };
+}
+
+// Month navigation
+function navigateMonth(delta) {
+    const params = new URLSearchParams(window.location.search);
+    const currentPeriod = params.get('period') || 'this_month';
+
+    let targetDate;
+    const startStr = params.get('start_date');
+
+    if (startStr) {
+        targetDate = new Date(startStr + 'T00:00:00');
+    } else if (currentPeriod === 'last_month') {
+        const now = new Date();
+        targetDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    } else {
+        targetDate = new Date();
+        targetDate.setDate(1);
+    }
+
+    targetDate.setMonth(targetDate.getMonth() + delta);
+
+    const now = new Date();
+    const isThisMonth = targetDate.getFullYear() === now.getFullYear() && targetDate.getMonth() === now.getMonth();
+    const isLastMonth = (function() {
+        const lm = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        return targetDate.getFullYear() === lm.getFullYear() && targetDate.getMonth() === lm.getMonth();
+    })();
+
     const url = new URL(window.location);
-    url.searchParams.delete('accounts');
+
+    if (isThisMonth) {
+        url.searchParams.set('period', 'this_month');
+        url.searchParams.delete('start_date');
+        url.searchParams.delete('end_date');
+    } else if (isLastMonth) {
+        url.searchParams.set('period', 'last_month');
+        url.searchParams.delete('start_date');
+        url.searchParams.delete('end_date');
+    } else {
+        const start = targetDate.toISOString().split('T')[0];
+        const endDate = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0);
+        const end = endDate.toISOString().split('T')[0];
+        url.searchParams.set('start_date', start);
+        url.searchParams.set('end_date', end);
+        url.searchParams.set('period', 'this_month');
+    }
+
     window.location = url;
+}
+
+// Navigate to specific month from trend chart
+function navigateToMonth(startDate) {
+    const targetDate = new Date(startDate + 'T00:00:00');
+    const now = new Date();
+    const isThisMonth = targetDate.getFullYear() === now.getFullYear() && targetDate.getMonth() === now.getMonth();
+
+    const url = new URL(window.location);
+
+    if (isThisMonth) {
+        url.searchParams.set('period', 'this_month');
+        url.searchParams.delete('start_date');
+        url.searchParams.delete('end_date');
+    } else {
+        const start = targetDate.toISOString().split('T')[0];
+        const endDate = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0);
+        const end = endDate.toISOString().split('T')[0];
+        url.searchParams.set('start_date', start);
+        url.searchParams.set('end_date', end);
+        url.searchParams.set('period', 'this_month');
+    }
+
+    window.location = url;
+}
+
+// Account filter dropdown
+function toggleAccounts(e) {
+    e.stopPropagation();
+    const dropdown = document.getElementById('accountDropdown');
+    if (!dropdown) return;
+    dropdown.classList.toggle('open');
+}
+
+function updateAccountFilter() {
+    const checkboxes = document.querySelectorAll('#accountDropdown input[type="checkbox"]');
+    const selected = Array.from(checkboxes).filter(cb => cb.checked).map(cb => cb.value);
+    const url = new URL(window.location);
+    if (selected.length === 0 || selected.length === checkboxes.length) {
+        url.searchParams.delete('accounts');
+    } else {
+        url.searchParams.set('accounts', selected.join(','));
+    }
+    window.location = url;
+}
+
+// Close dropdown on outside click or Escape
+document.addEventListener('click', function(e) {
+    const dropdown = document.getElementById('accountDropdown');
+    if (dropdown && !e.target.closest('.account-toggle-v3') && !e.target.closest('.account-dropdown-v3')) {
+        dropdown.classList.remove('open');
+    }
+});
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        const dropdown = document.getElementById('accountDropdown');
+        if (dropdown) dropdown.classList.remove('open');
+    }
+});
+
+// Alert dismissal
+async function dismissAlert(key, action, index) {
+    try {
+        const response = await fetch('/api/alert-action', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ alert_key: key, action: action })
+        });
+        if (response.ok) {
+            const el = document.getElementById('huItem' + index);
+            if (el) {
+                el.style.transition = 'opacity 300ms ease, transform 300ms ease';
+                el.style.opacity = '0';
+                el.style.transform = 'translateX(20px)';
+                setTimeout(() => el.remove(), 300);
+            }
+        } else {
+            const el = document.getElementById('huItem' + index);
+            if (el) {
+                el.style.outline = '2px solid var(--accent-red)';
+                setTimeout(() => { el.style.outline = ''; }, 2000);
+            }
+        }
+    } catch (e) {
+        console.error('Failed to dismiss alert:', e);
+        const el = document.getElementById('huItem' + index);
+        if (el) {
+            el.style.outline = '2px solid var(--accent-red)';
+            setTimeout(() => { el.style.outline = ''; }, 2000);
+        }
+    }
 }
 
 // Transaction search
 (function() {
-    const input = document.getElementById('txn-search');
-    const resultsEl = document.getElementById('search-results');
-    if (!input || !resultsEl) return;
+    const input = document.getElementById('txnSearchV3');
+    if (!input) return;
 
     let debounceTimer = null;
 
@@ -1317,7 +1323,7 @@ function selectAllAccounts() {
         clearTimeout(debounceTimer);
         const q = this.value.trim();
         if (q.length < 2) {
-            resultsEl.style.display = 'none';
+            hideSearchResults();
             return;
         }
         debounceTimer = setTimeout(() => doSearch(q), 300);
@@ -1325,14 +1331,14 @@ function selectAllAccounts() {
 
     input.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
-            resultsEl.style.display = 'none';
+            hideSearchResults();
             this.blur();
         }
     });
 
     document.addEventListener('click', function(e) {
-        if (!e.target.closest('.search-container')) {
-            resultsEl.style.display = 'none';
+        if (!e.target.closest('.controls-right-v3')) {
+            hideSearchResults();
         }
     });
 
@@ -1345,16 +1351,23 @@ function selectAllAccounts() {
         try {
             const resp = await fetch(url);
             const data = await resp.json();
-            renderResults(data);
+            renderSearchResults(data);
         } catch (e) {
-            resultsEl.innerHTML = '<div class="search-empty">Search failed</div>';
-            resultsEl.style.display = 'block';
+            console.error('Search failed:', e);
         }
     }
 
-    function renderResults(data) {
+    function renderSearchResults(data) {
+        let resultsEl = document.getElementById('searchResultsV3');
+        if (!resultsEl) {
+            resultsEl = document.createElement('div');
+            resultsEl.id = 'searchResultsV3';
+            resultsEl.className = 'search-results-v3';
+            input.parentElement.appendChild(resultsEl);
+        }
+
         if (!data.matches || data.matches.length === 0) {
-            resultsEl.innerHTML = '<div class="search-empty">No results found</div>';
+            resultsEl.innerHTML = '<div class="search-empty-v3">No results found</div>';
             resultsEl.style.display = 'block';
             return;
         }
@@ -1363,223 +1376,63 @@ function selectAllAccounts() {
         for (const txn of data.matches.slice(0, 20)) {
             const amt = Math.abs(txn.amount_cents / 100).toFixed(2);
             const sign = txn.amount_cents >= 0 ? '+' : '-';
-            const color = txn.amount_cents >= 0 ? 'var(--accent-green)' : 'var(--text-primary)';
-            const merchant = finUI.escapeHtml(txn.merchant || txn.description || 'Unknown');
-            const account = finUI.escapeHtml(txn.account_name || '');
-            html += '<div class="search-result-item" onclick="finDrilldown.open(\'category:all\')">';
-            html += '<div class="search-result-info">';
-            html += '<div class="search-result-merchant">' + merchant + '</div>';
-            html += '<div class="search-result-meta">' + txn.date + ' &bull; ' + account + '</div>';
+            const amountClass = txn.amount_cents >= 0 ? 'positive' : 'negative';
+            const merchantRaw = txn.merchant || txn.description || 'Unknown';
+            const merchantDisplay = escapeHtml(merchantRaw);
+            const account = escapeHtml(txn.account_name || '');
+
+            html += '<div class="search-result-item-v3" onclick="finDrilldown.open(\'merchant:' + encodeURIComponent(merchantRaw.toLowerCase()) + '\')">';
+            html += '<div class="search-result-info-v3">';
+            html += '<div class="search-result-merchant-v3">' + merchantDisplay + '</div>';
+            html += '<div class="search-result-meta-v3">' + txn.date + ' &bull; ' + account + '</div>';
             html += '</div>';
-            html += '<div class="search-result-amount" style="color:' + color + '">' + sign + '$' + amt + '</div>';
+            html += '<div class="search-result-amount-v3 ' + amountClass + '">' + sign + '$' + amt + '</div>';
             html += '</div>';
         }
 
         if (data.matches_count > 20) {
-            html += '<div class="search-empty">' + (data.matches_count - 20) + ' more results</div>';
+            html += '<div class="search-empty-v3">' + (data.matches_count - 20) + ' more results</div>';
         }
 
         resultsEl.innerHTML = html;
         resultsEl.style.display = 'block';
     }
+
+    function hideSearchResults() {
+        const resultsEl = document.getElementById('searchResultsV3');
+        if (resultsEl) resultsEl.style.display = 'none';
+    }
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
 })();
 
-// Account filter update
-function updateAccountFilter() {
-    const checkboxes = document.querySelectorAll('.account-chip-v2 input[type="checkbox"]');
-    const selected = Array.from(checkboxes).filter(cb => cb.checked).map(cb => cb.value);
+// Mid-month pacing calculation (client-side only)
+(function() {
+    {% if current_period and period_type == 'this_month' %}
+    const startDate = new Date('{{ current_period.start_date }}');
+    const today = new Date();
+    const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+    const daysElapsed = Math.floor((today - startDate) / (1000 * 60 * 60 * 24));
 
-    const url = new URL(window.location);
-    if (selected.length === checkboxes.length) {
-        url.searchParams.delete('accounts');
-    } else if (selected.length === 0) {
-        url.searchParams.set('accounts', 'none');
-    } else {
-        url.searchParams.set('accounts', selected.join(','));
-    }
-    window.location = url;
-}
+    if (daysElapsed > 0 && daysElapsed < daysInMonth) {
+        const income = {{ current_period.income_cents }};
+        const expenses = {{ current_period.recurring_cents + current_period.discretionary_cents }};
+        const projectedIncome = Math.round(income / daysElapsed * daysInMonth);
+        const projectedExpenses = Math.round(expenses / daysElapsed * daysInMonth);
+        const projectedKept = projectedIncome - projectedExpenses;
 
-// Alert action handler
-async function alertAction(alertKey, action) {
-    if (typeof FIN_READ_ONLY !== 'undefined' && FIN_READ_ONLY) {
-        showToast('Read-only mode: Set FIN_AUTH_TOKEN to enable changes');
-        return;
-    }
-    try {
-        const response = await fetch('/api/alert-action', {
-            method: 'POST',
-            headers: getAuthHeaders(),
-            body: JSON.stringify({ alert_key: alertKey, action: action })
-        });
-        if (response.ok) {
-            const alertEl = document.querySelector(`[data-alert-key="${alertKey}"]`);
-            if (alertEl) {
-                alertEl.style.opacity = '0.5';
-                alertEl.querySelector('.alert-actions-v2')?.remove();
-            }
+        const pacingEl = document.getElementById('cfPacing');
+        if (pacingEl && projectedKept !== 0) {
+            pacingEl.textContent = daysElapsed + ' days in \u2014 on track to keep ~$' + Math.round(projectedKept / 100) + ' this month';
+            pacingEl.style.display = 'block';
         }
-    } catch (e) {
-        console.error('Failed to save alert action:', e);
     }
-}
-
-// Initialize Chart.js spending trend
-document.addEventListener('DOMContentLoaded', function() {
-    const canvas = document.getElementById('spendingTrendChart');
-    if (!canvas || typeof Chart === 'undefined') return;
-
-    const periods = {{ periods|tojson|safe if periods else '[]' }};
-    if (periods.length < 2) return;
-
-    // Get last 6 months, reversed for chronological order
-    const chartData = periods.slice(0, 6).reverse();
-
-    const labels = chartData.map(p => p.period_label);
-    const spending = chartData.map(p => (p.recurring_cents + p.discretionary_cents) / 100);
-    const income = chartData.map(p => p.income_cents / 100);
-
-    // Get CSS variable colors
-    const styles = getComputedStyle(document.documentElement);
-    const blueColor = styles.getPropertyValue('--accent-blue').trim() || '#2563eb';
-    const greenColor = styles.getPropertyValue('--accent-green').trim() || '#0e6245';
-    const mutedColor = styles.getPropertyValue('--text-muted').trim() || '#8792a2';
-    const bgColor = styles.getPropertyValue('--bg-tertiary').trim() || '#f9fafb';
-
-    new Chart(canvas, {
-        type: 'bar',
-        data: {
-            labels: labels,
-            datasets: [{
-                label: 'Spending',
-                data: spending,
-                backgroundColor: blueColor,
-                borderRadius: 6,
-                barPercentage: 0.7,
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: { display: false },
-                tooltip: {
-                    backgroundColor: 'rgba(0,0,0,0.8)',
-                    titleFont: { size: 13 },
-                    bodyFont: { size: 12 },
-                    padding: 10,
-                    cornerRadius: 8,
-                    callbacks: {
-                        label: ctx => `$${ctx.raw.toLocaleString()}`
-                    }
-                }
-            },
-            scales: {
-                x: {
-                    grid: { display: false },
-                    ticks: {
-                        color: mutedColor,
-                        font: { size: 12 }
-                    }
-                },
-                y: {
-                    grid: { color: bgColor },
-                    ticks: {
-                        color: mutedColor,
-                        font: { size: 12 },
-                        callback: val => '$' + (val / 1000).toFixed(0) + 'k'
-                    },
-                    beginAtZero: true
-                }
-            },
-            animation: {
-                duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 500
-            }
-        }
-    });
-});
-
-// ============================================
-// Close-the-books functionality
-// ============================================
-
-async function closePeriod() {
-    if (finApi.isReadOnly()) {
-        finUI.toast('Read-only mode: Set FIN_AUTH_TOKEN to enable changes');
-        return;
-    }
-    const startDate = '{{ current_period.start_date.isoformat() if current_period else "" }}';
-    const endDate = '{{ current_period.end_date.isoformat() if current_period else "" }}';
-
-    if (!startDate || !endDate) {
-        finUI.toast('No period selected');
-        return;
-    }
-
-    const urlParams = new URLSearchParams(window.location.search);
-    const accounts = urlParams.get('accounts');
-    const accountFilter = accounts && accounts !== 'none' ? accounts.split(',') : null;
-
-    if (!finUI.confirm('Close this period? This will snapshot the current totals. Any new transactions landing in this period will be flagged as adjustments.')) {
-        return;
-    }
-
-    try {
-        const response = await finApi.postJSON('/api/close-period', {
-            start_date: startDate,
-            end_date: endDate,
-            account_filter: accountFilter
-        });
-
-        const data = await response.json();
-
-        if (response.ok) {
-            finUI.toastWithAction('Period closed successfully', 'Refresh', () => window.location.reload());
-        } else {
-            finUI.toast('Error: ' + (data.error || data.detail || 'Failed to close period'));
-        }
-    } catch (err) {
-        finUI.toast('Error: ' + err.message);
-    }
-}
-
-async function viewAdjustments() {
-    document.getElementById('drilldownTitle').textContent = 'Post-Close Adjustments';
-    document.getElementById('drilldownSummary').innerHTML = '<span class="drilldown-period">Loading...</span>';
-    document.getElementById('drilldownTable').innerHTML = '<div class="drilldown-loading">Loading...</div>';
-    document.getElementById('drilldownFooter').innerHTML = '';
-    document.getElementById('drilldownFilters').style.display = 'none';
-    finUI.openModal('drilldownModal');
-
-    try {
-        const response = await finApi.get('/api/adjustments');
-        const data = await response.json();
-
-        if (data.pending_adjustments && data.pending_adjustments.length > 0) {
-            document.getElementById('drilldownSummary').innerHTML =
-                `<span class="drilldown-period">${data.pending_adjustments.length} new transactions in closed period(s). Re-close to update snapshot.</span>`;
-
-            let html = '<table><thead><tr><th>Date</th><th>Merchant</th><th class="text-right">Amount</th></tr></thead><tbody>';
-            data.pending_adjustments.forEach(adj => {
-                html += `<tr>
-                    <td>${finUI.formatDate(adj.posted_at)}</td>
-                    <td>${finUI.escapeHtml(adj.merchant_norm || adj.description || 'Unknown')}</td>
-                    <td class="text-right">${finUI.formatCents(adj.amount_cents)}</td>
-                </tr>`;
-            });
-            html += '</tbody></table>';
-            document.getElementById('drilldownTable').innerHTML = html;
-        } else {
-            document.getElementById('drilldownSummary').innerHTML = '';
-            document.getElementById('drilldownTable').innerHTML =
-                '<div class="drilldown-empty">No pending adjustments</div>';
-        }
-    } catch (err) {
-        document.getElementById('drilldownTable').innerHTML =
-            `<div class="drilldown-empty" style="color:var(--accent-red);">Error: ${finUI.escapeHtml(err.message)}</div>`;
-    }
-}
-
+    {% endif %}
+})();
 </script>
 
 {% endblock %}
