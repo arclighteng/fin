@@ -66,6 +66,21 @@
     vertical-align: middle;
 }
 
+.closed-badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--accent-blue);
+    background: rgba(37, 99, 235, 0.1);
+    border: 1px solid rgba(37, 99, 235, 0.25);
+    border-radius: 4px;
+    padding: 1px 5px;
+    margin-left: 6px;
+    vertical-align: middle;
+}
+
 .controls-right-v3 {
     display: flex;
     gap: 8px;
@@ -858,6 +873,9 @@
                     {{ current_period.period_label }}
                     {% if period_type == 'this_month' %}
                         <span class="now-dot" title="Current month"></span>
+                    {% endif %}
+                    {% if closed_period %}
+                        <span class="closed-badge" title="Period closed">Closed</span>
                     {% endif %}
                 {% else %}
                     No data

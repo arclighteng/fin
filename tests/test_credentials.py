@@ -49,38 +49,55 @@ class TestKeyringAvailability:
 
     def test_detects_fail_backend_as_unavailable(self):
         """FailKeyring sentinel backend should be treated as unavailable."""
-        from keyring.backends.fail import Keyring as FailKeyring
+        class FailKeyring:
+            pass
+
+        fail_module = MagicMock()
+        fail_module.Keyring = FailKeyring
 
         mock_keyring = MagicMock()
         mock_keyring.get_keyring.return_value = FailKeyring()
 
         with patch.dict("sys.modules", {"keyring": mock_keyring,
-                                         "keyring.backends.fail": __import__("keyring.backends.fail", fromlist=["Keyring"])}):
+                                         "keyring.backends": MagicMock(),
+                                         "keyring.backends.fail": fail_module}):
             credentials._keyring = None
             credentials._keyring_available = None
             assert credentials.is_keyring_available() is False
 
     def test_real_backend_accepted(self):
         """A real (non-fail) backend should be accepted."""
+        class FailKeyring:
+            pass
+
+        fail_module = MagicMock()
+        fail_module.Keyring = FailKeyring
+
         mock_backend = MagicMock()  # Not a FailKeyring instance
         mock_keyring = MagicMock()
         mock_keyring.get_keyring.return_value = mock_backend
 
         with patch.dict("sys.modules", {"keyring": mock_keyring,
-                                         "keyring.backends.fail": __import__("keyring.backends.fail", fromlist=["Keyring"])}):
+                                         "keyring.backends": MagicMock(),
+                                         "keyring.backends.fail": fail_module}):
             credentials._keyring = None
             credentials._keyring_available = None
             assert credentials.is_keyring_available() is True
 
     def test_cached_state_after_fail_backend(self):
         """After detecting fail backend, subsequent calls should return False without re-checking."""
-        from keyring.backends.fail import Keyring as FailKeyring
+        class FailKeyring:
+            pass
+
+        fail_module = MagicMock()
+        fail_module.Keyring = FailKeyring
 
         mock_keyring = MagicMock()
         mock_keyring.get_keyring.return_value = FailKeyring()
 
         with patch.dict("sys.modules", {"keyring": mock_keyring,
-                                         "keyring.backends.fail": __import__("keyring.backends.fail", fromlist=["Keyring"])}):
+                                         "keyring.backends": MagicMock(),
+                                         "keyring.backends.fail": fail_module}):
             credentials._keyring = None
             credentials._keyring_available = None
             assert credentials.is_keyring_available() is False

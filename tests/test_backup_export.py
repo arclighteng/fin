@@ -158,17 +158,18 @@ class TestBackupExecution:
         """Should generate default filename with date."""
         from datetime import date as dt_date
 
+        fixed_date = dt_date(2026, 2, 28)
         with patch.dict("os.environ", {"FIN_DB_PATH": temp_db_path}):
             with patch("shutil.which", return_value="/usr/bin/age"):
-                with patch("subprocess.run") as mock_run:
-                    mock_run.return_value = MagicMock(returncode=0)
-                    result = runner.invoke(app, ["export-backup", "-p"])
+                with patch("fin.cli.dates_mod.today", return_value=fixed_date):
+                    with patch("subprocess.run") as mock_run:
+                        mock_run.return_value = MagicMock(returncode=0)
+                        result = runner.invoke(app, ["export-backup", "-p"])
 
         # Verify output filename contains date
         call_args = mock_run.call_args[0][0]
-        today = dt_date.today().strftime("%Y%m%d")
         output_arg = call_args[call_args.index("-o") + 1]
-        assert today in output_arg
+        assert "20260228" in output_arg
         assert output_arg.endswith(".db.age")
 
 

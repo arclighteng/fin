@@ -1,0 +1,276 @@
+{% extends "base.html" %}
+
+{% block title %}Sync Log - fin{% endblock %}
+
+{% block content %}
+<style>
+.sync-log-page {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 16px;
+}
+
+.sync-log-page h1 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+
+.trust-banner {
+    background: rgba(14, 98, 69, 0.08);
+    border: 1px solid rgba(14, 98, 69, 0.25);
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin-bottom: 20px;
+}
+
+[data-theme="dark"] .trust-banner {
+    background: rgba(63, 185, 80, 0.08);
+    border-color: rgba(63, 185, 80, 0.2);
+}
+
+.trust-banner h3 {
+    margin: 0 0 4px 0;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--accent-green);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.trust-banner p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+}
+
+.synclog-card {
+    background: var(--bg-secondary);
+    border-radius: 12px;
+    margin-bottom: 16px;
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+}
+
+.synclog-card-header {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.synclog-card-header h2 {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin: 0;
+}
+
+.synclog-card-body {
+    padding: 16px 20px;
+}
+
+.synclog-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 16px;
+}
+
+.synclog-stat {
+    text-align: center;
+}
+
+.synclog-stat-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    line-height: 1.2;
+}
+
+.synclog-stat-label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+.synclog-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.synclog-table th {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 2px solid var(--border-color);
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+}
+
+.synclog-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-primary);
+    vertical-align: middle;
+}
+
+.synclog-table tr:last-child td {
+    border-bottom: none;
+}
+
+.synclog-table tbody tr:hover td {
+    background: var(--bg-hover);
+}
+
+.synclog-table td.num { text-align: right; }
+.synclog-table td.muted { color: var(--text-muted); font-size: 11px; }
+.synclog-table td.positive { color: var(--accent-green); }
+.synclog-table td.negative { color: var(--accent-red); }
+
+.empty-note {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    padding: 12px 0;
+}
+</style>
+
+<div class="sync-log-page">
+    <h1>Sync Log</h1>
+    <p style="color: var(--text-muted); margin-bottom: 16px; font-size: 0.85rem;">Data provenance and sync history</p>
+
+    <div class="trust-banner">
+        <h3>Data Retention Policy</h3>
+        <p>fin persists all data locally. Sync operations are <strong>append-only</strong>: new records are inserted,
+        existing records may be updated, but nothing is deleted. You control your data retention.</p>
+    </div>
+
+    <!-- Overview Stats -->
+    <div class="synclog-card">
+        <div class="synclog-card-header"><h2>Data Overview</h2></div>
+        <div class="synclog-card-body">
+            <div class="synclog-stats">
+                <div class="synclog-stat">
+                    <div class="synclog-stat-value">{{ stats.total_txns | int | string | replace(",", "") if stats.total_txns else '0' }}</div>
+                    <div class="synclog-stat-label">Total Transactions</div>
+                </div>
+                <div class="synclog-stat">
+                    <div class="synclog-stat-value">{{ stats.earliest[:10] if stats.earliest else 'N/A' }}</div>
+                    <div class="synclog-stat-label">Earliest Transaction</div>
+                </div>
+                <div class="synclog-stat">
+                    <div class="synclog-stat-value">{{ stats.latest[:10] if stats.latest else 'N/A' }}</div>
+                    <div class="synclog-stat-label">Latest Transaction</div>
+                </div>
+                <div class="synclog-stat">
+                    <div class="synclog-stat-value">{{ runs | length }}</div>
+                    <div class="synclog-stat-label">Total Syncs (last 50)</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sync History -->
+    <div class="synclog-card">
+        <div class="synclog-card-header"><h2>Sync History</h2></div>
+        <div class="synclog-card-body" style="padding: 0;">
+            {% if runs %}
+            <table class="synclog-table">
+                <thead>
+                    <tr>
+                        <th>When</th>
+                        <th class="num">Fetched</th>
+                        <th class="num">New</th>
+                        <th class="num">Updated</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for run in runs %}
+                    <tr>
+                        <td>{{ run.ran_at[:16].replace('T', ' ') if run.ran_at else 'Unknown' }}</td>
+                        <td class="num">{{ run.txns_fetched }}</td>
+                        <td class="num positive">+{{ run.txns_inserted }}</td>
+                        <td class="num">{{ run.txns_updated }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="synclog-card-body empty-note">No sync history available.</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Recently Added -->
+    <div class="synclog-card">
+        <div class="synclog-card-header"><h2>Recently Added Transactions</h2></div>
+        <div class="synclog-card-body" style="padding: 0;">
+            {% if recent_inserts %}
+            <table class="synclog-table">
+                <thead>
+                    <tr>
+                        <th>First Seen</th>
+                        <th>Date</th>
+                        <th>Payee</th>
+                        <th class="num">Amount</th>
+                        <th>Account</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for txn in recent_inserts %}
+                    {% set amount = txn.amount_cents / 100 %}
+                    <tr>
+                        <td class="muted">{{ txn.created_at[:16].replace('T', ' ') if txn.created_at else '' }}</td>
+                        <td>{{ txn.posted_at[:10] if txn.posted_at else '' }}</td>
+                        <td>{{ txn.payee[:40] }}</td>
+                        <td class="num {{ 'positive' if amount >= 0 else 'negative' }}">${{ "%.2f"|format(amount|abs) }}</td>
+                        <td>{{ txn.account_name }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="synclog-card-body empty-note">No transactions synced yet.</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Recently Updated -->
+    <div class="synclog-card">
+        <div class="synclog-card-header"><h2>Recently Updated Transactions</h2></div>
+        <div class="synclog-card-body" style="padding: 0;">
+            {% if recent_updates %}
+            <table class="synclog-table">
+                <thead>
+                    <tr>
+                        <th>Updated</th>
+                        <th>Date</th>
+                        <th>Payee</th>
+                        <th class="num">Amount</th>
+                        <th>Account</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for txn in recent_updates %}
+                    {% set amount = txn.amount_cents / 100 %}
+                    <tr>
+                        <td class="muted">{{ txn.updated_at[:16].replace('T', ' ') if txn.updated_at else '' }}</td>
+                        <td>{{ txn.posted_at[:10] if txn.posted_at else '' }}</td>
+                        <td>{{ txn.payee[:40] }}</td>
+                        <td class="num {{ 'positive' if amount >= 0 else 'negative' }}">${{ "%.2f"|format(amount|abs) }}</td>
+                        <td>{{ txn.account_name }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="empty-note" style="padding: 16px 20px;">No transactions have been updated since they were first synced.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

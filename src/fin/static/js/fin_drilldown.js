@@ -112,6 +112,9 @@ const finDrilldown = (function() {
     // Suggested tags for autocomplete
     const SUGGESTED_TAGS = ['reimbursable', 'tax-deductible', 'split', 'gift', 'business'];
 
+    // Scopes that span multiple categories — show a Category column
+    const MULTI_CAT_SCOPES = new Set(['spend', 'income', 'net', 'recurring', 'discretionary']);
+
     function _renderTable(transactions, resolutionContext) {
         if (!transactions || transactions.length === 0) {
             document.getElementById('drilldownTable').innerHTML = '<div class="drilldown-empty">No transactions</div>';
@@ -119,9 +122,11 @@ const finDrilldown = (function() {
         }
 
         const showResolution = resolutionContext && resolutionContext.allows_resolution;
-        const colCount = showResolution ? 5 : 5;
+        const showCategory = !showResolution && currentData && MULTI_CAT_SCOPES.has(currentData.scope);
+        const colCount = showResolution ? 5 : (showCategory ? 6 : 5);
 
         let html = '<table><thead><tr><th>Date</th><th>Merchant</th><th class="text-right">Amount</th><th>Account</th>';
+        if (showCategory) html += '<th>Category</th>';
         if (!showResolution) html += '<th>Type</th>';
         if (showResolution) html += '<th>Classify As</th>';
         html += '</tr></thead><tbody>';
@@ -138,6 +143,13 @@ const finDrilldown = (function() {
                 <td>${annotationIndicator}${finUI.escapeHtml(t.merchant)}</td>
                 <td class="text-right ${amtClass}">${finUI.formatCents(t.amount_cents)}</td>
                 <td class="muted">${finUI.escapeHtml(t.account_name || '')}</td>`;
+
+            if (showCategory) {
+                const catLabel = t.category_icon && t.category
+                    ? `${finUI.escapeHtml(t.category_icon)} ${finUI.escapeHtml(t.category)}`
+                    : (t.category ? finUI.escapeHtml(t.category) : '<span class="muted">—</span>');
+                html += `<td class="muted">${catLabel}</td>`;
+            }
 
             if (!showResolution) {
                 html += `<td class="muted">${finUI.escapeHtml(t.type || '')}</td>`;

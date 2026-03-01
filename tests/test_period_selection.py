@@ -121,9 +121,8 @@ class TestThisMonthPeriod:
         response = client.get("/dashboard")
         html = response.text
 
-        # Check that "This Month" button is active
-        # Template uses conditional class so check for both parts
-        assert 'period-btn' in html and 'active' in html and '>This Month</a>' in html
+        # v2 dashboard uses a now-dot indicator for current month instead of an active button
+        assert '<span class="now-dot"' in html
 
 
 class TestLastMonthPeriod:
@@ -135,12 +134,13 @@ class TestLastMonthPeriod:
         assert response.status_code == 200
 
     def test_last_month_button_active(self, client):
-        """Last Month button should be active when selected."""
+        """Last Month period should be selectable and not show the current-month indicator."""
         response = client.get("/dashboard?period=last_month")
         html = response.text
 
-        # Template uses conditional class so check for both parts
-        assert 'period-btn' in html and 'active' in html and '>Last Month</a>' in html
+        # v2 dashboard uses month navigation; last_month should not show the now-dot span
+        assert response.status_code == 200
+        assert '<span class="now-dot"' not in html
 
 
 class TestPeriodDateRanges:
@@ -229,12 +229,14 @@ class TestPeriodButtonDisplay:
     """Test that period buttons display correctly."""
 
     def test_both_period_buttons_present(self, client):
-        """Dashboard should show both This Month and Last Month buttons."""
+        """Dashboard should show month navigation controls."""
         response = client.get("/dashboard")
         html = response.text
 
-        assert "This Month" in html
-        assert "Last Month" in html
+        # v2 dashboard uses prev/next arrow navigation instead of explicit period buttons
+        assert "month-nav-btn-v3" in html
+        assert "navigateMonth(-1)" in html
+        assert "navigateMonth(1)" in html
 
     def test_no_quarter_year_buttons(self, client):
         """Dashboard should NOT show Quarter or Year buttons."""

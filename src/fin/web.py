@@ -1055,6 +1055,7 @@ def drilldown(
     txn_list = []
     for txn in sorted_txns:
         ann = annotations.get(txn.fingerprint, {"note": None, "tags": []})
+        cat = CATEGORIES.get(txn.category_id) if txn.category_id else None
         txn_list.append({
             "fingerprint": txn.fingerprint,
             "date": txn.posted_at.isoformat(),
@@ -1064,6 +1065,9 @@ def drilldown(
             "account_id": txn.account_id,
             "account_name": acct_names.get(txn.account_id, "Unknown"),
             "override_type": fp_overrides.get(txn.fingerprint),
+            "category_id": txn.category_id,
+            "category": cat.name if cat else None,
+            "category_icon": cat.icon if cat else None,
             "note": ann["note"],
             "tags": ann["tags"],
         })
@@ -3079,8 +3083,9 @@ def api_cashflow_alerts(
     })
 
 
-@app.get("/sync-log", response_class=HTMLResponse)
+@app.get("/sync-log")
 def sync_log_page(
+    request: Request,
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """Sync audit log page - shows history of all syncs and data provenance."""
@@ -3314,7 +3319,13 @@ def sync_log_page(
     </html>
     """
 
-    return HTMLResponse(content=html_content)
+    return templates.TemplateResponse("sync-log.html", {
+        "request": request,
+        "runs": runs,
+        "stats": stats,
+        "recent_inserts": recent_inserts,
+        "recent_updates": recent_updates,
+    })
 
 
 # ---------------------------------------------------------------------------

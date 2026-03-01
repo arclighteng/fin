@@ -137,6 +137,19 @@
     line-height: 1.4;
 }
 
+.budget-row-amounts.drillable {
+    cursor: pointer;
+    border-radius: 4px;
+    padding: 2px 4px;
+    margin: -2px -4px;
+    transition: background 0.15s;
+}
+
+.budget-row-amounts.drillable:hover {
+    background: var(--bg-hover);
+    color: var(--accent-blue);
+}
+
 .budget-row-amounts .spent {
     font-weight: 600;
     color: var(--text-primary);
@@ -359,7 +372,9 @@
                              style="width: {{ pct }}%; background: {{ row.category.color if row.percent < 100 else '' }}"></div>
                     </div>
                 </div>
-                <div class="budget-row-amounts">
+                <div class="budget-row-amounts drillable"
+                     onclick="event.stopPropagation(); finDrilldown.open('category:{{ row.category.id }}')"
+                     title="View transactions">
                     <span class="spent">${{ "%.0f"|format(row.spent_cents / 100) }}</span>
                     / ${{ "%.0f"|format(row.target_cents / 100) }}
                 </div>
@@ -381,7 +396,9 @@
                     {{ row.category.name }}
                 </div>
                 <div class="budget-row-bar"></div>
-                <div class="budget-row-amounts">
+                <div class="budget-row-amounts drillable"
+                     onclick="event.stopPropagation(); finDrilldown.open('category:{{ row.category.id }}')"
+                     title="View transactions">
                     <span class="spent">${{ "%.0f"|format(row.spent_cents / 100) }}</span>
                     <span style="color: var(--text-muted);">no target</span>
                 </div>
