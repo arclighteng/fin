@@ -1362,9 +1362,7 @@ async function dismissAlert(key, action, index) {
     try {
         const response = await fetch('/api/alert-action', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: getAuthHeaders(),
             body: JSON.stringify({ alert_key: key, action: action })
         });
         if (response.ok) {
