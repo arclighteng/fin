@@ -92,6 +92,15 @@
             text-decoration: none;
         }
 
+        .nav-version {
+            font-size: 10px;
+            font-weight: 400;
+            color: var(--text-muted);
+            letter-spacing: 0.03em;
+            vertical-align: middle;
+            margin-left: 4px;
+        }
+
         .nav-links {
             display: flex;
             gap: 8px;
@@ -166,7 +175,14 @@
         }
 
         .sync-btn.syncing .sync-icon {
-            animation: spin 1.5s linear infinite;
+            font-size: 0;
+            width: 14px;
+            height: 14px;
+            border: 2px solid currentColor;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            flex-shrink: 0;
         }
 
         .sync-btn.success {
@@ -451,7 +467,7 @@
         }
 
         .hero-insight.negative {
-            border-bottom: 3px solid var(--accent-red);
+            border-bottom: 3px solid var(--accent-yellow);
         }
 
         .hero-headline {
@@ -471,7 +487,7 @@
         }
 
         .hero-insight.negative .hero-amount {
-            color: var(--accent-red);
+            color: var(--accent-yellow);
         }
 
         .hero-transfers {
@@ -483,6 +499,28 @@
         .hero-comparison {
             font-size: 14px;
             color: var(--text-secondary);
+        }
+
+        .hero-top-driver {
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-top: 8px;
+        }
+
+        .hero-driver-link {
+            background: none;
+            border: none;
+            padding: 0;
+            font: inherit;
+            font-size: 13px;
+            color: var(--accent-blue);
+            cursor: pointer;
+            text-decoration: underline;
+            text-underline-offset: 2px;
+        }
+
+        .hero-driver-link:hover {
+            color: var(--accent-purple);
         }
 
         .comparison-good {
@@ -2872,7 +2910,7 @@
         })();
     </script>
     <nav class="nav">
-        <a href="/" class="nav-brand">fin</a>
+        <a href="/" class="nav-brand">fin <span class="nav-version">Beta 0.2.0</span></a>
         <div class="nav-links">
             <a href="/dashboard" {% if request.url.path == '/dashboard' %}class="active"{% endif %}>Dashboard</a>
             <a href="/subs" {% if request.url.path == '/subs' %}class="active"{% endif %}>Recurring</a>
@@ -3055,8 +3093,14 @@
                         showToast(`Synced: ${data.fetched} from bank, no new transactions`);
                     }
 
-                    // Refresh sync status display
-                    loadSyncStatus();
+                    // Update status text immediately, then refresh from API
+                    const statusEl = document.getElementById('syncStatus');
+                    if (statusEl) {
+                        const existingRange = statusEl.querySelector('.sync-range');
+                        const rangeHtml = existingRange ? `<br>${existingRange.outerHTML}` : '';
+                        statusEl.innerHTML = `<span class="sync-time">Synced: Just now</span>${rangeHtml}`;
+                    }
+                    setTimeout(loadSyncStatus, 1500);
                 } else {
                     btn.classList.add('error');
                     const iconEl = btn.querySelector('.sync-icon');
@@ -3232,6 +3276,20 @@
         }
 
         // Category drill-down
+        function expandAndDrillCategory(categoryId) {
+            const card = document.getElementById('spending-card');
+            if (card && card.classList.contains('collapsed')) {
+                card.classList.remove('collapsed');
+            }
+            const itemEl = document.querySelector(`[data-category="${categoryId}"]`);
+            if (itemEl) {
+                setTimeout(() => {
+                    itemEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    drillCategory(categoryId);
+                }, 50);
+            }
+        }
+
         async function drillCategory(categoryId) {
             const itemEl = document.querySelector(`[data-category="${categoryId}"]`);
             const drilldownEl = document.getElementById(`drilldown-${categoryId}`);

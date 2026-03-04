@@ -813,6 +813,31 @@ def dashboard(
             cash_flows.append(cash_flow)
         avg_cash_flow_cents = sum(cash_flows) // len(cash_flows)
 
+    # Top spending movers: categories most above their 3-month average by dollar amount
+    top_movers = []
+    if category_averages and category_breakdown:
+        for cat, net_cents, count, gross, refunds in category_breakdown:
+            avg = category_averages.get(cat.id, 0)
+            if avg > 0:
+                delta = net_cents - avg
+                if delta > 3000:  # Only meaningful moves (>$30)
+                    pct = int(delta * 100 / avg)
+                    top_movers.append({
+                        "category": cat,
+                        "current_cents": net_cents,
+                        "avg_cents": avg,
+                        "delta_cents": delta,
+                        "pct": pct,
+                    })
+        top_movers.sort(key=lambda x: x["delta_cents"], reverse=True)
+        top_movers = top_movers[:2]
+
+    # 3-month average income for income-vs-spending diagnosis
+    avg_income_cents = 0
+    if len(reports) >= 4:
+        income_vals = [PeriodViewModel.from_report(r).income_cents for r in reports[1:4]]
+        avg_income_cents = sum(income_vals) // len(income_vals)
+
     # 8. Integrity data (kept for integrity banner, not in attention_items)
     integrity_data = None
     if current_report:
@@ -879,6 +904,8 @@ def dashboard(
         "category_outliers": category_outliers,
         "avg_cash_flow_cents": avg_cash_flow_cents,
         "integrity_data": integrity_data,
+        "top_movers": top_movers,
+        "avg_income_cents": avg_income_cents,
     })
 
 

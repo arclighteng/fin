@@ -193,7 +193,7 @@
             {% if current_period.net_cents >= 0 %}
             You saved <span class="hero-amount">${{ "%.0f"|format(current_period.net_cents / 100) }}</span> this period
             {% else %}
-            You spent <span class="hero-amount">${{ "%.0f"|format((-current_period.net_cents) / 100) }}</span> more than you earned
+            Spending outpaced income by <span class="hero-amount">${{ "%.0f"|format((-current_period.net_cents) / 100) }}</span>
             {% endif %}
         </div>
         {% if current_period.incoming_transfer_cents > 0 %}
@@ -206,9 +206,17 @@
                 {% set diff = current_period.net_cents - avg_net %}
                 {% set diff_pct = (diff / (avg_net if avg_net > 0 else -avg_net) * 100)|int %}
                 {% if diff > 0 %}
-                <span class="comparison-good">↑ ${{ "%.0f"|format(diff / 100) }} better</span> than your 3-month average
+                    {% if current_period.net_cents >= 0 %}
+                    <span class="comparison-good">↑ ${{ "%.0f"|format(diff / 100) }} more saved</span> than your 3-month average
+                    {% else %}
+                    Deficit ${{ "%.0f"|format(diff / 100) }} smaller than usual
+                    {% endif %}
                 {% elif diff < 0 %}
-                <span class="comparison-bad">↓ ${{ "%.0f"|format((-diff) / 100) }} worse</span> than your 3-month average
+                    {% if current_period.net_cents < 0 %}
+                    <span class="comparison-bad">Deficit ${{ "%.0f"|format((-diff) / 100) }} larger</span> than usual
+                    {% else %}
+                    <span class="comparison-bad">↓ ${{ "%.0f"|format((-diff) / 100) }} less saved</span> than your 3-month average
+                    {% endif %}
                 {% else %}
                 → Same as your 3-month average
                 {% endif %}
@@ -216,6 +224,11 @@
                 {{ current_period.transaction_count }} transactions
             {% endif %}
         </div>
+        {% if current_period.net_cents < 0 and category_breakdown %}
+        <div class="hero-top-driver">
+            Biggest driver: <button class="hero-driver-link" onclick="expandAndDrillCategory('{{ category_breakdown[0][0].id }}')">{{ category_breakdown[0][0].icon }} {{ category_breakdown[0][0].name }} — ${{ "%.0f"|format(category_breakdown[0][1] / 100) }}</button>
+        </div>
+        {% endif %}
     </div>
 
     <!-- Secondary Stats Row -->

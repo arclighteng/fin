@@ -301,7 +301,7 @@
 }
 
 .cf-kept.negative {
-    color: var(--accent-red, #ea4335);
+    color: var(--accent-yellow, #d29922);
 }
 
 .cf-rate {
@@ -318,6 +318,37 @@
 
 .cf-comparison span {
     color: var(--text-secondary);
+}
+
+.cf-top-driver {
+    padding-left: 82px;
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+}
+
+.cf-driver-link {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    font-size: 13px;
+    color: var(--accent-blue, #2563eb);
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.cf-driver-link:hover {
+    opacity: 0.8;
+}
+
+.cf-income-flag {
+    padding-left: 82px;
+    font-size: 13px;
+    color: var(--text-muted);
+    font-style: italic;
+    margin-bottom: 4px;
 }
 
 .cf-pacing {
@@ -972,13 +1003,40 @@
                     <span>3-month avg<span class="info-tip" title="Compared to your last 3 months to smooth out seasonal variation">?</span>: {{ '+' if avg_cash_flow_cents >= 0 else '-' }}${{ "%.0f"|format((avg_cash_flow_cents / 100) | abs) }}/mo</span>
                     &middot;
                     {% if diff > 0 %}
-                        You kept ${{ "%.0f"|format(diff / 100) }} more than usual
+                        {% if current_period.net_cents >= 0 %}
+                            You kept ${{ "%.0f"|format(diff / 100) }} more than usual
+                        {% else %}
+                            Deficit ${{ "%.0f"|format(diff / 100) }} smaller than usual
+                        {% endif %}
                     {% elif diff < 0 %}
-                        You kept ${{ "%.0f"|format((-diff) / 100) }} less than usual
+                        {% if current_period.net_cents < 0 %}
+                            Deficit ${{ "%.0f"|format((-diff) / 100) }} larger than usual
+                        {% else %}
+                            You kept ${{ "%.0f"|format((-diff) / 100) }} less than usual
+                        {% endif %}
                     {% else %}
                         On track with your average
                     {% endif %}
                 </div>
+            {% endif %}
+
+            {% if current_period.net_cents < 0 and top_movers %}
+            <div class="cf-top-driver">
+                Biggest change{{ 's' if top_movers|length > 1 else '' }}:
+                {% for mover in top_movers %}
+                    <button class="cf-driver-link" onclick="finDrilldown.open('category:{{ mover.category.id }}')">{{ mover.category.icon }} {{ mover.category.name }} +${{ "%.0f"|format(mover.delta_cents / 100) }} above usual</button>{% if not loop.last %} &middot; {% endif %}
+                {% endfor %}
+            </div>
+            {% elif current_period.net_cents < 0 and category_breakdown %}
+            <div class="cf-top-driver">
+                Biggest driver: <button class="cf-driver-link" onclick="finDrilldown.open('category:{{ category_breakdown[0][0].id }}')">{{ category_breakdown[0][0].icon }} {{ category_breakdown[0][0].name }} — ${{ "%.0f"|format(category_breakdown[0][1] / 100) }}</button>
+            </div>
+            {% endif %}
+
+            {% if avg_income_cents > 0 and current_period.income_cents < (avg_income_cents * 0.9)|int %}
+            <div class="cf-income-flag">
+                Income ${{ "%.0f"|format((avg_income_cents - current_period.income_cents) / 100) }} lower than usual — spending may be in line
+            </div>
             {% endif %}
 
             <div class="cf-pacing" id="cfPacing" style="display:none;">
@@ -1001,7 +1059,41 @@
             </p>
         </div>
 
-        <!-- ==================== CARD 2: COMMITMENTS ==================== -->
+        <!-- ==================== CARD 2: HEADS UP ==================== -->
+        <div class="card-v3 card-full-v3">
+            <div class="card-title-v3">Heads Up</div>
+
+            {% set display_items = attention_items | rejectattr('type', 'equalto', 'integrity') | list %}
+            {% if display_items %}
+                <div id="headsUpContent">
+                    {% for item in display_items[:4] %}
+                    <div class="hu-item" id="huItem{{ loop.index }}" {% if item.drilldown_scope %}onclick="finDrilldown.open('{{ item.drilldown_scope }}')" onkeydown="if(event.key==='Enter')this.click()" role="button" tabindex="0" style="cursor:pointer"{% endif %}>
+                        <div class="hu-item-title">{{ item.title }}</div>
+                        {% if item.detail %}
+                        <div class="hu-item-detail">{{ item.detail }}</div>
+                        {% endif %}
+                        {% if item.action_type == 'alert' and not item.actioned %}
+                        <div class="hu-actions">
+                            <button class="hu-btn primary" onclick="event.stopPropagation(); dismissAlert('{{ item.key }}', 'not_suspicious', {{ loop.index }})">Looks fine</button>
+                            <button class="hu-btn" onclick="event.stopPropagation(); dismissAlert('{{ item.key }}', 'confirmed', {{ loop.index }})">Flag it</button>
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                    {% if display_items|length > 4 %}
+                    <div style="text-align: center; margin-top: 12px; font-size: 13px; color: var(--text-muted);">
+                        + {{ display_items|length - 4 }} more items
+                    </div>
+                    {% endif %}
+                </div>
+            {% else %}
+                <div class="heads-up-empty">
+                    Nothing unusual this month. Looking good.
+                </div>
+            {% endif %}
+        </div>
+
+        <!-- ==================== CARD 3: COMMITMENTS ==================== -->
         <div class="card-v3">
             <div class="card-title-v3">
                 Monthly Commitments
@@ -1010,7 +1102,11 @@
 
             {% set income_amount = current_period.income_cents / 100 %}
             {% set commit_pct = (current_period.recurring_cents / current_period.income_cents * 100) | int if current_period.income_cents > 0 else 0 %}
+            {% if commit_pct > 50 %}
+            <div class="commit-pct-text">${{ commit_pct }} of every $100 you earn is committed</div>
+            {% else %}
             <div class="commit-pct-text">That's {{ commit_pct }}% of your income</div>
+            {% endif %}
             <div class="commit-bar-track">
                 {% set bar_color_class = 'red' if commit_pct > 70 else ('yellow' if commit_pct > 50 else '') %}
                 <div class="commit-bar-fill {{ bar_color_class }}" style="width: {{ commit_pct }}%"></div>
@@ -1104,40 +1200,6 @@
             {% endif %}
         </div>
         {% endif %}
-
-        <!-- ==================== CARD 4: HEADS UP (Always rendered) ==================== -->
-        <div class="card-v3 card-full-v3">
-            <div class="card-title-v3">Heads Up</div>
-
-            {% set display_items = attention_items | rejectattr('type', 'equalto', 'integrity') | list %}
-            {% if display_items %}
-                <div id="headsUpContent">
-                    {% for item in display_items[:4] %}
-                    <div class="hu-item" id="huItem{{ loop.index }}" {% if item.drilldown_scope %}onclick="finDrilldown.open('{{ item.drilldown_scope }}')" onkeydown="if(event.key==='Enter')this.click()" role="button" tabindex="0" style="cursor:pointer"{% endif %}>
-                        <div class="hu-item-title">{{ item.title }}</div>
-                        {% if item.detail %}
-                        <div class="hu-item-detail">{{ item.detail }}</div>
-                        {% endif %}
-                        {% if item.action_type == 'alert' and not item.actioned %}
-                        <div class="hu-actions">
-                            <button class="hu-btn primary" onclick="event.stopPropagation(); dismissAlert('{{ item.key }}', 'not_suspicious', {{ loop.index }})">Looks fine</button>
-                            <button class="hu-btn" onclick="event.stopPropagation(); dismissAlert('{{ item.key }}', 'confirmed', {{ loop.index }})">Flag it</button>
-                        </div>
-                        {% endif %}
-                    </div>
-                    {% endfor %}
-                    {% if display_items|length > 4 %}
-                    <div style="text-align: center; margin-top: 12px; font-size: 13px; color: var(--text-muted);">
-                        + {{ display_items|length - 4 }} more items
-                    </div>
-                    {% endif %}
-                </div>
-            {% else %}
-                <div class="heads-up-empty">
-                    Nothing unusual this month. Looking good.
-                </div>
-            {% endif %}
-        </div>
 
         <!-- ==================== CARD 5: YOUR TREND ==================== -->
         {% if periods and periods|length > 1 %}
@@ -1445,7 +1507,14 @@ async function dismissAlert(key, action, index) {
 
         const pacingEl = document.getElementById('cfPacing');
         if (pacingEl && projectedKept !== 0) {
-            pacingEl.textContent = daysElapsed + ' days in \u2014 on track to keep ~$' + Math.round(projectedKept / 100) + ' this month';
+            const projectedDollars = Math.round(Math.abs(projectedKept) / 100);
+            if (projectedKept >= 0) {
+                pacingEl.textContent = daysElapsed + ' days in \u2014 on pace to keep ~$' + projectedDollars + ' this month';
+                pacingEl.style.color = '';
+            } else {
+                pacingEl.textContent = daysElapsed + ' days in \u2014 on pace to end ~$' + projectedDollars + ' over this month';
+                pacingEl.style.color = 'var(--accent-yellow, #d29922)';
+            }
             pacingEl.style.display = 'block';
         }
     }
