@@ -1,6 +1,6 @@
 [project]
 name = "finproj"
-version = "0.2.0"
+version = "0.2.1"
 description = "Local-first finance MVP (SimpleFin + subscriptions/anomalies)"
 requires-python = ">=3.12"
 dependencies = [
