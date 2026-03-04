@@ -2425,6 +2425,50 @@ def export_backup(
         raise typer.Exit(1)
 
 
+def _check_fde(db_path) -> tuple:
+    """Check if the volume hosting db_path has full-disk encryption enabled."""
+    import subprocess, sys
+
+    if sys.platform == "darwin":
+        try:
+            result = subprocess.run(
+                ["fdesetup", "status"],
+                capture_output=True, text=True, timeout=5
+            )
+            if "FileVault is On" in result.stdout:
+                return True, "FileVault is enabled"
+            elif "FileVault is Off" in result.stdout:
+                return False, "FileVault is not enabled — your financial data is unencrypted at rest"
+        except Exception:
+            pass
+        return None, "Could not verify FileVault status"
+
+    elif sys.platform == "win32":
+        drive = db_path.resolve().drive  # e.g. "C:"
+        if not drive:
+            return None, "Could not determine drive for encryption check"
+        try:
+            result = subprocess.run(
+                ["manage-bde", "-status", drive],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                if "Protection On" in result.stdout:
+                    return True, f"BitLocker is enabled on {drive}"
+                elif "Protection Off" in result.stdout:
+                    return False, f"BitLocker is not enabled on {drive} — your financial data is unencrypted at rest"
+            # Non-zero return often means insufficient privileges
+            return None, f"Could not verify BitLocker status on {drive} (run as administrator for full check)"
+        except FileNotFoundError:
+            return None, "manage-bde not found — verify BitLocker is enabled manually"
+        except Exception:
+            return None, "Could not verify BitLocker status"
+
+    else:
+        # Linux: too many distros/setups to check reliably — skip
+        return None, ""
+
+
 @app.command()
 def web(
     port: int = typer.Option(8000, help="Port to serve on."),
@@ -2460,6 +2504,12 @@ def web(
         if not db_path.exists():
             console.print()
             console.print("[dim]No data yet. Try [cyan]fin demo[/cyan] to explore with sample data.[/dim]")
+
+        encrypted, fde_msg = _check_fde(db_path)
+        if encrypted is False:
+            console.print(f"[yellow]Warning:[/yellow] {fde_msg}. Enable BitLocker (Windows) or FileVault (macOS) to protect your data.")
+        elif encrypted is None and fde_msg:
+            console.print(f"[dim]Encryption check: {fde_msg}[/dim]")
 
     # Warn if binding to all interfaces
     if host == "0.0.0.0":
