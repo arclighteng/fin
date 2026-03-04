@@ -212,6 +212,13 @@ _startup_token = get_api_token()
 templates.env.globals["api_token"] = get_api_token
 templates.env.globals["csrf_token"] = get_csrf_token
 
+# Inject package version
+from importlib.metadata import version as _pkg_version, PackageNotFoundError
+try:
+    templates.env.globals["app_version"] = _pkg_version("finproj")
+except PackageNotFoundError:
+    templates.env.globals["app_version"] = "dev"
+
 # Mount static files
 static_dir = Path(__file__).parent / "static"
 if static_dir.exists():
