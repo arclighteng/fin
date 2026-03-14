@@ -2932,10 +2932,11 @@
     </nav>
 
     <!-- Auth config - must be defined before loading JS modules -->
+    <!-- NOTE: API_TOKEN is no longer injected here. Auth is via HttpOnly fin_session cookie. -->
     <script>
-        const API_TOKEN = '{{ api_token() or "" }}';
         const CSRF_TOKEN = '{{ csrf_token() or "" }}';
-        const FIN_READ_ONLY = !API_TOKEN;
+        const FIN_AUTH_ENABLED = {{ 'true' if auth_enabled() else 'false' }};
+        const FIN_READ_ONLY = !FIN_AUTH_ENABLED;
     </script>
 
     <!-- Core JS modules -->
@@ -2958,10 +2959,105 @@
         });
     </script>
 
-    <!-- Read-only mode banner -->
-    {% if not api_token() %}
+    <!-- Item 8: HTTP (unencrypted) connection banner -->
+    {% if is_http is defined and is_http %}
+    <div style="background:#7c3907;color:#fff;text-align:center;padding:6px 16px;font-size:13px;font-weight:500;">
+        &#9888; Unencrypted connection (HTTP). Your session and financial data are not encrypted in transit.
+        Install openssl and restart without --no-tls to enable HTTPS.
+    </div>
+    {% endif %}
+
+    <!-- Item 1: Auth prompt overlay — shown when auth is required but no session cookie is set -->
+    {% if auth_enabled() %}
+    <div id="fin-auth-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;align-items:center;justify-content:center;">
+        <div style="background:var(--bg-secondary,#fff);border-radius:8px;padding:32px 28px;max-width:360px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,0.3);">
+            <h2 style="margin-bottom:8px;font-size:18px;color:var(--text-primary,#1a1f36);">Sign In</h2>
+            <p style="margin-bottom:20px;font-size:13px;color:var(--text-secondary,#525f7f);">Enter your fin API token to continue.</p>
+            <input id="fin-auth-token-input" type="password" placeholder="API token"
+                style="width:100%;padding:10px 12px;border:1px solid var(--border,#e1e5eb);border-radius:6px;font-size:14px;margin-bottom:12px;box-sizing:border-box;">
+            <div id="fin-auth-error" style="display:none;color:#c53030;font-size:12px;margin-bottom:8px;"></div>
+            <button onclick="finAuthSubmit()"
+                style="width:100%;padding:10px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-size:14px;font-weight:500;cursor:pointer;">
+                Sign In
+            </button>
+        </div>
+    </div>
+    <script>
+        (function() {
+            // Check if we have a session by probing a lightweight API endpoint.
+            // If we get a 401, show the auth prompt.
+            async function checkSession() {
+                try {
+                    const resp = await fetch('/api/categories', { credentials: 'same-origin' });
+                    if (resp.status === 401) {
+                        showAuthOverlay();
+                    }
+                } catch (e) {
+                    // Network error — don't block UI
+                }
+            }
+
+            function showAuthOverlay() {
+                const overlay = document.getElementById('fin-auth-overlay');
+                if (overlay) overlay.style.display = 'flex';
+                const input = document.getElementById('fin-auth-token-input');
+                if (input) input.focus();
+            }
+
+            window.finAuthSubmit = async function() {
+                const input = document.getElementById('fin-auth-token-input');
+                const errEl = document.getElementById('fin-auth-error');
+                const token = input ? input.value.trim() : '';
+                if (!token) return;
+
+                try {
+                    const resp = await fetch('/auth/session', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ token }),
+                        credentials: 'same-origin',
+                    });
+                    if (resp.ok) {
+                        // Session established — reload page so all data loads properly
+                        window.location.reload();
+                    } else {
+                        if (errEl) {
+                            errEl.style.display = 'block';
+                            errEl.textContent = 'Invalid token. Check your FIN_API_TOKEN setting.';
+                        }
+                    }
+                } catch (e) {
+                    if (errEl) {
+                        errEl.style.display = 'block';
+                        errEl.textContent = 'Network error. Please try again.';
+                    }
+                }
+            };
+
+            // Allow Enter key to submit
+            document.addEventListener('DOMContentLoaded', function() {
+                const input = document.getElementById('fin-auth-token-input');
+                if (input) {
+                    input.addEventListener('keydown', function(e) {
+                        if (e.key === 'Enter') window.finAuthSubmit();
+                    });
+                }
+            });
+
+            // Run session check after DOM is ready
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', checkSession);
+            } else {
+                checkSession();
+            }
+        })();
+    </script>
+    {% endif %}
+
+    <!-- Read-only mode banner (auth disabled server-side) -->
+    {% if not auth_enabled() %}
     <div class="read-only-banner">
-        <span>&#128274;</span> Read-only mode. Set <code>FIN_AUTH_TOKEN</code> to enable changes.
+        <span>&#128274;</span> Auth disabled (FIN_AUTH_DISABLED=1). All changes are permitted without a token.
     </div>
     {% endif %}
 

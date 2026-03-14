@@ -66,15 +66,18 @@ class TestAgeDetection:
 class TestModeValidation:
     """Test encryption mode validation."""
 
-    def test_requires_passphrase_or_recipient(self, temp_db_path):
-        """Should require either -p or -r flag."""
-        with patch.dict("os.environ", {"FIN_DB_PATH": temp_db_path}):
+    def test_defaults_to_passphrase_mode_with_env_var(self, temp_db_path):
+        """No flags needed — FIN_BACKUP_PASSWORD env var triggers passphrase mode by default."""
+        with patch.dict("os.environ", {"FIN_DB_PATH": temp_db_path, "FIN_BACKUP_PASSWORD": "test-secret"}):
             with patch("shutil.which", return_value="/usr/bin/age"):
-                result = runner.invoke(app, ["export-backup"])
+                with patch("subprocess.run") as mock_run:
+                    mock_run.return_value = MagicMock(returncode=0)
+                    result = runner.invoke(app, ["export-backup"])
 
-        assert result.exit_code == 1
-        assert "Must specify" in result.output
-        assert "--passphrase" in result.output or "-p" in result.output
+        assert result.exit_code == 0
+        mock_run.assert_called_once()
+        call_args = mock_run.call_args[0][0]
+        assert "-p" in call_args
 
     def test_cannot_use_both_modes(self, temp_db_path):
         """Should reject both -p and -r together."""
@@ -170,7 +173,7 @@ class TestBackupExecution:
         call_args = mock_run.call_args[0][0]
         output_arg = call_args[call_args.index("-o") + 1]
         assert "20260228" in output_arg
-        assert output_arg.endswith(".db.age")
+        assert output_arg.endswith(".finbak")
 
 
 class TestBackupErrorHandling:

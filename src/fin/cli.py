@@ -2321,12 +2321,17 @@ def import_csv(
 
 @app.command("export-backup")
 def export_backup(
-    output: str = typer.Option(None, "--output", "-o", help="Output file path (default: fin_backup_YYYYMMDD.db.age)"),
+    output: str = typer.Option(None, "--output", "-o", help="Output file path (default: fin_backup_YYYYMMDD.finbak)"),
     recipient: str = typer.Option(None, "--recipient", "-r", help="age public key recipient (age1...)"),
-    passphrase: bool = typer.Option(False, "--passphrase", "-p", help="Encrypt with passphrase (interactive prompt)"),
+    passphrase: bool = typer.Option(False, "--passphrase", "-p", help="Encrypt with passphrase (interactive prompt or FIN_BACKUP_PASSWORD env var)"),
+    no_encrypt: bool = typer.Option(False, "--no-encrypt", help="Create an UNENCRYPTED backup (not recommended)."),
 ):
     """
-    Export an encrypted backup of the database using age encryption.
+    Export an encrypted backup of the database.
+
+    Encryption is required by default. Specify --passphrase (-p) or --recipient (-r).
+    The FIN_BACKUP_PASSWORD environment variable is read automatically for passphrase mode.
+    Use --no-encrypt only if you understand the risk.
 
     Requires the 'age' CLI tool to be installed:
     - Windows: winget install FiloSottile.age
@@ -2334,21 +2339,45 @@ def export_backup(
     - Linux: apt install age (or download from https://github.com/FiloSottile/age)
 
     Examples:
-        fin export-backup -p                    # Passphrase encryption (prompted)
+        fin export-backup -p                    # Passphrase encryption (prompted or via env)
         fin export-backup -r age1abc123...      # Recipient public key
-        fin export-backup -p -o backup.db.age   # Custom output path
+        fin export-backup -p -o backup.finbak   # Custom output path
+        fin export-backup --no-encrypt          # Unencrypted (shows warning)
 
-    The backup includes your complete transaction database. Decrypt with:
-        age -d -o fin.db backup.db.age          # For passphrase mode
-        age -d -i key.txt -o fin.db backup.db.age  # For recipient mode
+    Decrypt with:
+        age -d -o fin.db backup.finbak          # For passphrase mode
+        age -d -i key.txt -o fin.db backup.finbak  # For recipient mode
     """
+    import getpass
     import shutil
     import subprocess
+    import sys
 
     cfg = load_config()
     setup_logging(cfg)
 
-    # Check that age is installed
+    today_str = dates_mod.today().strftime("%Y%m%d")
+
+    # --- Unencrypted path ---
+    if no_encrypt:
+        sys.stderr.write(
+            "\nWARNING: Creating an unencrypted backup.\n"
+            "This file contains your complete financial history in plain text.\n"
+            "Store it securely and delete it when no longer needed.\n\n"
+        )
+        db_path = Path(cfg.db_path)
+        if not db_path.exists():
+            console.print(f"[red]Error:[/red] Database not found at {db_path}")
+            raise typer.Exit(1)
+        if not output:
+            output = f"fin_backup_{today_str}-UNENCRYPTED.sqlite"
+        output_path = Path(output)
+        import shutil as _shutil
+        _shutil.copy2(str(db_path), str(output_path))
+        console.print(f"[yellow]Unencrypted backup written to:[/yellow] {output_path}")
+        return
+
+    # --- Encrypted path ---
     age_path = shutil.which("age")
     if not age_path:
         console.print("[red]Error:[/red] 'age' encryption tool not found.")
@@ -2359,14 +2388,19 @@ def export_backup(
         console.print("  Linux:   [cyan]apt install age[/cyan] or download from https://github.com/FiloSottile/age")
         raise typer.Exit(1)
 
-    # Validate options
+    # Resolve encryption mode: check env var before prompting
+    env_password = os.getenv("FIN_BACKUP_PASSWORD", "")
+
     if not passphrase and not recipient:
-        console.print("[red]Error:[/red] Must specify either --passphrase (-p) or --recipient (-r)")
-        console.print()
-        console.print("Examples:")
-        console.print("  fin export-backup -p                # Passphrase encryption")
-        console.print("  fin export-backup -r age1abc123...  # Recipient public key")
-        raise typer.Exit(1)
+        # Default: require encryption — prompt for passphrase
+        if env_password:
+            passphrase = True
+        else:
+            console.print("[bold]Backup encryption required.[/bold]")
+            console.print("Specify --passphrase (-p) or --recipient (-r), or set FIN_BACKUP_PASSWORD.")
+            console.print()
+            console.print("Prompting for passphrase interactively...")
+            passphrase = True
 
     if passphrase and recipient:
         console.print("[red]Error:[/red] Cannot use both --passphrase and --recipient")
@@ -2378,51 +2412,114 @@ def export_backup(
         console.print(f"[red]Error:[/red] Database not found at {db_path}")
         raise typer.Exit(1)
 
-    # Generate output filename if not provided
+    # Generate output filename
     if not output:
-        today_str = dates_mod.today().strftime("%Y%m%d")
-        output = f"fin_backup_{today_str}.db.age"
-
+        output = f"fin_backup_{today_str}.finbak"
     output_path = Path(output)
 
     # Build age command
     cmd = [age_path, "-o", str(output_path)]
 
     if passphrase:
-        cmd.append("-p")
+        if env_password:
+            # Pass password non-interactively via stdin
+            cmd.extend(["--passphrase"])
+            cmd.append(str(db_path))
+            console.print(f"[bold]Encrypting database backup (password from FIN_BACKUP_PASSWORD)...[/bold]")
+            console.print(f"  Source: {db_path}")
+            console.print(f"  Output: {output_path}")
+            console.print()
+            try:
+                result = subprocess.run(
+                    cmd, check=True,
+                    input=env_password + "\n" + env_password + "\n",
+                    capture_output=True, text=True,
+                )
+            except subprocess.CalledProcessError as e:
+                console.print(f"[red]Encryption failed:[/red] age returned exit code {e.returncode}")
+                if e.stderr:
+                    console.print(f"[dim]{e.stderr.strip()}[/dim]")
+                raise typer.Exit(1)
+        else:
+            cmd.append("-p")
+            cmd.append(str(db_path))
+            console.print(f"[bold]Encrypting database backup...[/bold]")
+            console.print(f"  Source: {db_path}")
+            console.print(f"  Output: {output_path}")
+            console.print()
+            console.print("[yellow]You will be prompted to enter a passphrase.[/yellow]")
+            console.print()
+            try:
+                result = subprocess.run(cmd, check=True)
+            except subprocess.CalledProcessError as e:
+                console.print(f"[red]Encryption failed:[/red] age returned exit code {e.returncode}")
+                raise typer.Exit(1)
     else:
         cmd.extend(["-r", recipient])
+        cmd.append(str(db_path))
+        console.print(f"[bold]Encrypting database backup...[/bold]")
+        console.print(f"  Source: {db_path}")
+        console.print(f"  Output: {output_path}")
+        console.print()
+        try:
+            result = subprocess.run(cmd, check=True)
+        except subprocess.CalledProcessError as e:
+            console.print(f"[red]Encryption failed:[/red] age returned exit code {e.returncode}")
+            raise typer.Exit(1)
+        except FileNotFoundError:
+            console.print("[red]Error:[/red] age command not found")
+            raise typer.Exit(1)
 
-    cmd.append(str(db_path))
-
-    console.print(f"[bold]Encrypting database backup...[/bold]")
-    console.print(f"  Source: {db_path}")
-    console.print(f"  Output: {output_path}")
     console.print()
-
+    console.print(f"[green]Backup complete![/green] Encrypted to: {output_path}")
+    console.print()
+    console.print("To decrypt:")
     if passphrase:
-        console.print("[yellow]You will be prompted to enter a passphrase.[/yellow]")
-        console.print()
+        console.print(f"  [cyan]age -d -o fin.db {output_path}[/cyan]")
+    else:
+        console.print(f"  [cyan]age -d -i your_key.txt -o fin.db {output_path}[/cyan]")
 
-    try:
-        # Run age - for passphrase mode, need to allow stdin/stdout pass-through
-        result = subprocess.run(cmd, check=True)
 
-        console.print()
-        console.print(f"[green]Backup complete![/green] Encrypted to: {output_path}")
-        console.print()
-        console.print("To decrypt:")
-        if passphrase:
-            console.print(f"  [cyan]age -d -o fin.db {output_path}[/cyan]")
-        else:
-            console.print(f"  [cyan]age -d -i your_key.txt -o fin.db {output_path}[/cyan]")
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
-    except subprocess.CalledProcessError as e:
-        console.print(f"[red]Encryption failed:[/red] age returned exit code {e.returncode}")
-        raise typer.Exit(1)
-    except FileNotFoundError:
-        console.print("[red]Error:[/red] age command not found")
-        raise typer.Exit(1)
+
+def startup_security_check(host: str, auth_disabled: bool) -> None:
+    """
+    Hard-block dangerous startup combinations.
+
+    Rules:
+    - auth_disabled=True AND non-loopback host → sys.exit(1). No override.
+    - auth_disabled=True AND loopback host → yellow WARNING to stderr (continue).
+
+    Call this before any server startup logic.
+    """
+    import sys
+
+    is_loopback = host in _LOOPBACK_HOSTS
+
+    if auth_disabled and not is_loopback:
+        import sys as _sys
+        _sys.stderr.write(
+            "\nERROR: Refusing to start.\n"
+            "FIN_AUTH_DISABLED=1 is set AND the server is binding to a non-loopback "
+            f"address ({host}).\n"
+            "This combination would expose your financial data to the network with no "
+            "authentication.\n\n"
+            "To fix, choose one of:\n"
+            "  1. Remove FIN_AUTH_DISABLED=1 (recommended)\n"
+            "  2. Bind to loopback only: --host 127.0.0.1\n\n"
+            "There is no override for this check.\n\n"
+        )
+        sys.exit(1)
+
+    if auth_disabled and is_loopback:
+        import sys as _sys
+        _sys.stderr.write(
+            "\nWARNING: FIN_AUTH_DISABLED=1 is set.\n"
+            "Authentication is disabled. Anyone with access to this machine can read and "
+            "modify your financial data via the web UI.\n"
+            "This is only permitted because the server is binding to loopback only.\n\n"
+        )
 
 
 def _check_fde(db_path) -> tuple:
@@ -2474,22 +2571,34 @@ def web(
     port: int = typer.Option(8000, help="Port to serve on."),
     host: str = typer.Option("127.0.0.1", help="Host to bind to. Use 0.0.0.0 for LAN access (security risk)."),
     no_tls: bool = typer.Option(False, "--no-tls", help="Disable HTTPS and serve over plain HTTP."),
+    i_understand_no_fde: bool = typer.Option(
+        False,
+        "--i-understand-no-fde",
+        help="Bypass the full-disk encryption requirement. Use only if you understand the data-at-rest risk.",
+    ),
 ):
     """Run the local web UI.
 
     By default, binds to localhost (127.0.0.1) with HTTPS (self-signed cert).
     Use --host 0.0.0.0 to allow LAN access.
-    Use --no-tls to disable HTTPS.
+    Use --no-tls to disable HTTPS (loopback only).
 
     API Authentication:
-    - Mutation endpoints (POST/DELETE) require bearer token auth
+    - All /api/* endpoints require bearer token or session cookie auth
     - Set FIN_API_TOKEN env var for a fixed token, or use the auto-generated one
-    - Set FIN_AUTH_DISABLED=1 to disable auth (not recommended for LAN access)
+    - Set FIN_AUTH_DISABLED=1 to disable auth (loopback only — hard-blocked on LAN)
     """
+    import sys
     import uvicorn
     from pathlib import Path
     from .security import get_auth_info
     from .tls import ensure_cert
+
+    auth_disabled = os.getenv("FIN_AUTH_DISABLED", "").lower() in ("1", "true", "yes")
+    is_loopback = host in _LOOPBACK_HOSTS
+
+    # --- Item 3: Hard-block auth-disabled + non-loopback ---
+    startup_security_check(host, auth_disabled)
 
     cfg = load_config()
     db_path = Path(cfg.db_path)
@@ -2505,26 +2614,43 @@ def web(
             console.print()
             console.print("[dim]No data yet. Try [cyan]fin demo[/cyan] to explore with sample data.[/dim]")
 
+        # --- Item 5: FDE check — hard block unless bypassed ---
+        skip_fde = i_understand_no_fde or os.getenv("FIN_SKIP_FDE_CHECK", "").lower() in ("1", "true", "yes")
         encrypted, fde_msg = _check_fde(db_path)
         if encrypted is False:
-            console.print(f"[yellow]Warning:[/yellow] {fde_msg}. Enable BitLocker (Windows) or FileVault (macOS) to protect your data.")
+            if skip_fde:
+                console.print(f"[yellow]Warning (bypassed):[/yellow] {fde_msg}.")
+            else:
+                sys.stderr.write(
+                    f"\nERROR: Full-disk encryption is not enabled.\n"
+                    f"{fde_msg}.\n\n"
+                    "Your financial database is stored unencrypted on disk. If this machine\n"
+                    "is lost or stolen, your complete financial history will be readable.\n\n"
+                    "To fix:\n"
+                    "  Windows: Enable BitLocker (Settings > Privacy & Security > Device Encryption)\n"
+                    "  macOS:   Enable FileVault (System Preferences > Security & Privacy)\n\n"
+                    "To bypass this check (not recommended):\n"
+                    "  fin web --i-understand-no-fde\n"
+                    "  or set FIN_SKIP_FDE_CHECK=1\n\n"
+                )
+                sys.exit(1)
         elif encrypted is None and fde_msg:
             console.print(f"[dim]Encryption check: {fde_msg}[/dim]")
 
     # Warn if binding to all interfaces
-    if host == "0.0.0.0":
-        console.print("[yellow]Warning: Binding to all interfaces (0.0.0.0). Your financial data will be accessible on the network.[/yellow]")
+    if not is_loopback:
+        console.print("[yellow]Warning: Binding to all interfaces. Your financial data will be accessible on the network.[/yellow]")
         console.print()
 
     # Show auth info
     auth_info = get_auth_info()
     if auth_info["auth_enabled"]:
         console.print(f"[dim]API Token:[/dim] {auth_info['full_token']} [dim]({auth_info['source']})[/dim]")
-        console.print("[dim]Use: Authorization: Bearer <token> for POST/DELETE endpoints[/dim]")
+        console.print("[dim]Use this token to authenticate: set it as a cookie (fin_session) or Bearer header.[/dim]")
     else:
-        console.print("[yellow]API Auth: Disabled[/yellow] (set FIN_API_TOKEN to enable)")
+        console.print("[yellow]API Auth: Disabled[/yellow] (loopback only — set FIN_API_TOKEN to enable)")
 
-    # TLS setup
+    # --- Item 8: TLS setup — hard block on non-loopback if TLS unavailable ---
     ssl_kwargs = {}
     scheme = "http"
     if not no_tls:
@@ -2538,9 +2664,39 @@ def web(
             console.print(f"[dim]TLS cert:[/dim] {cert_path}")
             console.print("[dim]Your browser will show a security warning for the self-signed cert — this is expected.[/dim]")
         else:
-            console.print("[yellow]TLS unavailable (openssl not found) — serving over HTTP[/yellow]")
+            if not is_loopback:
+                sys.stderr.write(
+                    "\nERROR: TLS unavailable. Refusing to start on a non-loopback address without encryption.\n"
+                    "openssl is required to generate a self-signed certificate for LAN access.\n\n"
+                    "To fix:\n"
+                    "  Windows: Install OpenSSL (e.g. via winget install openssl)\n"
+                    "  macOS:   brew install openssl\n"
+                    "  Linux:   apt install openssl\n\n"
+                    "Alternatively, bind to loopback only: fin web --host 127.0.0.1\n\n"
+                )
+                sys.exit(1)
+            else:
+                sys.stderr.write(
+                    "\nWARNING: TLS unavailable (openssl not found). Running over HTTP.\n"
+                    "Your session token and financial data are transmitted unencrypted.\n"
+                    "This is only permitted because the server is binding to loopback.\n\n"
+                )
+    else:
+        # --no-tls explicitly requested
+        if not is_loopback:
+            sys.stderr.write(
+                "\nERROR: --no-tls is not permitted when binding to a non-loopback address.\n"
+                "Serving financial data over plain HTTP on a network interface is not allowed.\n"
+                "Remove --no-tls or use --host 127.0.0.1.\n\n"
+            )
+            sys.exit(1)
+        else:
+            sys.stderr.write(
+                "\nWARNING: Running over HTTP (--no-tls). "
+                "Your session token and financial data are unencrypted.\n\n"
+            )
 
-    display_host = host if host != "0.0.0.0" else "127.0.0.1"
+    display_host = host if is_loopback else "127.0.0.1"
     console.print(f"[dim]Dashboard:[/dim] {scheme}://{display_host}:{port}/dashboard")
     console.print()
 

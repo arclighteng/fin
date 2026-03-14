@@ -516,7 +516,7 @@ class TestAccountFilterParsing:
         # Should be in no-data mode
         html = response.text
         # Check that it's showing empty/no-data state
-        assert "No accounts selected" in html or "show_no_data" in html or response.status_code == 200
+        assert "No accounts selected" in html or "show_no_data" in html
 
     def test_accounts_valid_filter_works(self, client):
         """Valid account filter should work."""

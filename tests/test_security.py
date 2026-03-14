@@ -137,3 +137,172 @@ class TestGetAuthInfo:
             info = get_auth_info()
             assert info["token_preview"] == "long..."
             assert info["full_token"] == "longtoken123"
+
+
+# ---------------------------------------------------------------------------
+# itsdangerous is an optional dependency — skip gracefully if absent
+# ---------------------------------------------------------------------------
+itsdangerous = pytest.importorskip("itsdangerous", reason="itsdangerous not installed")
+
+
+class TestGetSignedSessionToken:
+    """Test get_signed_session_token() covering env-token, auto-token, and disabled paths."""
+
+    def _reset_module_state(self):
+        import fin.security as sec
+        sec._session_token = None
+        sec._signed_session_token = None
+
+    def test_returns_env_token_as_is(self):
+        """FIN_API_TOKEN is returned verbatim — user manages its lifetime."""
+        import fin.security as sec
+        self._reset_module_state()
+        with patch.dict(os.environ, {"FIN_API_TOKEN": "mytoken"}, clear=True):
+            from fin.security import get_signed_session_token
+            token = get_signed_session_token()
+            assert token == "mytoken"
+
+    def test_auto_token_is_signable(self):
+        """Auto-generated tokens are wrapped with TimestampSigner."""
+        import fin.security as sec
+        self._reset_module_state()
+        # Ensure neither env var is present
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("FIN_API_TOKEN", "FIN_AUTH_DISABLED")}
+        with patch.dict(os.environ, env, clear=True):
+            from fin.security import get_signed_session_token, _get_secret_key
+            signed = get_signed_session_token()
+            assert signed is not None
+            from itsdangerous import TimestampSigner
+            signer = TimestampSigner(_get_secret_key())
+            # Should not raise BadSignature or SignatureExpired
+            raw = signer.unsign(signed, max_age=28800)
+            assert raw is not None
+
+    def test_returns_none_when_auth_disabled(self):
+        """Returns None when FIN_AUTH_DISABLED=1."""
+        import fin.security as sec
+        self._reset_module_state()
+        with patch.dict(os.environ, {"FIN_AUTH_DISABLED": "1"}, clear=True):
+            from fin.security import get_signed_session_token
+            result = get_signed_session_token()
+            assert result is None
+
+    def test_signed_token_cached_across_calls(self):
+        """Second call returns the same signed token (not re-signed)."""
+        import fin.security as sec
+        self._reset_module_state()
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("FIN_API_TOKEN", "FIN_AUTH_DISABLED")}
+        with patch.dict(os.environ, env, clear=True):
+            from fin.security import get_signed_session_token
+            first = get_signed_session_token()
+            second = get_signed_session_token()
+            assert first == second
+
+
+class TestVerifyTokenValueExpiry:
+    """Test _verify_token_value() with signed tokens — expiry and tampering."""
+
+    def _reset_module_state(self):
+        import fin.security as sec
+        sec._session_token = None
+        sec._signed_session_token = None
+
+    def test_expired_token_raises_401(self):
+        """A token signed 9 hours ago should raise 401 with expiry detail."""
+        import time
+        import fin.security as sec
+        from itsdangerous import TimestampSigner
+        from fastapi import HTTPException
+
+        self._reset_module_state()
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("FIN_API_TOKEN", "FIN_AUTH_DISABLED")}
+        with patch.dict(os.environ, env, clear=True):
+            from fin.security import get_api_token, _get_secret_key, _verify_token_value
+
+            raw = get_api_token()
+            signer = TimestampSigner(_get_secret_key())
+
+            # Sign the token but then advance time by 9 hours when verifying
+            stale_token = signer.sign(raw).decode()
+
+            with patch("time.time", return_value=time.time() + 9 * 3600):
+                with pytest.raises(HTTPException) as exc:
+                    _verify_token_value(stale_token)
+            assert exc.value.status_code == 401
+            assert "expired" in exc.value.detail.lower()
+
+    def test_tampered_signature_raises_403(self):
+        """Tampered token signature should raise 403."""
+        import fin.security as sec
+        from fastapi import HTTPException
+
+        self._reset_module_state()
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("FIN_API_TOKEN", "FIN_AUTH_DISABLED")}
+        with patch.dict(os.environ, env, clear=True):
+            from fin.security import get_signed_session_token, _verify_token_value
+
+            signed = get_signed_session_token()
+            # Corrupt the signature suffix
+            tampered = signed[:-3] + "xxx"
+
+            with pytest.raises(HTTPException) as exc:
+                _verify_token_value(tampered)
+            assert exc.value.status_code == 403
+
+    def test_env_token_plain_compare_no_expiry(self):
+        """FIN_API_TOKEN is validated by plain compare — never expires server-side."""
+        with patch.dict(os.environ, {"FIN_API_TOKEN": "static-token"}, clear=True):
+            from fin.security import _verify_token_value
+            result = _verify_token_value("static-token")
+            assert result is True
+
+    def test_env_token_wrong_value_raises_403(self):
+        """Wrong value against FIN_API_TOKEN raises 403, not 401."""
+        from fastapi import HTTPException
+        with patch.dict(os.environ, {"FIN_API_TOKEN": "correct"}, clear=True):
+            from fin.security import _verify_token_value
+            with pytest.raises(HTTPException) as exc:
+                _verify_token_value("wrong")
+            assert exc.value.status_code == 403
+
+
+class TestCookieAuth:
+    """Test verify_auth_token() cookie and header precedence."""
+
+    def test_verify_auth_token_accepts_cookie(self):
+        """verify_auth_token should accept valid token via fin_session cookie."""
+        with patch.dict(os.environ, {"FIN_API_TOKEN": "tok"}, clear=True):
+            result = verify_auth_token(authorization=None, fin_session="tok")
+            assert result is True
+
+    def test_verify_auth_token_no_cookie_no_header_raises_401(self):
+        """No credentials at all raises 401."""
+        from fastapi import HTTPException
+        with patch.dict(os.environ, {"FIN_API_TOKEN": "tok"}, clear=True):
+            with pytest.raises(HTTPException) as exc:
+                verify_auth_token(authorization=None, fin_session=None)
+            assert exc.value.status_code == 401
+
+    def test_bearer_header_takes_precedence_over_cookie(self):
+        """Valid Bearer header wins even when cookie is present and wrong."""
+        with patch.dict(os.environ, {"FIN_API_TOKEN": "tok"}, clear=True):
+            result = verify_auth_token(authorization="Bearer tok", fin_session="wrong")
+            assert result is True
+
+    def test_wrong_cookie_raises_403(self):
+        """Wrong cookie value raises 403."""
+        from fastapi import HTTPException
+        with patch.dict(os.environ, {"FIN_API_TOKEN": "tok"}, clear=True):
+            with pytest.raises(HTTPException) as exc:
+                verify_auth_token(authorization=None, fin_session="wrong-cookie")
+            assert exc.value.status_code == 403
+
+    def test_auth_disabled_cookie_ignored(self):
+        """When auth is disabled, any cookie is irrelevant — always passes."""
+        with patch.dict(os.environ, {"FIN_AUTH_DISABLED": "1"}, clear=True):
+            result = verify_auth_token(authorization=None, fin_session=None)
+            assert result is True

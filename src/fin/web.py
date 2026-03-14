@@ -11,11 +11,14 @@ from pathlib import Path
 from typing import Generator
 
 import uvicorn
-from fastapi import Depends, FastAPI, Query, Request
+from fastapi import APIRouter, Depends, FastAPI, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from . import db as dbmod
 from . import dates as dates_mod
@@ -55,7 +58,7 @@ from .projections import (
 )
 from .cache import get_cache_stats, invalidate_pattern_cache, invalidate_report_cache
 from .reporting_models import SpendingBucket, TransactionType
-from .security import verify_auth_token
+from .security import verify_auth_token, get_signed_session_token
 from .close_books import (
     close_period,
     get_closed_period,
@@ -198,19 +201,33 @@ def parse_account_filter(accounts: str | None) -> tuple[list[str] | None, bool]:
 
 app = FastAPI()
 
+# ---------------------------------------------------------------------------
+# Rate limiting (Item 4)
+# ---------------------------------------------------------------------------
+import os as _os
+_rate_limit_auth = _os.getenv("FIN_RATE_LIMIT_AUTH", "10/minute")
+_rate_limit_api = _os.getenv("FIN_RATE_LIMIT_API", "200/minute")
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 # Setup Jinja2 templates
 templates_dir = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(templates_dir))
 
-# Add API token and CSRF token to template globals for frontend auth
+# CSRF token and auth-disabled flag for template conditionals
 from .security import get_api_token, get_csrf_token
 
 # Ensure the session token is generated on startup so it's available for all requests
 _startup_token = get_api_token()
 
-# Register token getters as callable globals
-templates.env.globals["api_token"] = get_api_token
+# Register CSRF token getter as callable global
+# NOTE: api_token is intentionally NOT injected into templates (Item 1 — HttpOnly cookie).
+# The read-only mode check uses whether auth is disabled, not the raw token value.
 templates.env.globals["csrf_token"] = get_csrf_token
+# Provide a callable that tells the template if auth is active (for UI state only)
+templates.env.globals["auth_enabled"] = lambda: get_api_token() is not None
 
 # Inject package version
 from importlib.metadata import version as _pkg_version, PackageNotFoundError
@@ -286,15 +303,81 @@ async def add_security_headers(request, call_next):
 
 
 # ---------------------------------------------------------------------------
+# Security: Auth required on ALL /api/* endpoints (Item 2)
+# ---------------------------------------------------------------------------
+@app.middleware("http")
+async def require_api_auth(request: Request, call_next):
+    """
+    Require authentication on every /api/* path.
+
+    Explicit public exceptions (no auth required):
+    - /auth/session  (the login endpoint itself)
+    - /static/*      (served by StaticFiles — never reaches here, but guard anyway)
+
+    Auth is checked by inspecting the Authorization header or fin_session cookie,
+    matching the logic in verify_auth_token. We replicate it here in middleware form
+    so we don't have to add Depends(verify_auth_token) to every single GET route.
+    """
+    path = request.url.path
+    if not path.startswith("/api/"):
+        return await call_next(request)
+
+    from .security import get_api_token as _get_token, _verify_token_value
+    from fastapi import HTTPException as _HTTPException
+    from starlette.responses import JSONResponse as _JSONResp
+
+    required = _get_token()
+    if required is None:
+        # Auth disabled — permitted only on loopback (startup_security_check enforces this)
+        return await call_next(request)
+
+    # Check Authorization: Bearer header
+    authorization = request.headers.get("authorization", "")
+    if authorization:
+        parts = authorization.split(" ", 1)
+        if len(parts) == 2 and parts[0].lower() == "bearer":
+            try:
+                _verify_token_value(parts[1])
+                return await call_next(request)
+            except _HTTPException as exc:
+                return _JSONResp(status_code=exc.status_code, content={"detail": exc.detail})
+        return _JSONResp(
+            status_code=401,
+            content={"detail": "Invalid Authorization header format."},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Check fin_session cookie
+    fin_session = request.cookies.get("fin_session")
+    if fin_session:
+        try:
+            _verify_token_value(fin_session)
+            return await call_next(request)
+        except _HTTPException as exc:
+            return _JSONResp(status_code=exc.status_code, content={"detail": exc.detail})
+
+    # No credentials provided
+    return _JSONResp(
+        status_code=401,
+        content={"detail": "Authentication required for API access."},
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Security: CSRF protection for mutation endpoints
 # ---------------------------------------------------------------------------
 @app.middleware("http")
 async def verify_csrf(request, call_next):
     if request.method in ("POST", "PUT", "DELETE", "PATCH"):
+        # Skip CSRF check for the /auth/session endpoint (no session exists yet)
+        if request.url.path == "/auth/session":
+            return await call_next(request)
         csrf_header = request.headers.get("x-csrf-token", "")
         expected = get_csrf_token()
         if not csrf_header or not secrets.compare_digest(csrf_header, expected):
-            # Allow if auth is disabled entirely
+            # Allow only if auth is fully disabled (loopback-only — startup_security_check
+            # already hard-blocked the auth_disabled + non-loopback combination)
             if not get_api_token():
                 return await call_next(request)
             from starlette.responses import JSONResponse as _JSONResp
@@ -405,8 +488,67 @@ def _period_type_from_str(s: str) -> TimePeriod:
 
 
 # ---------------------------------------------------------------------------
+# Auth session model
+# ---------------------------------------------------------------------------
+class SessionRequest(BaseModel):
+    token: str
+
+
+# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
+
+@app.post("/auth/session")
+@limiter.limit(_rate_limit_auth)
+def create_session(req: SessionRequest, request: Request, response: Response):
+    """
+    Establish a browser session by validating the API token and setting an HttpOnly cookie.
+
+    This endpoint is intentionally public (no auth dependency) — it IS the login endpoint.
+    Rate-limited to prevent brute-force.
+    """
+    import os as _os
+    from .security import _verify_token_value, get_api_token as _get_token
+    from fastapi import HTTPException as _HTTPException
+
+    required = _get_token()
+    if required is None:
+        # Auth disabled — issue a session cookie with a sentinel value so the
+        # browser auth prompt can be suppressed.
+        resp = JSONResponse(content={"status": "ok"})
+        resp.set_cookie(
+            key="fin_session",
+            value="auth_disabled",
+            httponly=True,
+            secure=False,  # No TLS when auth disabled (loopback only by startup check)
+            samesite="strict",
+            max_age=3600 * 8,
+            path="/",
+        )
+        return resp
+
+    try:
+        _verify_token_value(req.token)
+    except _HTTPException:
+        raise _HTTPException(status_code=401, detail="Invalid token")
+
+    # Determine if we're running over TLS (controls cookie Secure flag)
+    is_https = request.url.scheme == "https"
+
+    resp = JSONResponse(content={"status": "ok"})
+    resp.set_cookie(
+        key="fin_session",
+        value=req.token,
+        httponly=True,
+        secure=is_https,
+        samesite="strict",
+        max_age=3600 * 8,  # 8 hours
+        path="/",
+    )
+    return resp
+
+
 @app.get("/")
 def home():
     return RedirectResponse(url="/dashboard", status_code=302)
@@ -913,6 +1055,8 @@ def dashboard(
         "integrity_data": integrity_data,
         "top_movers": top_movers,
         "avg_income_cents": avg_income_cents,
+        # Item 8: HTTP banner
+        "is_http": request.url.scheme == "http",
     })
 
 
@@ -1064,7 +1208,9 @@ def _account_names(conn) -> dict[str, str]:
 
 
 @app.get("/api/drilldown")
+@limiter.limit("60/minute")
 def drilldown(
+    request: Request,
     scope: str = Query(..., description="Scope: income, spend, recurring, discretionary, net, category:<id>, credit_other, unmatched_transfers"),
     start_date: str = Query(..., description="Period start date (YYYY-MM-DD)"),
     end_date: str = Query(..., description="Period end date (YYYY-MM-DD, exclusive)"),
@@ -1472,7 +1618,9 @@ def list_accounts(conn: sqlite3.Connection = Depends(get_db)):
 
 
 @app.get("/api/search")
+@limiter.limit("60/minute")
 def search_transactions(
+    request: Request,
     q: str = Query(..., description="Search query"),
     accounts: str | None = Query(None, description="Comma-separated account IDs for primary results"),
     days: int = Query(365, ge=1, le=3650, description="Days to search back"),
@@ -2223,7 +2371,8 @@ def export_summary(
 # Sync API
 # ---------------------------------------------------------------------------
 @app.post("/api/sync")
-def api_sync(_auth: bool = Depends(verify_auth_token)):
+@limiter.limit("10/minute")
+def api_sync(request: Request, _auth: bool = Depends(verify_auth_token)):
     """
     Sync all available data from SimpleFIN.
 
