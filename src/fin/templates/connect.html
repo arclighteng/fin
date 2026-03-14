@@ -1,0 +1,1003 @@
+{% extends "base.html" %}
+
+{% block title %}Connect Your Bank - fin{% endblock %}
+
+{% block content %}
+<style>
+    .connect-page-header {
+        margin-bottom: 28px;
+    }
+
+    .connect-page-header h1 {
+        font-size: 22px;
+        font-weight: 600;
+        margin-bottom: 6px;
+    }
+
+    .connect-page-header p {
+        color: var(--text-secondary);
+        font-size: 14px;
+    }
+
+    .connect-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 24px;
+        align-items: start;
+    }
+
+    @media (max-width: 768px) {
+        .connect-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    .connect-card {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: var(--shadow-sm);
+    }
+
+    .connect-card-header {
+        padding: 20px 20px 16px;
+        border-bottom: 1px solid var(--border);
+    }
+
+    .connect-card-header h2 {
+        font-size: 16px;
+        font-weight: 600;
+        margin-bottom: 4px;
+    }
+
+    .connect-card-header p {
+        font-size: 13px;
+        color: var(--text-secondary);
+    }
+
+    .connect-card-body {
+        padding: 20px;
+    }
+
+    /* Drop zone */
+    .drop-zone {
+        border: 2px dashed var(--border);
+        border-radius: 8px;
+        padding: 40px 24px;
+        text-align: center;
+        cursor: pointer;
+        transition: all 0.2s;
+        position: relative;
+        background: var(--bg-tertiary);
+    }
+
+    .drop-zone:hover,
+    .drop-zone.drag-over {
+        border-color: var(--accent-blue);
+        background: rgba(37, 99, 235, 0.04);
+    }
+
+    [data-theme="dark"] .drop-zone:hover,
+    [data-theme="dark"] .drop-zone.drag-over {
+        background: rgba(88, 166, 255, 0.06);
+    }
+
+    .drop-zone-icon {
+        font-size: 36px;
+        margin-bottom: 12px;
+        display: block;
+    }
+
+    .drop-zone-label {
+        font-size: 14px;
+        font-weight: 500;
+        color: var(--text-primary);
+        margin-bottom: 4px;
+    }
+
+    .drop-zone-sub {
+        font-size: 12px;
+        color: var(--text-muted);
+    }
+
+    .drop-zone input[type="file"] {
+        position: absolute;
+        inset: 0;
+        opacity: 0;
+        cursor: pointer;
+        width: 100%;
+        height: 100%;
+    }
+
+    /* Preview card */
+    .csv-preview-card {
+        display: none;
+        margin-top: 16px;
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+    }
+
+    .csv-preview-card.visible {
+        display: block;
+    }
+
+    .csv-preview-header {
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+    }
+
+    .csv-preview-summary {
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--text-primary);
+    }
+
+    .csv-preview-bank {
+        font-size: 11px;
+        background: rgba(37, 99, 235, 0.12);
+        color: var(--accent-blue);
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-weight: 600;
+    }
+
+    .csv-preview-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+    }
+
+    .csv-preview-table th {
+        text-align: left;
+        padding: 8px 12px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+        color: var(--text-muted);
+        background: var(--bg-tertiary);
+        border-bottom: 1px solid var(--border);
+    }
+
+    .csv-preview-table td {
+        padding: 7px 12px;
+        border-bottom: 1px solid var(--border);
+        color: var(--text-secondary);
+    }
+
+    .csv-preview-table tr:last-child td {
+        border-bottom: none;
+    }
+
+    .csv-preview-table .amount-pos { color: var(--accent-green); }
+    .csv-preview-table .amount-neg { color: var(--accent-red); }
+
+    .csv-preview-actions {
+        padding: 12px 16px;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        border-top: 1px solid var(--border);
+    }
+
+    /* Column mapping UI (shown when bank is not detected) */
+    .col-mapping-form {
+        display: none;
+        margin-top: 16px;
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 16px;
+    }
+
+    .col-mapping-form.visible {
+        display: block;
+    }
+
+    .col-mapping-form p {
+        font-size: 13px;
+        color: var(--text-secondary);
+        margin-bottom: 12px;
+    }
+
+    .col-mapping-row {
+        display: grid;
+        grid-template-columns: 120px 1fr;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 8px;
+    }
+
+    .col-mapping-row label {
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--text-primary);
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+    }
+
+    .col-mapping-row select {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border);
+        color: var(--text-primary);
+        border-radius: 5px;
+        padding: 5px 8px;
+        font-size: 13px;
+        width: 100%;
+    }
+
+    /* Bank instructions accordion */
+    .bank-instructions {
+        margin-top: 20px;
+        border-top: 1px solid var(--border);
+        padding-top: 16px;
+    }
+
+    .bank-instructions-label {
+        font-size: 12px;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 8px;
+        font-weight: 500;
+    }
+
+    .bank-accordion-item {
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        margin-bottom: 6px;
+        overflow: hidden;
+    }
+
+    .bank-accordion-trigger {
+        width: 100%;
+        text-align: left;
+        background: none;
+        border: none;
+        padding: 10px 14px;
+        cursor: pointer;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--text-primary);
+        transition: background 0.15s;
+    }
+
+    .bank-accordion-trigger:hover {
+        background: var(--bg-hover);
+    }
+
+    .bank-accordion-chevron {
+        font-size: 10px;
+        color: var(--text-muted);
+        transition: transform 0.2s;
+    }
+
+    .bank-accordion-item.open .bank-accordion-chevron {
+        transform: rotate(180deg);
+    }
+
+    .bank-accordion-body {
+        display: none;
+        padding: 10px 14px 12px;
+        font-size: 12px;
+        color: var(--text-secondary);
+        border-top: 1px solid var(--border);
+        line-height: 1.7;
+    }
+
+    .bank-accordion-item.open .bank-accordion-body {
+        display: block;
+    }
+
+    .bank-accordion-body ol {
+        margin-left: 16px;
+        margin-top: 4px;
+    }
+
+    /* SimpleFIN section */
+    .simplefin-steps {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        margin-bottom: 20px;
+    }
+
+    .simplefin-step {
+        display: flex;
+        gap: 14px;
+        align-items: flex-start;
+    }
+
+    .simplefin-step-number {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background: var(--accent-blue);
+        color: #fff;
+        font-size: 13px;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        margin-top: 1px;
+    }
+
+    .simplefin-step-content {
+        flex: 1;
+    }
+
+    .simplefin-step-content strong {
+        display: block;
+        font-size: 13px;
+        margin-bottom: 2px;
+        color: var(--text-primary);
+    }
+
+    .simplefin-step-content span {
+        font-size: 12px;
+        color: var(--text-secondary);
+    }
+
+    .simplefin-token-area {
+        margin-top: 16px;
+    }
+
+    .simplefin-token-area label {
+        display: block;
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--text-secondary);
+        margin-bottom: 6px;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+    }
+
+    .simplefin-token-input {
+        width: 100%;
+        background: var(--bg-primary);
+        border: 1px solid var(--border);
+        color: var(--text-primary);
+        border-radius: 6px;
+        padding: 8px 10px;
+        font-size: 12px;
+        font-family: monospace;
+        resize: vertical;
+        min-height: 60px;
+    }
+
+    .simplefin-token-input:focus {
+        outline: none;
+        border-color: var(--accent-blue);
+    }
+
+    /* Buttons */
+    .btn {
+        display: inline-block;
+        padding: 8px 16px;
+        border-radius: 6px;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        border: none;
+        text-decoration: none;
+        transition: all 0.15s;
+        text-align: center;
+    }
+
+    .btn-primary {
+        background: var(--accent-blue);
+        color: #fff;
+    }
+
+    .btn-primary:hover { opacity: 0.9; }
+
+    .btn-primary:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+    .btn-ghost {
+        background: none;
+        color: var(--text-secondary);
+        border: 1px solid var(--border);
+    }
+
+    .btn-ghost:hover {
+        background: var(--bg-hover);
+        color: var(--text-primary);
+    }
+
+    .btn-success {
+        background: var(--accent-green);
+        color: #fff;
+    }
+
+    .btn-external {
+        background: var(--bg-tertiary);
+        color: var(--text-primary);
+        border: 1px solid var(--border);
+    }
+
+    .btn-external:hover {
+        background: var(--bg-hover);
+    }
+
+    /* Spinner */
+    .spinner {
+        display: inline-block;
+        width: 14px;
+        height: 14px;
+        border: 2px solid currentColor;
+        border-top-color: transparent;
+        border-radius: 50%;
+        animation: spin 0.7s linear infinite;
+        vertical-align: middle;
+        margin-right: 6px;
+    }
+
+    @keyframes spin {
+        from { transform: rotate(0deg); }
+        to   { transform: rotate(360deg); }
+    }
+
+    .import-status-msg {
+        font-size: 13px;
+        color: var(--text-secondary);
+        margin-top: 10px;
+    }
+
+    .import-status-msg.success { color: var(--accent-green); }
+    .import-status-msg.error   { color: var(--accent-red); }
+</style>
+
+<div class="connect-page-header">
+    <h1>Connect Your Bank</h1>
+    <p>Import a CSV file from your bank, or connect automatically via SimpleFIN.</p>
+</div>
+
+<div class="connect-grid">
+
+    <!-- ============================================================
+         LEFT: CSV Import
+    ============================================================ -->
+    <div class="connect-card" id="csvSection">
+        <div class="connect-card-header">
+            <h2>Import a CSV file</h2>
+            <p>Download a transaction export from your bank's website and upload it here.</p>
+        </div>
+        <div class="connect-card-body">
+
+            <!-- Drop zone -->
+            <div class="drop-zone" id="dropZone">
+                <span class="drop-zone-icon">&#128196;</span>
+                <div class="drop-zone-label">Drop your CSV file here</div>
+                <div class="drop-zone-sub">or click to browse</div>
+                <input type="file" accept=".csv,text/csv" id="csvFileInput" />
+            </div>
+
+            <!-- Loading indicator (hidden initially) -->
+            <div id="csvLoading" style="display:none; text-align:center; padding:16px 0; font-size:13px; color:var(--text-muted);">
+                <span class="spinner"></span> Analysing file...
+            </div>
+
+            <!-- Preview card (hidden until file loaded) -->
+            <div class="csv-preview-card" id="csvPreviewCard">
+                <div class="csv-preview-header">
+                    <span class="csv-preview-summary" id="csvPreviewSummary"></span>
+                    <span class="csv-preview-bank" id="csvPreviewBank" style="display:none;"></span>
+                </div>
+                <div id="csvPreviewTableWrap" style="overflow-x:auto;"></div>
+                <div class="csv-preview-actions">
+                    <button class="btn btn-primary" id="csvImportBtn" onclick="confirmCsvImport()">Import transactions</button>
+                    <button class="btn btn-ghost" onclick="resetCsvImport()">Cancel</button>
+                </div>
+            </div>
+
+            <!-- Column mapping form (shown when bank not detected) -->
+            <div class="col-mapping-form" id="colMappingForm">
+                <p>We couldn't detect your bank automatically. Please map the columns below:</p>
+                <div id="colMappingRows"></div>
+                <div style="margin-top:12px;">
+                    <button class="btn btn-primary" onclick="applyColMapping()">Preview with mapping</button>
+                </div>
+            </div>
+
+            <!-- Status message -->
+            <div class="import-status-msg" id="csvStatusMsg" style="display:none;"></div>
+
+            <!-- Per-bank download instructions -->
+            <div class="bank-instructions">
+                <div class="bank-instructions-label">How to download from your bank</div>
+
+                <div class="bank-accordion-item" data-bank="chase">
+                    <button class="bank-accordion-trigger" onclick="toggleAccordion(this)">
+                        Chase
+                        <span class="bank-accordion-chevron">&#9660;</span>
+                    </button>
+                    <div class="bank-accordion-body">
+                        <ol>
+                            <li>Sign in at <strong>chase.com</strong></li>
+                            <li>Go to your checking or credit card account</li>
+                            <li>Click <strong>Download account activity</strong> (top right)</li>
+                            <li>Choose <strong>CSV</strong> as the file type and select your date range</li>
+                            <li>Click <strong>Download</strong> and upload the file above</li>
+                        </ol>
+                    </div>
+                </div>
+
+                <div class="bank-accordion-item" data-bank="bofa">
+                    <button class="bank-accordion-trigger" onclick="toggleAccordion(this)">
+                        Bank of America
+                        <span class="bank-accordion-chevron">&#9660;</span>
+                    </button>
+                    <div class="bank-accordion-body">
+                        <ol>
+                            <li>Sign in at <strong>bankofamerica.com</strong></li>
+                            <li>Select your account and click <strong>Download</strong></li>
+                            <li>Choose <strong>Microsoft Excel format (OFX)</strong> — or <strong>CSV</strong> if available</li>
+                            <li>Select date range and click <strong>Download transactions</strong></li>
+                        </ol>
+                    </div>
+                </div>
+
+                <div class="bank-accordion-item" data-bank="amex">
+                    <button class="bank-accordion-trigger" onclick="toggleAccordion(this)">
+                        American Express
+                        <span class="bank-accordion-chevron">&#9660;</span>
+                    </button>
+                    <div class="bank-accordion-body">
+                        <ol>
+                            <li>Sign in at <strong>americanexpress.com</strong></li>
+                            <li>Go to <strong>Statements &amp; Activity</strong></li>
+                            <li>Click <strong>Download</strong> and choose <strong>CSV</strong></li>
+                            <li>Pick your date range and download the file</li>
+                        </ol>
+                    </div>
+                </div>
+
+                <div class="bank-accordion-item" data-bank="wellsfargo">
+                    <button class="bank-accordion-trigger" onclick="toggleAccordion(this)">
+                        Wells Fargo
+                        <span class="bank-accordion-chevron">&#9660;</span>
+                    </button>
+                    <div class="bank-accordion-body">
+                        <ol>
+                            <li>Sign in at <strong>wellsfargo.com</strong></li>
+                            <li>Select your account and go to <strong>Account Activity</strong></li>
+                            <li>Click <strong>Download Account Activity</strong></li>
+                            <li>Choose <strong>Comma-Separated Values (CSV)</strong> and your date range</li>
+                            <li>Click <strong>Download</strong></li>
+                        </ol>
+                    </div>
+                </div>
+
+                <div class="bank-accordion-item" data-bank="capitalone">
+                    <button class="bank-accordion-trigger" onclick="toggleAccordion(this)">
+                        Capital One
+                        <span class="bank-accordion-chevron">&#9660;</span>
+                    </button>
+                    <div class="bank-accordion-body">
+                        <ol>
+                            <li>Sign in at <strong>capitalone.com</strong></li>
+                            <li>Select your account</li>
+                            <li>Click <strong>Download transactions</strong></li>
+                            <li>Choose <strong>CSV</strong> and your date range</li>
+                            <li>Click <strong>Download</strong></li>
+                        </ol>
+                    </div>
+                </div>
+
+            </div><!-- /.bank-instructions -->
+
+        </div>
+    </div>
+
+    <!-- ============================================================
+         RIGHT: SimpleFIN
+    ============================================================ -->
+    <div class="connect-card" id="simplefinSection">
+        <div class="connect-card-header">
+            <h2>Connect via SimpleFIN</h2>
+            <p>Link your bank accounts automatically for ongoing sync. Works with most US banks.</p>
+        </div>
+        <div class="connect-card-body">
+
+            <div class="simplefin-steps">
+                <div class="simplefin-step">
+                    <div class="simplefin-step-number">1</div>
+                    <div class="simplefin-step-content">
+                        <strong>Create a SimpleFIN token</strong>
+                        <span>Visit SimpleFIN Bridge and connect your bank accounts there. You'll receive a token.</span>
+                    </div>
+                </div>
+                <div class="simplefin-step">
+                    <div class="simplefin-step-number">2</div>
+                    <div class="simplefin-step-content">
+                        <strong>Copy your setup token</strong>
+                        <span>After connecting, SimpleFIN gives you a one-time setup token — copy it to your clipboard.</span>
+                    </div>
+                </div>
+                <div class="simplefin-step">
+                    <div class="simplefin-step-number">3</div>
+                    <div class="simplefin-step-content">
+                        <strong>Paste it below &amp; sync</strong>
+                        <span>Paste the token here, then use the Sync button on the dashboard to pull your transactions.</span>
+                    </div>
+                </div>
+            </div>
+
+            <a href="https://beta-bridge.simplefin.org/" target="_blank" rel="noopener noreferrer" class="btn btn-external" style="margin-bottom:20px; display:inline-block;">
+                Go to SimpleFIN &rarr;
+            </a>
+
+            <div class="simplefin-token-area" id="simplefinTokenArea">
+                <label for="simplefinTokenInput">Paste your SimpleFIN setup token</label>
+                <textarea
+                    class="simplefin-token-input"
+                    id="simplefinTokenInput"
+                    placeholder="https://..."
+                    rows="3"
+                ></textarea>
+                <div style="margin-top:10px; display:flex; gap:8px;">
+                    <button class="btn btn-primary" onclick="saveSimplefinToken()" id="simplefinSaveBtn">Save Token</button>
+                </div>
+                <div class="import-status-msg" id="simplefinStatusMsg" style="display:none;"></div>
+            </div>
+
+        </div>
+    </div>
+
+</div><!-- /.connect-grid -->
+
+<script>
+// ============================================================
+// CSV Import Logic
+// ============================================================
+
+let _csvFile = null;
+let _csvPreviewData = null;
+
+const dropZone   = document.getElementById('dropZone');
+const fileInput  = document.getElementById('csvFileInput');
+const loadingEl  = document.getElementById('csvLoading');
+const previewCard = document.getElementById('csvPreviewCard');
+const mappingForm = document.getElementById('colMappingForm');
+const statusMsg   = document.getElementById('csvStatusMsg');
+const importBtn   = document.getElementById('csvImportBtn');
+
+// Drag-and-drop handlers
+dropZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    dropZone.classList.add('drag-over');
+});
+
+dropZone.addEventListener('dragleave', () => {
+    dropZone.classList.remove('drag-over');
+});
+
+dropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    const files = e.dataTransfer.files;
+    if (files.length > 0) handleFileSelected(files[0]);
+});
+
+fileInput.addEventListener('change', () => {
+    if (fileInput.files.length > 0) handleFileSelected(fileInput.files[0]);
+});
+
+function handleFileSelected(file) {
+    _csvFile = file;
+    showCsvLoading(true);
+    hidePreview();
+    hideMappingForm();
+    clearStatus();
+    postPreview(file);
+}
+
+function showCsvLoading(show) {
+    loadingEl.style.display = show ? 'block' : 'none';
+    dropZone.style.display  = show ? 'none'  : 'flex';
+}
+
+function hidePreview() {
+    previewCard.classList.remove('visible');
+}
+
+function hideMappingForm() {
+    mappingForm.classList.remove('visible');
+}
+
+function clearStatus() {
+    statusMsg.style.display = 'none';
+    statusMsg.textContent = '';
+    statusMsg.className = 'import-status-msg';
+}
+
+function showStatus(msg, type) {
+    statusMsg.textContent = msg;
+    statusMsg.className = 'import-status-msg ' + (type || '');
+    statusMsg.style.display = 'block';
+}
+
+async function postPreview(file) {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+        const resp = await fetch('/api/import/csv/preview', {
+            method: 'POST',
+            body: formData,
+            credentials: 'include',
+        });
+
+        const data = await resp.json();
+
+        if (!resp.ok) {
+            showCsvLoading(false);
+            showStatus((data.detail || 'Preview failed.'), 'error');
+            return;
+        }
+
+        _csvPreviewData = data;
+        showCsvLoading(false);
+        renderPreview(data);
+
+    } catch (err) {
+        showCsvLoading(false);
+        showStatus('Network error — could not analyse file.', 'error');
+    }
+}
+
+function renderPreview(data) {
+    // Summary line
+    const bankName = data.bank_display_name || (data.detected_bank ? data.detected_bank : null);
+    const dateRange = data.date_range && data.date_range.from
+        ? formatDateRange(data.date_range.from, data.date_range.to)
+        : 'unknown date range';
+
+    const summaryEl = document.getElementById('csvPreviewSummary');
+    summaryEl.textContent = `${data.row_count} transaction${data.row_count !== 1 ? 's' : ''}` +
+        (bankName ? ` from ${bankName}` : '') +
+        `, ${dateRange}`;
+
+    // Bank badge
+    const bankBadge = document.getElementById('csvPreviewBank');
+    if (bankName) {
+        bankBadge.textContent = bankName;
+        bankBadge.style.display = 'inline';
+    } else {
+        bankBadge.style.display = 'none';
+    }
+
+    // Preview table
+    const wrap = document.getElementById('csvPreviewTableWrap');
+    if (data.preview && data.preview.length > 0) {
+        let html = '<table class="csv-preview-table"><thead><tr><th>Date</th><th>Amount</th><th>Description</th></tr></thead><tbody>';
+        for (const row of data.preview) {
+            const amtCls = row.amount >= 0 ? 'amount-pos' : 'amount-neg';
+            const amtFmt = (row.amount >= 0 ? '+' : '') + '$' + Math.abs(row.amount).toFixed(2);
+            html += `<tr><td>${escHtml(row.date)}</td><td class="${amtCls}">${escHtml(amtFmt)}</td><td>${escHtml(row.description)}</td></tr>`;
+        }
+        html += '</tbody></table>';
+        wrap.innerHTML = html;
+    } else {
+        wrap.innerHTML = '<div style="padding:12px 16px;font-size:12px;color:var(--text-muted);">No rows to preview.</div>';
+    }
+
+    previewCard.classList.add('visible');
+
+    // If no bank detected, show column mapping form
+    if (!data.detected_bank) {
+        renderMappingForm(data.headers, data.column_mapping);
+    }
+}
+
+function renderMappingForm(headers, existingMapping) {
+    const roles = ['date', 'amount', 'description'];
+    const container = document.getElementById('colMappingRows');
+    let html = '';
+    for (const role of roles) {
+        html += `<div class="col-mapping-row">
+            <label>${role}</label>
+            <select id="mapCol_${role}">
+                <option value="">-- select column --</option>
+                ${headers.map(h => `<option value="${escHtml(h)}" ${(existingMapping && existingMapping[role] === h) ? 'selected' : ''}>${escHtml(h)}</option>`).join('')}
+            </select>
+        </div>`;
+    }
+    container.innerHTML = html;
+    mappingForm.classList.add('visible');
+}
+
+function applyColMapping() {
+    if (!_csvFile || !_csvPreviewData) return;
+    const dateCol = document.getElementById('mapCol_date').value;
+    const amountCol = document.getElementById('mapCol_amount').value;
+    const descCol = document.getElementById('mapCol_description').value;
+    if (!dateCol || !amountCol || !descCol) {
+        showStatus('Please select all three columns before proceeding.', 'error');
+        return;
+    }
+    // Store mapping onto preview data so confirm can use it
+    _csvPreviewData._manualMapping = { date: dateCol, amount: amountCol, description: descCol };
+    hideMappingForm();
+    // Re-fetch preview with explicit mapping (for simplicity, just enable the Import button)
+    showStatus('Column mapping applied. Click "Import transactions" to continue.', '');
+}
+
+async function confirmCsvImport() {
+    if (!_csvFile) return;
+
+    importBtn.disabled = true;
+    importBtn.innerHTML = '<span class="spinner"></span> Importing...';
+    clearStatus();
+
+    const formData = new FormData();
+    formData.append('file', _csvFile);
+
+    // Add column params — use manual mapping if available, else from preview
+    const mapping = (_csvPreviewData && _csvPreviewData._manualMapping)
+        ? _csvPreviewData._manualMapping
+        : (_csvPreviewData && _csvPreviewData.column_mapping ? _csvPreviewData.column_mapping : {});
+
+    const params = new URLSearchParams();
+    if (mapping.date)        params.set('date_col', mapping.date);
+    if (mapping.amount)      params.set('amount_col', mapping.amount);
+    if (mapping.description) params.set('description_col', mapping.description);
+
+    try {
+        const resp = await fetch('/api/import/csv/confirm?' + params.toString(), {
+            method: 'POST',
+            body: formData,
+            credentials: 'include',
+        });
+
+        const data = await resp.json();
+
+        if (!resp.ok) {
+            importBtn.disabled = false;
+            importBtn.textContent = 'Import transactions';
+            showStatus((data.detail || 'Import failed.'), 'error');
+            return;
+        }
+
+        // Success
+        importBtn.innerHTML = '&#10003; Imported!';
+        importBtn.classList.add('btn-success');
+        showStatus(`Imported ${data.imported} transaction${data.imported !== 1 ? 's' : ''}` +
+            (data.skipped_duplicates > 0 ? `, skipped ${data.skipped_duplicates} duplicate${data.skipped_duplicates !== 1 ? 's' : ''}` : '') +
+            '.', 'success');
+
+        // Redirect to dashboard after brief delay
+        setTimeout(() => { window.location.href = '/dashboard'; }, 1800);
+
+    } catch (err) {
+        importBtn.disabled = false;
+        importBtn.textContent = 'Import transactions';
+        showStatus('Network error — import failed.', 'error');
+    }
+}
+
+function resetCsvImport() {
+    _csvFile = null;
+    _csvPreviewData = null;
+    fileInput.value = '';
+    hidePreview();
+    hideMappingForm();
+    clearStatus();
+    dropZone.style.display = 'flex';
+    importBtn.disabled = false;
+    importBtn.textContent = 'Import transactions';
+    importBtn.classList.remove('btn-success');
+}
+
+// ============================================================
+// Bank accordion
+// ============================================================
+
+function toggleAccordion(trigger) {
+    const item = trigger.closest('.bank-accordion-item');
+    const isOpen = item.classList.contains('open');
+    // Close all
+    document.querySelectorAll('.bank-accordion-item.open').forEach(el => el.classList.remove('open'));
+    // Toggle clicked
+    if (!isOpen) item.classList.add('open');
+}
+
+// Auto-open accordion anchor from URL (#chase etc.)
+document.addEventListener('DOMContentLoaded', () => {
+    const hash = window.location.hash.replace('#', '');
+    if (hash) {
+        const item = document.querySelector(`.bank-accordion-item[data-bank="${hash}"]`);
+        if (item) item.classList.add('open');
+        // Also scroll SimpleFIN section into view if hash is simplefin
+        if (hash === 'simplefin') {
+            document.getElementById('simplefinSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    }
+});
+
+// ============================================================
+// SimpleFIN token
+// ============================================================
+
+async function saveSimplefinToken() {
+    const token = document.getElementById('simplefinTokenInput').value.trim();
+    const btn = document.getElementById('simplefinSaveBtn');
+    const msgEl = document.getElementById('simplefinStatusMsg');
+
+    if (!token) {
+        msgEl.textContent = 'Please paste your SimpleFIN setup token.';
+        msgEl.className = 'import-status-msg error';
+        msgEl.style.display = 'block';
+        return;
+    }
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Saving...';
+    msgEl.style.display = 'none';
+
+    try {
+        const resp = await fetch('/api/simplefin-token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ setup_token: token }),
+        });
+
+        const data = await resp.json();
+
+        if (!resp.ok) {
+            btn.disabled = false;
+            btn.textContent = 'Save Token';
+            msgEl.textContent = data.detail || 'Failed to save token.';
+            msgEl.className = 'import-status-msg error';
+            msgEl.style.display = 'block';
+            return;
+        }
+
+        btn.textContent = 'Saved!';
+        msgEl.textContent = 'Token saved. Use the Sync button on the dashboard to import your transactions.';
+        msgEl.className = 'import-status-msg success';
+        msgEl.style.display = 'block';
+
+    } catch (err) {
+        btn.disabled = false;
+        btn.textContent = 'Save Token';
+        msgEl.textContent = 'Network error — could not save token.';
+        msgEl.className = 'import-status-msg error';
+        msgEl.style.display = 'block';
+    }
+}
+
+// ============================================================
+// Helpers
+// ============================================================
+
+function escHtml(str) {
+    if (str == null) return '';
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function formatDateRange(from, to) {
+    const fmtDate = d => {
+        const parts = d.split('-');
+        const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        return months[parseInt(parts[1], 10) - 1] + ' ' + parseInt(parts[2], 10) + ', ' + parts[0];
+    };
+    if (from === to) return fmtDate(from);
+    return fmtDate(from) + ' \u2013 ' + fmtDate(to);
+}
+</script>
+{% endblock %}

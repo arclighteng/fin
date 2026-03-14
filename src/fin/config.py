@@ -25,7 +25,8 @@ def _get_default_db_path() -> str:
 
     Priority:
     1. Docker environment: /app/data/fin.db (if running inside Docker container)
-    2. Local development: data/fin.db relative to current working directory
+    2. Windows: %APPDATA%\\fin\\fin.db (user-scoped, persists across CWD changes)
+    3. macOS / Linux: $XDG_DATA_HOME/fin/fin.db (or ~/.local/share/fin/fin.db)
     """
     # Check if we're in a Docker container by looking for /.dockerenv
     # or if cwd is /app (typical Docker workdir)
@@ -33,8 +34,48 @@ def _get_default_db_path() -> str:
     if in_docker:
         return "/app/data/fin.db"
 
-    # Local development: use data/fin.db in current directory
-    return "data/fin.db"
+    # On Windows, default to %APPDATA%\fin\fin.db (user-scoped, persists across CWD changes)
+    if os.name == "nt":
+        appdata = os.environ.get("APPDATA") or os.path.expanduser("~")
+        return str(Path(appdata) / "fin" / "fin.db")
+
+    # macOS / Linux: XDG or home-relative
+    xdg = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    return str(Path(xdg) / "fin" / "fin.db")
+
+
+def ensure_data_dir(db_path: str) -> None:
+    """
+    Create the parent directory of db_path and harden its permissions.
+
+    Directory creation is mandatory; ACL/chmod hardening is best-effort and
+    will never raise — a failure here must not block application startup.
+    """
+    import subprocess
+    import getpass
+
+    dir_path = Path(db_path).parent
+    dir_path.mkdir(parents=True, exist_ok=True)
+
+    if os.name == "nt":
+        # Restrict the directory to the current user only via icacls.
+        # /inheritance:r  — remove inherited ACEs
+        # /grant:r        — replace (not add) the grant for this user
+        # (OI)(CI)F       — object inherit, container inherit, full control
+        username = getpass.getuser()
+        try:
+            subprocess.run(
+                ["icacls", str(dir_path), "/inheritance:r", "/grant:r", f"{username}:(OI)(CI)F"],
+                check=True,
+                capture_output=True,
+            )
+        except Exception:
+            pass  # ACL hardening is best-effort; don't block startup if it fails
+    else:
+        try:
+            dir_path.chmod(0o700)
+        except Exception:
+            pass  # chmod is best-effort on non-writable or already-correct dirs
 
 
 def _get_simplefin_url() -> str:

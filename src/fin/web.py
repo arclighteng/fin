@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Generator
 
 import uvicorn
-from fastapi import APIRouter, Depends, FastAPI, Query, Request, Response
+from fastapi import APIRouter, Depends, FastAPI, File, Query, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -240,6 +240,11 @@ except PackageNotFoundError:
 static_dir = Path(__file__).parent / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------
@@ -579,6 +584,11 @@ def dashboard(
         """
     ).fetchall()
 
+    # Detect demo state: zero transactions means no real data has been imported.
+    # Must be computed before the show_no_data early return so both paths have it.
+    txn_count = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
+    is_demo = txn_count == 0
+
     # If no data mode, return empty state
     if show_no_data:
         return templates.TemplateResponse("dashboard_v2.html", {
@@ -606,6 +616,7 @@ def dashboard(
             "today": dates_mod.today(),
             "timedelta": timedelta,
             "closed_period": None,
+            "is_demo": is_demo,
         })
 
     # Initialize ReportService - THE canonical source of truth
@@ -1057,6 +1068,8 @@ def dashboard(
         "avg_income_cents": avg_income_cents,
         # Item 8: HTTP banner
         "is_http": request.url.scheme == "http",
+        # Demo mode: shown when no real transactions exist
+        "is_demo": is_demo,
     })
 
 
@@ -3705,6 +3718,147 @@ def api_statement_match(
     )
 
     return JSONResponse(content={"status": "ok"})
+
+
+# ---------------------------------------------------------------------------
+# Connect / onboarding page
+# ---------------------------------------------------------------------------
+@app.get("/connect", response_class=HTMLResponse)
+def connect_page(request: Request):
+    """
+    Onboarding page: CSV import and SimpleFIN connection.
+    Public — no auth required (same as /dashboard in demo mode).
+    """
+    return templates.TemplateResponse("connect.html", {"request": request})
+
+
+# ---------------------------------------------------------------------------
+# CSV Import API
+# ---------------------------------------------------------------------------
+
+class CsvConfirmRequest(BaseModel):
+    account_id: str = "csv-import"
+    date_col: str = "date"
+    amount_col: str = "amount"
+    description_col: str = "description"
+    merchant_col: str | None = None
+
+
+_CSV_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
+
+
+@app.post("/api/import/csv/preview")
+async def api_csv_preview(
+    request: Request,
+    file: UploadFile = File(...),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """
+    Accept a CSV file upload, auto-detect bank format, return a preview.
+    Auth is enforced by the require_api_auth middleware (all /api/* routes).
+    """
+    from .csv_import import preview_csv
+
+    # Size guard — read up to limit + 1 byte to detect oversize
+    content_bytes = await file.read(_CSV_MAX_BYTES + 1)
+    if len(content_bytes) > _CSV_MAX_BYTES:
+        return JSONResponse(
+            status_code=413,
+            content={"detail": "File too large. Maximum size is 5 MB."},
+        )
+
+    try:
+        csv_content = content_bytes.decode("utf-8", errors="replace")
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"detail": f"Cannot decode file: {exc}"})
+
+    result = preview_csv(csv_content)
+
+    if "error" in result:
+        return JSONResponse(status_code=422, content={"detail": result["error"]})
+
+    return JSONResponse(content=result)
+
+
+@app.post("/api/import/csv/confirm")
+async def api_csv_confirm(
+    request: Request,
+    file: UploadFile = File(...),
+    account_id: str = "csv-import",
+    date_col: str = "date",
+    amount_col: str = "amount",
+    description_col: str = "description",
+    merchant_col: str | None = None,
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """
+    Accept a CSV file + confirmed column mapping, run the full import.
+    Auth is enforced by the require_api_auth middleware (all /api/* routes).
+    """
+    from .csv_import import import_csv_file
+
+    content_bytes = await file.read(_CSV_MAX_BYTES + 1)
+    if len(content_bytes) > _CSV_MAX_BYTES:
+        return JSONResponse(
+            status_code=413,
+            content={"detail": "File too large. Maximum size is 5 MB."},
+        )
+
+    try:
+        csv_content = content_bytes.decode("utf-8", errors="replace")
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"detail": f"Cannot decode file: {exc}"})
+
+    result = import_csv_file(
+        csv_content=csv_content,
+        conn=conn,
+        account_id=account_id,
+        date_col=date_col,
+        amount_col=amount_col,
+        description_col=description_col,
+        merchant_col=merchant_col,
+    )
+
+    return JSONResponse(content={
+        "imported": result["imported"],
+        "skipped_duplicates": result["skipped"],
+        "errors": result["errors"][:10],  # Cap error list for response size
+    })
+
+
+# ---------------------------------------------------------------------------
+# SimpleFIN token claim (Story 5 — wizard handoff)
+# ---------------------------------------------------------------------------
+class SimpleFinTokenRequest(BaseModel):
+    setup_token: str
+
+
+@app.post("/api/simplefin-token")
+async def api_simplefin_token(req: SimpleFinTokenRequest):
+    """
+    Exchange a SimpleFIN setup token for an access URL and save to keyring.
+    Auth is enforced by the require_api_auth middleware (all /api/* routes).
+    """
+    from .simplefin_client import claim_access_url
+    from . import credentials
+
+    token = req.setup_token.strip()
+    if not token:
+        return JSONResponse(status_code=400, content={"detail": "setup_token is required"})
+
+    try:
+        access_url = claim_access_url(token)
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"detail": f"Token claim failed: {exc}"})
+
+    saved = False
+    if credentials.is_keyring_available():
+        try:
+            saved = credentials.set_simplefin_url(access_url)
+        except Exception:
+            pass
+
+    return JSONResponse(content={"status": "ok", "saved_to_keyring": saved})
 
 
 # ---------------------------------------------------------------------------

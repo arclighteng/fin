@@ -241,6 +241,107 @@
             background: rgba(255,255,255,0.15);
         }
 
+        /* Demo data banner */
+        .demo-banner {
+            background: #fef3c7;
+            border-bottom: 1px solid #f59e0b;
+            color: #78350f;
+            padding: 10px 24px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            flex-wrap: wrap;
+            font-size: 13px;
+            font-weight: 500;
+            position: relative;
+        }
+
+        [data-theme="dark"] .demo-banner {
+            background: #451a03;
+            border-bottom-color: #92400e;
+            color: #fde68a;
+        }
+
+        .demo-banner-text {
+            flex: 1 1 auto;
+        }
+
+        .demo-banner-actions {
+            display: flex;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .demo-banner-btn {
+            padding: 5px 14px;
+            border-radius: 5px;
+            font-size: 12px;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.15s;
+            cursor: pointer;
+            border: none;
+            display: inline-block;
+        }
+
+        .demo-banner-btn-primary {
+            background: #92400e;
+            color: #fef3c7;
+        }
+
+        .demo-banner-btn-primary:hover {
+            background: #78350f;
+        }
+
+        [data-theme="dark"] .demo-banner-btn-primary {
+            background: #b45309;
+            color: #fffbeb;
+        }
+
+        [data-theme="dark"] .demo-banner-btn-primary:hover {
+            background: #d97706;
+        }
+
+        .demo-banner-btn-secondary {
+            background: transparent;
+            color: #92400e;
+            border: 1px solid #92400e;
+        }
+
+        .demo-banner-btn-secondary:hover {
+            background: rgba(146,64,14,0.1);
+        }
+
+        [data-theme="dark"] .demo-banner-btn-secondary {
+            color: #fde68a;
+            border-color: #b45309;
+        }
+
+        [data-theme="dark"] .demo-banner-btn-secondary:hover {
+            background: rgba(180,83,9,0.2);
+        }
+
+        .demo-banner-dismiss {
+            background: none;
+            border: none;
+            cursor: pointer;
+            color: #92400e;
+            font-size: 16px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            line-height: 1;
+            flex-shrink: 0;
+            transition: background 0.15s;
+        }
+
+        .demo-banner-dismiss:hover {
+            background: rgba(146,64,14,0.15);
+        }
+
+        [data-theme="dark"] .demo-banner-dismiss {
+            color: #fde68a;
+        }
+
         .theme-toggle {
             background: var(--bg-tertiary);
             border: 1px solid var(--border);
@@ -3059,6 +3160,31 @@
     <div class="read-only-banner">
         <span>&#128274;</span> Auth disabled (FIN_AUTH_DISABLED=1). All changes are permitted without a token.
     </div>
+    {% endif %}
+
+    <!-- Demo data banner: shown when no real transactions exist -->
+    {% if is_demo is defined and is_demo %}
+    <div class="demo-banner" id="demoBanner">
+        <span class="demo-banner-text">You're viewing demo data. Connect your bank to see your real finances.</span>
+        <div class="demo-banner-actions">
+            <a href="/connect" class="demo-banner-btn demo-banner-btn-primary">Import CSV</a>
+            <a href="/connect#simplefin" class="demo-banner-btn demo-banner-btn-secondary">Connect via SimpleFIN</a>
+        </div>
+        <button class="demo-banner-dismiss" onclick="finDismissDemo()" aria-label="Dismiss demo banner">&#10005;</button>
+    </div>
+    <script>
+        (function() {
+            if (localStorage.getItem('fin_demo_dismissed') === '1') {
+                var banner = document.getElementById('demoBanner');
+                if (banner) banner.style.display = 'none';
+            }
+        })();
+        function finDismissDemo() {
+            localStorage.setItem('fin_demo_dismissed', '1');
+            var banner = document.getElementById('demoBanner');
+            if (banner) banner.style.display = 'none';
+        }
+    </script>
     {% endif %}
 
     <div class="container">

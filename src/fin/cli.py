@@ -2423,7 +2423,7 @@ def export_backup(
     if passphrase:
         if env_password:
             # Pass password non-interactively via stdin
-            cmd.extend(["--passphrase"])
+            cmd.extend(["-p"])
             cmd.append(str(db_path))
             console.print(f"[bold]Encrypting database backup (password from FIN_BACKUP_PASSWORD)...[/bold]")
             console.print(f"  Source: {db_path}")
@@ -2571,6 +2571,7 @@ def web(
     port: int = typer.Option(8000, help="Port to serve on."),
     host: str = typer.Option("127.0.0.1", help="Host to bind to. Use 0.0.0.0 for LAN access (security risk)."),
     no_tls: bool = typer.Option(False, "--no-tls", help="Disable HTTPS and serve over plain HTTP."),
+    no_browser: bool = typer.Option(False, "--no-browser", help="Do not open the browser automatically after startup."),
     i_understand_no_fde: bool = typer.Option(
         False,
         "--i-understand-no-fde",
@@ -2602,6 +2603,9 @@ def web(
 
     cfg = load_config()
     db_path = Path(cfg.db_path)
+
+    from .config import ensure_data_dir
+    ensure_data_dir(str(db_path))
 
     # Check if this looks like demo or real data
     if "demo" in str(db_path).lower():
@@ -2699,6 +2703,45 @@ def web(
     display_host = host if is_loopback else "127.0.0.1"
     console.print(f"[dim]Dashboard:[/dim] {scheme}://{display_host}:{port}/dashboard")
     console.print()
+
+    if not no_browser:
+        import threading
+        import time
+        import webbrowser
+        import urllib.request
+        import ssl
+
+        def _open_browser_when_ready(scheme: str, port: int) -> None:
+            health_url = f"{scheme}://127.0.0.1:{port}/health"
+            dashboard_url = f"{scheme}://127.0.0.1:{port}/dashboard"
+
+            # For self-signed certs, disable certificate verification in the poller only.
+            if scheme == "https":
+                ssl_ctx: ssl.SSLContext | None = ssl.create_default_context()
+                ssl_ctx.check_hostname = False
+                ssl_ctx.verify_mode = ssl.CERT_NONE
+            else:
+                ssl_ctx = None
+
+            for _ in range(20):
+                time.sleep(0.5)
+                try:
+                    with urllib.request.urlopen(health_url, context=ssl_ctx, timeout=2) as resp:
+                        if resp.status == 200:
+                            webbrowser.open(dashboard_url)
+                            return
+                except Exception:
+                    pass
+
+            # All 20 attempts exhausted — server did not become ready in time.
+            console.print("[dim]Browser auto-open: server did not respond to /health in time.[/dim]")
+
+        browser_thread = threading.Thread(
+            target=_open_browser_when_ready,
+            args=(scheme, port),
+            daemon=True,
+        )
+        browser_thread.start()
 
     uvicorn.run("fin.web:app", host=host, port=port, reload=False, **ssl_kwargs)
 

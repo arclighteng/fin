@@ -350,10 +350,10 @@ class TestExportBackup:
                         "--output", str(output),
                     ])
         assert result.exit_code == 0
-        # Verify age was called with --passphrase flag
+        # Verify age was called with passphrase flag
         assert mock_run.called
         call_args = mock_run.call_args[0][0]
-        assert "--passphrase" in call_args
+        assert "-p" in call_args
 
     def test_no_flags_no_env_var_no_silent_plaintext(self, db_path):
         """Without a password or --no-encrypt, the command must not silently create plaintext."""

@@ -894,6 +894,12 @@
 }
 </style>
 
+{% if show_no_data %}
+<div class="no-data-state" style="padding: 48px 24px; text-align: center; color: var(--text-secondary);">
+    <p style="font-size: 1.1rem; margin-bottom: 8px;">No accounts selected</p>
+    <p style="font-size: 0.9rem;">Select one or more accounts using the filter above.</p>
+</div>
+{% else %}
 <div class="dashboard">
     <!-- Period Controls -->
     <div class="period-controls-v3">
@@ -1520,4 +1526,5 @@ async function dismissAlert(key, action, index) {
 })();
 </script>
 
+{% endif %}
 {% endblock %}
