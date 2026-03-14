@@ -27,9 +27,11 @@ A local-first personal finance tool. Syncs with your bank accounts via SimpleFIN
 - **Mobile Responsive**: Works on phone, tablet, and desktop
 - **Dark Mode**: Easy on the eyes
 
-## Quick Start
+## Getting Started
 
-### Option 1: Local Python (Recommended for Development)
+> **Two install paths are in progress.** A guided installer (no Python required, wizard-based setup) is under active development. The manual path below is current and stable.
+
+### Manual Install (Python required)
 
 ```bash
 # 1. Create virtual environment
@@ -40,22 +42,35 @@ python -m venv .venv
 # 2. Install
 pip install -e .
 
-# 3. Configure credentials (choose one)
-fin credentials set                    # Recommended: uses system keyring
-# OR: cp .env.example .env && edit .env  # Alternative: environment file
-
-# 4. Set database path (Windows)
-set FIN_DB_PATH=data/fin.db
-
-# 5. Sync your transactions
-fin sync --full  # First time: 120 days of history
-
-# 6. Start the web dashboard
+# 3. Start the web dashboard
 fin web
-# Open http://127.0.0.1:8000/dashboard
+# Browser opens automatically to http://127.0.0.1:8000/dashboard
+# If no data exists, demo data loads with a "Connect your bank" banner
 ```
 
-### Option 2: Docker
+The database is stored automatically at:
+- **Windows**: `%APPDATA%\fin\fin.db`
+- **macOS/Linux**: `~/.local/share/fin/fin.db`
+
+Override with `FIN_DB_PATH` if needed.
+
+### Connecting Your Bank
+
+From the dashboard, click **"Connect your bank"** to open the setup page. Two options:
+
+**Import CSV** (easiest — no account required)
+1. Log into your bank and download a transaction export (CSV)
+2. Drag and drop it onto the import page
+3. fin detects the format automatically for Chase, BofA, Amex, Wells Fargo, and Capital One; shows a preview before importing
+
+**SimpleFIN** (automatic daily sync, ~$1.50/month)
+1. Go to [SimpleFIN Bridge](https://beta-bridge.simplefin.org/), subscribe, and link your bank
+2. Copy your Setup Token
+3. Paste it into the SimpleFIN section on the connect page
+
+See [docs/SIMPLEFIN_SETUP.md](docs/SIMPLEFIN_SETUP.md) for detailed SimpleFIN instructions.
+
+### Docker
 
 ```bash
 # 1. Configure
@@ -66,23 +81,6 @@ cp .env.example .env
 docker compose build
 docker compose run --rm fin sync
 docker compose run --rm fin web
-```
-
-### Try the Demo First
-
-Explore fin with sample data before connecting your bank:
-
-```bash
-pip install -e .
-fin demo
-# Opens dashboard with 12 months of realistic demo data
-```
-
-When ready for real data:
-```bash
-fin demo --clear      # Remove demo database
-fin credentials set   # Configure SimpleFIN
-fin sync --full       # Pull real transactions
 ```
 
 ## Security
@@ -111,7 +109,6 @@ Create a `.env` file (gitignored):
 
 ```bash
 SIMPLEFIN_ACCESS_URL=https://your-access-url-from-simplefin
-FIN_DB_PATH=data/fin.db
 ```
 
 Keyring takes priority over .env if both are configured.
@@ -132,14 +129,7 @@ This protects your database at rest with zero configuration in fin.
 
 **Encrypted Backups**
 
-For backups or sharing across devices:
-
 ```bash
-# Install age encryption tool
-# Windows: winget install FiloSottile.age
-# macOS: brew install age
-# Linux: apt install age
-
 # Create encrypted backup with passphrase
 fin export-backup -p
 
@@ -147,8 +137,10 @@ fin export-backup -p
 fin export-backup -r age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p
 
 # Decrypt later
-age -d -o fin.db fin_backup_20260123.db.age
+age -d -o fin.db fin_backup_20260123.finbak
 ```
+
+Requires `age`: `winget install FiloSottile.age` (Windows) / `brew install age` (macOS) / `apt install age` (Linux).
 
 ### Why This Architecture?
 
@@ -160,7 +152,7 @@ We chose OS-level encryption + encrypted exports over SQLCipher because:
 
 ## Web Dashboard
 
-The dashboard at `http://127.0.0.1:8000/dashboard` displays your financial overview in a 5-card responsive layout.
+The dashboard displays your financial overview in a 5-card responsive layout.
 
 ### Card 1: Cash Flow (Hero)
 Shows income vs expenses side-by-side with a big "Kept $X" or "Over $X" number, savings rate, and a 3-month rolling comparison. Mid-month pacing projection appears if you're still in the current month. Pending transactions show a warning if they exceed the typical threshold.
@@ -187,6 +179,9 @@ Shows unusual charges with dismiss actions ("Looks fine" / "Flag it"), multi-mon
 Click any number, bar, category, or merchant to open a modal with the full transaction list. Sortable columns, account filtering, and scopes including income, spend, recurring, discretionary, net, merchant, and category.
 
 ## Other Pages
+
+**Connect** (`/connect`)
+Import CSV files or connect via SimpleFIN. Drag-and-drop CSV upload with automatic format detection for major banks.
 
 **Recurring Charges** (`/subs`)
 Dedicated page for subscriptions and utility bills. Filter by account, see payment history, toggle between subscription and bill types, and export to CSV.
@@ -228,8 +223,6 @@ fin audit-subs --all
 
 ### Bundle Detection
 
-Find overlapping subscriptions:
-
 ```bash
 fin bundle-check
 ```
@@ -243,7 +236,8 @@ Flags vendor families where you might be paying twice (Disney+/Hulu/ESPN+, Apple
 | Command | Description |
 |---------|-------------|
 | `fin sync` | Pull latest transactions from bank |
-| `fin web` | Start the web dashboard |
+| `fin web` | Start the web dashboard (browser opens automatically) |
+| `fin web --no-browser` | Start without auto-opening browser |
 | `fin status` | Financial status at a glance (CLI) |
 | `fin trend` | Monthly trend over time |
 
@@ -268,7 +262,7 @@ Flags vendor families where you might be paying twice (Disney+/Hulu/ESPN+, Apple
 | `fin export-backup -r age1...` | Encrypted backup to recipient key |
 | `fin export-summary` | Income vs spend summary with rolling averages |
 | `fin export-duplicates` | Export duplicate subscription groups |
-| `fin import-csv FILE` | Import transactions from CSV |
+| `fin import-csv FILE` | Import transactions from CSV (CLI) |
 
 ### Credentials & Setup
 
@@ -295,20 +289,10 @@ fin sync --full
 fin sync --annual-bootstrap
 ```
 
-## Getting SimpleFIN
-
-1. Go to [SimpleFIN Bridge](https://beta-bridge.simplefin.org/)
-2. Subscribe (~$1.50/month) and link your bank accounts
-3. Copy your Setup Token (base64-encoded string)
-4. Run `fin setup YOUR_SETUP_TOKEN` to claim your Access URL
-5. Credentials auto-save to keyring, or add to `.env` manually
-
-See [docs/SIMPLEFIN_SETUP.md](docs/SIMPLEFIN_SETUP.md) for detailed instructions.
-
 ## Troubleshooting
 
 ### "No transactions found"
-Run `fin sync --full` to pull more history.
+Run `fin sync --full` to pull more history, or import a CSV from `/connect`.
 
 ### Categories are wrong
 Click the category in the dashboard, then click the edit icon to override.
@@ -329,7 +313,7 @@ Use the date pickers to select a custom range, or click the month navigation to 
 pip install -e ".[dev]"
 
 # Run tests
-pytest
+FIN_DB_PATH=/tmp/test.db pytest
 
 # Type checking
 mypy src/fin
@@ -337,4 +321,4 @@ mypy src/fin
 
 ## License
 
-MIT
+PolyForm Noncommercial 1.0.0
