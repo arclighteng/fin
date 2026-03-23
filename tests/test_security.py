@@ -306,3 +306,51 @@ class TestCookieAuth:
         with patch.dict(os.environ, {"FIN_AUTH_DISABLED": "1"}, clear=True):
             result = verify_auth_token(authorization=None, fin_session=None)
             assert result is True
+
+
+class TestPersistentToken:
+    """Tests for get_or_create_persistent_token()."""
+
+    def test_creates_file_on_first_call(self, tmp_path):
+        """First call should create auth_token file and return a non-empty token."""
+        from fin.security import get_or_create_persistent_token
+        token = get_or_create_persistent_token(tmp_path)
+        assert token
+        assert len(token) >= 32
+        assert (tmp_path / "auth_token").exists()
+        assert (tmp_path / "auth_token").read_text().strip() == token
+
+    def test_returns_same_token_on_second_call(self, tmp_path):
+        """Second call must return the exact same token as the first."""
+        from fin.security import get_or_create_persistent_token
+        token1 = get_or_create_persistent_token(tmp_path)
+        token2 = get_or_create_persistent_token(tmp_path)
+        assert token1 == token2
+
+    def test_reads_existing_token(self, tmp_path):
+        """If auth_token file already exists, return its contents."""
+        from fin.security import get_or_create_persistent_token
+        (tmp_path / "auth_token").write_text("my-pre-existing-token")
+        result = get_or_create_persistent_token(tmp_path)
+        assert result == "my-pre-existing-token"
+
+    def test_regenerates_empty_file(self, tmp_path):
+        """If auth_token file is empty or whitespace, generate a new token."""
+        from fin.security import get_or_create_persistent_token
+        (tmp_path / "auth_token").write_text("   \n")
+        result = get_or_create_persistent_token(tmp_path)
+        assert result
+        assert len(result) >= 32
+
+    def test_graceful_on_unwritable_dir(self, tmp_path):
+        """If dir is unwritable, return a token without crashing."""
+        import os
+        from fin.security import get_or_create_persistent_token
+        if os.name == "nt":
+            pytest.skip("chmod on Windows is not reliable in test environments")
+        tmp_path.chmod(0o500)
+        try:
+            result = get_or_create_persistent_token(tmp_path)
+            assert result
+        finally:
+            tmp_path.chmod(0o700)

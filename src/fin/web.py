@@ -247,6 +247,8 @@ async def health():
     return {"status": "ok"}
 
 
+
+
 # ---------------------------------------------------------------------------
 # Observability: request logging with auth failure tracking
 # ---------------------------------------------------------------------------
@@ -297,7 +299,7 @@ async def add_security_headers(request, call_next):
         "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data:; "
-        "connect-src 'self'; "
+        "connect-src 'self' https://cdn.jsdelivr.net; "
         "frame-ancestors 'none'; "
         "base-uri 'self'; "
         "form-action 'self'"
@@ -372,11 +374,14 @@ async def require_api_auth(request: Request, call_next):
 # ---------------------------------------------------------------------------
 # Security: CSRF protection for mutation endpoints
 # ---------------------------------------------------------------------------
+_CSRF_BYPASS_PATHS = frozenset({"/auth/session"})
+
+
 @app.middleware("http")
 async def verify_csrf(request, call_next):
     if request.method in ("POST", "PUT", "DELETE", "PATCH"):
-        # Skip CSRF check for the /auth/session endpoint (no session exists yet)
-        if request.url.path == "/auth/session":
+        # Skip CSRF check for bootstrapping endpoints (no session exists yet)
+        if request.url.path in _CSRF_BYPASS_PATHS:
             return await call_next(request)
         csrf_header = request.headers.get("x-csrf-token", "")
         expected = get_csrf_token()
@@ -391,6 +396,8 @@ async def verify_csrf(request, call_next):
                 content={"detail": "CSRF token missing or invalid"},
             )
     return await call_next(request)
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -554,6 +561,46 @@ def create_session(req: SessionRequest, request: Request, response: Response):
     return resp
 
 
+@app.get("/auto-login")
+def auto_login(request: Request, t: str | None = None):
+    """
+    Browser auto-login: validate token from query param, set session cookie, redirect.
+
+    Called by webbrowser.open() at startup. Intentionally public — it IS the auth
+    endpoint for the browser. Listed in _LICENSE_BYPASS_PATHS so the license gate
+    does not redirect before the cookie can be set.
+
+    On success: sets fin_session cookie (1-year) + 302 /dashboard.
+    On any failure (missing/invalid token, auth disabled): 302 /dashboard without cookie.
+    """
+    from .security import get_api_token as _get_token, _verify_token_value
+    from fastapi import HTTPException as _HTTPEx
+
+    if _get_token() is None:
+        return RedirectResponse(url="/dashboard", status_code=302)
+
+    if not t:
+        return RedirectResponse(url="/dashboard", status_code=302)
+
+    try:
+        _verify_token_value(t)
+    except _HTTPEx:
+        return RedirectResponse(url="/dashboard", status_code=302)
+
+    is_https = request.url.scheme == "https"
+    resp = RedirectResponse(url="/dashboard", status_code=302)
+    resp.set_cookie(
+        key="fin_session",
+        value=t,
+        httponly=True,
+        secure=is_https,
+        samesite="strict",
+        max_age=365 * 24 * 3600,  # 1 year — token is permanent, cookie matches
+        path="/",
+    )
+    return resp
+
+
 @app.get("/")
 def home():
     return RedirectResponse(url="/dashboard", status_code=302)
@@ -584,10 +631,15 @@ def dashboard(
         """
     ).fetchall()
 
-    # Detect demo state: zero transactions means no real data has been imported.
-    # Must be computed before the show_no_data early return so both paths have it.
+    # Detect demo/empty state.
+    # is_demo: demo transactions are actually loaded (account_id starts with "demo-")
+    # is_empty: no transactions at all — user has not imported any data yet
     txn_count = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
-    is_demo = txn_count == 0
+    demo_txn_count = conn.execute(
+        "SELECT COUNT(*) FROM transactions WHERE account_id LIKE 'demo-%'"
+    ).fetchone()[0]
+    is_demo = demo_txn_count > 0
+    is_empty = txn_count == 0
 
     # If no data mode, return empty state
     if show_no_data:
@@ -617,6 +669,10 @@ def dashboard(
             "timedelta": timedelta,
             "closed_period": None,
             "is_demo": is_demo,
+            "is_empty": is_empty,
+            "avg_savings_rate_pct": 0.0,
+            "savings_tier": "negative",
+            "pace_data": None,
         })
 
     # Initialize ReportService - THE canonical source of truth
@@ -770,6 +826,19 @@ def dashboard(
     savings_rate_pct = 0.0
     if current_period and current_period.income_cents > 0:
         savings_rate_pct = round(current_period.net_cents / current_period.income_cents * 100, 1)
+
+    # 3-month average savings rate and benchmark tier for Savings Rate card
+    avg_savings_rate_pct = 0.0
+    if len(reports) >= 4:
+        historical_rates = []
+        for r in reports[1:4]:  # skip reports[0] (current period), use 3 prior months
+            vm = PeriodViewModel.from_report(r)
+            if vm.income_cents > 0:
+                historical_rates.append(vm.net_cents / vm.income_cents * 100)
+        if historical_rates:
+            avg_savings_rate_pct = round(sum(historical_rates) / len(historical_rates), 1)
+
+    savings_tier = _compute_savings_tier(savings_rate_pct)
 
     # Previous month category breakdown for month-over-month comparison
     prev_category_map: dict[str, int] = {}
@@ -998,6 +1067,33 @@ def dashboard(
         income_vals = [PeriodViewModel.from_report(r).income_cents for r in reports[1:4]]
         avg_income_cents = sum(income_vals) // len(income_vals)
 
+    # Intra-month pace card (only for "this_month" view, not custom ranges or last_month)
+    pace_data = None
+    if period == "this_month" and current_period and current_report:
+        today_date = today  # reuse `today` already in scope
+        days_elapsed = today_date.day  # day-of-month = days elapsed so far
+        _, days_in_month = monthrange(today_date.year, today_date.month)  # monthrange already imported
+
+        total_expenses_cents = current_period.recurring_cents + current_period.discretionary_cents
+
+        avg_monthly_expenses_cents = 0
+        if len(reports) >= 4:
+            exp_vals = []
+            for r in reports[1:4]:
+                vm = PeriodViewModel.from_report(r)
+                exp_vals.append(vm.recurring_cents + vm.discretionary_cents)
+            if exp_vals:
+                avg_monthly_expenses_cents = sum(exp_vals) // len(exp_vals)
+
+        pace_data = _compute_pace_data(
+            total_expenses_cents=total_expenses_cents,
+            days_elapsed=days_elapsed,
+            days_in_month=days_in_month,
+            avg_monthly_expenses_cents=avg_monthly_expenses_cents,
+            category_breakdown=category_breakdown,
+            category_averages=category_averages,
+        )
+
     # 8. Integrity data (kept for integrity banner, not in attention_items)
     integrity_data = None
     if current_report:
@@ -1066,10 +1162,14 @@ def dashboard(
         "integrity_data": integrity_data,
         "top_movers": top_movers,
         "avg_income_cents": avg_income_cents,
+        "avg_savings_rate_pct": avg_savings_rate_pct,
+        "savings_tier": savings_tier,
+        "pace_data": pace_data,
         # Item 8: HTTP banner
         "is_http": request.url.scheme == "http",
-        # Demo mode: shown when no real transactions exist
+        # Demo mode: shown when demo transactions are loaded
         "is_demo": is_demo,
+        "is_empty": is_empty,
     })
 
 
@@ -3866,6 +3966,99 @@ async def api_simplefin_token(req: SimpleFinTokenRequest):
 # ---------------------------------------------------------------------------
 def main():
     uvicorn.run("fin.web:app", host="127.0.0.1", port=8000, reload=False)
+
+
+# ---------------------------------------------------------------------------
+# Dashboard metric helpers
+# ---------------------------------------------------------------------------
+
+def _compute_savings_tier(savings_rate_pct: float) -> str:
+    """Return benchmark tier label for a savings rate percentage.
+
+    Benchmarks from personal finance literature:
+    - 30%+   → wealth-building (aggressive accumulation)
+    - 20-29% → progress (solid savings)
+    - 0-19%  → survival (positive but below target)
+    - <= 0%  → negative (spending exceeds income)
+    """
+    if savings_rate_pct >= 30.0:
+        return "wealth-building"
+    elif savings_rate_pct >= 20.0:
+        return "progress"
+    elif savings_rate_pct > 0.0:
+        return "survival"
+    else:
+        return "negative"
+
+
+def _compute_pace_data(
+    total_expenses_cents: int,
+    days_elapsed: int,
+    days_in_month: int,
+    avg_monthly_expenses_cents: int,
+    category_breakdown: list,
+    category_averages: dict,
+) -> dict | None:
+    """
+    Compute intra-month pace projection data for the current month.
+
+    Returns None when < 3 days elapsed (too early for reliable projection).
+
+    Args:
+        total_expenses_cents: recurring + discretionary spent so far this month
+        days_elapsed: day-of-month (1 = first day of month)
+        days_in_month: total days in current month
+        avg_monthly_expenses_cents: 3-month rolling average total expenses
+        category_breakdown: list of (Category, net_cents, count, gross_cents, refund_cents)
+        category_averages: dict[category_id -> avg_cents] (3-month rolling avg)
+
+    Returns:
+        dict with projection fields and top_drivers, or None if too early
+    """
+    if days_elapsed < 3 or days_in_month <= 0:
+        return None
+
+    days_elapsed = min(days_elapsed, days_in_month)
+    pacing_factor = days_elapsed / days_in_month
+    projected_spend = int(total_expenses_cents / pacing_factor)
+    variance_cents = projected_spend - avg_monthly_expenses_cents
+    variance_pct = (
+        round(variance_cents * 100 / avg_monthly_expenses_cents)
+        if avg_monthly_expenses_cents > 0 else 0
+    )
+
+    # Per-category variance drivers (only surface positive variance > $20)
+    top_drivers = []
+    for cat, net_cents, _count, _gross, _refund in category_breakdown:
+        cat_id = cat.id if hasattr(cat, "id") else str(cat)
+        avg = category_averages.get(cat_id, 0)
+        if avg <= 0:
+            continue
+        projected_cat = int(net_cents / pacing_factor)
+        cat_variance = projected_cat - avg
+        if cat_variance > 2000:  # Only surface > $20 over-pace
+            top_drivers.append({
+                "category_id": cat_id,
+                "category_label": cat.label if hasattr(cat, "label") else cat_id,
+                "current_cents": net_cents,
+                "projected_cents": projected_cat,
+                "avg_cents": avg,
+                "variance_cents": cat_variance,
+            })
+
+    top_drivers.sort(key=lambda x: -x["variance_cents"])
+
+    return {
+        "days_elapsed": days_elapsed,
+        "days_in_month": days_in_month,
+        "pacing_factor": pacing_factor,
+        "total_spend_so_far_cents": total_expenses_cents,
+        "projected_spend_cents": projected_spend,
+        "avg_monthly_expenses_cents": avg_monthly_expenses_cents,
+        "variance_cents": variance_cents,
+        "variance_pct": variance_pct,
+        "top_drivers": top_drivers[:3],
+    }
 
 
 if __name__ == "__main__":

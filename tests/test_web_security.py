@@ -342,3 +342,102 @@ class TestTokenNotInHtml:
         response = client.get("/", follow_redirects=True)
         if response.status_code == 200:
             assert token not in response.text
+
+
+class TestAutoLoginRoute:
+    """Tests for GET /auto-login."""
+
+    def test_valid_token_sets_cookie_and_redirects(self, tmp_db):
+        """Valid ?t= param sets fin_session cookie and redirects to /dashboard."""
+        token = "valid-test-token-xyz"
+        _reset_security_globals()
+        _reset_web_globals()
+        mock_cfg = _make_mock_config(tmp_db)
+
+        with patch.dict(os.environ, {"FIN_API_TOKEN": token}, clear=False):
+            os.environ.pop("FIN_AUTH_DISABLED", None)
+            import fin.security as sec
+            sec._session_token = None
+            sec._signed_session_token = None
+            with patch.object(
+                __import__("fin.web", fromlist=["_get_config"]),
+                "_get_config",
+                return_value=mock_cfg,
+            ):
+                with TestClient(app, raise_server_exceptions=False, follow_redirects=False) as client:
+                    resp = client.get(f"/auto-login?t={token}")
+
+        assert resp.status_code == 302
+        assert resp.headers["location"] == "/dashboard"
+        assert "fin_session" in resp.cookies
+        assert resp.cookies["fin_session"] == token
+
+    def test_invalid_token_redirects_without_cookie(self, tmp_db):
+        """Invalid ?t= param redirects to /dashboard without setting a cookie."""
+        token = "valid-test-token-xyz"
+        mock_cfg = _make_mock_config(tmp_db)
+        _reset_security_globals()
+        _reset_web_globals()
+
+        with patch.dict(os.environ, {"FIN_API_TOKEN": token}, clear=False):
+            os.environ.pop("FIN_AUTH_DISABLED", None)
+            import fin.security as sec
+            sec._session_token = None
+            sec._signed_session_token = None
+            with patch.object(
+                __import__("fin.web", fromlist=["_get_config"]),
+                "_get_config",
+                return_value=mock_cfg,
+            ):
+                with TestClient(app, raise_server_exceptions=False, follow_redirects=False) as client:
+                    resp = client.get("/auto-login?t=wrong-token")
+
+        assert resp.status_code == 302
+        assert resp.headers["location"] == "/dashboard"
+        assert "fin_session" not in resp.cookies
+
+    def test_missing_token_param_redirects_without_cookie(self, tmp_db):
+        """Missing ?t param redirects to /dashboard without setting a cookie."""
+        token = "valid-test-token-xyz"
+        mock_cfg = _make_mock_config(tmp_db)
+        _reset_security_globals()
+        _reset_web_globals()
+
+        with patch.dict(os.environ, {"FIN_API_TOKEN": token}, clear=False):
+            os.environ.pop("FIN_AUTH_DISABLED", None)
+            import fin.security as sec
+            sec._session_token = None
+            sec._signed_session_token = None
+            with patch.object(
+                __import__("fin.web", fromlist=["_get_config"]),
+                "_get_config",
+                return_value=mock_cfg,
+            ):
+                with TestClient(app, raise_server_exceptions=False, follow_redirects=False) as client:
+                    resp = client.get("/auto-login")
+
+        assert resp.status_code == 302
+        assert resp.headers["location"] == "/dashboard"
+        assert "fin_session" not in resp.cookies
+
+    def test_auth_disabled_redirects_without_cookie(self, tmp_db):
+        """When auth is disabled, /auto-login redirects without setting a cookie."""
+        mock_cfg = _make_mock_config(tmp_db)
+        _reset_security_globals()
+        _reset_web_globals()
+
+        with patch.dict(os.environ, {"FIN_AUTH_DISABLED": "1"}, clear=False):
+            os.environ.pop("FIN_API_TOKEN", None)
+            import fin.security as sec
+            sec._session_token = None
+            sec._signed_session_token = None
+            with patch.object(
+                __import__("fin.web", fromlist=["_get_config"]),
+                "_get_config",
+                return_value=mock_cfg,
+            ):
+                with TestClient(app, raise_server_exceptions=False, follow_redirects=False) as client:
+                    resp = client.get("/auto-login?t=anything")
+
+        assert resp.status_code == 302
+        assert "fin_session" not in resp.cookies

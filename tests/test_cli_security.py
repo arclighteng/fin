@@ -383,3 +383,32 @@ class TestExportBackup:
             with patch("shutil.which", return_value=None):
                 result = runner.invoke(app, ["export-backup", "--passphrase"])
         assert result.exit_code == 1
+
+
+# ---------------------------------------------------------------------------
+# Task 3 — _build_browser_open_url helper
+# ---------------------------------------------------------------------------
+
+class TestBuildBrowserOpenUrl:
+    """Tests for the _build_browser_open_url helper."""
+
+    def test_returns_auto_login_url_when_token_present(self):
+        from fin.cli import _build_browser_open_url
+        url = _build_browser_open_url("https", 8000, "my-token", False)
+        assert url == "https://127.0.0.1:8000/auto-login?t=my-token"
+
+    def test_returns_dashboard_url_when_auth_disabled(self):
+        from fin.cli import _build_browser_open_url
+        url = _build_browser_open_url("https", 8000, "my-token", True)
+        assert url == "https://127.0.0.1:8000/dashboard"
+
+    def test_returns_dashboard_url_when_no_token(self):
+        from fin.cli import _build_browser_open_url
+        url = _build_browser_open_url("http", 8000, None, False)
+        assert url == "http://127.0.0.1:8000/dashboard"
+
+    def test_includes_token_in_query_param(self):
+        from fin.cli import _build_browser_open_url
+        url = _build_browser_open_url("https", 9000, "abc-xyz-123", False)
+        assert "?t=abc-xyz-123" in url
+        assert "9000" in url

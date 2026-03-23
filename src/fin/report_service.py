@@ -10,7 +10,7 @@ TRUTH CONTRACT:
 This module provides:
 - report_period(): Single period analysis
 - report_month(): Convenience for month-based reports
-- report_periods(): Multiple periods (as_of anchoring not yet implemented)
+- report_periods(): Multiple periods (completeness-over-immutability model)
 - All reports include report_hash + snapshot_id + versions + integrity flags
 """
 import sqlite3
@@ -77,9 +77,9 @@ class ReportService:
                 - None: All accounts
                 - []: Empty list returns empty report with flag
                 - list: Filter to these accounts only
-            as_of: FUTURE - Historical anchor date for pattern detection.
-                Currently used only for cache keying; full implementation
-                (capping lookback queries) is planned for future release.
+            as_of: Optional anchor date used for cache keying. Strict
+                transaction-level anchoring (t.created_at <= as_of) was
+                considered and rejected — see report_periods() for rationale.
 
         Returns:
             Report with totals, transactions, integrity info, and version metadata
@@ -176,19 +176,25 @@ class ReportService:
 
         reports: list[Report] = []
 
-        # Generate each period
-        # TODO: Implement proper as_of anchoring to prevent future data leakage
+        # Generate each period.
+        #
+        # Design note: as_of anchoring (capping queries to t.created_at <= period_end)
+        # was considered and rejected. For a personal finance app, completeness beats
+        # immutability: late-arriving bank transactions (posted Oct 28, synced Dec 5)
+        # should always appear in their correct historical period. Strict anchoring
+        # would make the same period's numbers silently differ depending on when you
+        # synced, which is more confusing than a slightly imprecise rolling average.
+        # Classification overrides also intentionally propagate to all history.
         current_ref = end_date
         for _ in range(num_periods):
             start, end = period_bounds(period_type, current_ref)
 
-            # Generate report (as_of passed for cache keying only)
             report = self.report_period(
                 start,
                 end,
                 include_pending,
                 account_filter,
-                as_of=end,  # FUTURE: Will anchor pattern detection
+                as_of=end,
             )
             report.period_label = period_label(period_type, start)
             reports.append(report)

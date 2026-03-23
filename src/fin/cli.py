@@ -2483,6 +2483,18 @@ def export_backup(
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
 
+def _build_browser_open_url(scheme: str, port: int, token: str | None, auth_disabled: bool) -> str:
+    """
+    Return the URL the browser should open on startup.
+
+    When auth is enabled and a token is available, returns the /auto-login URL
+    so the browser lands pre-authenticated. Otherwise returns /dashboard directly.
+    """
+    if token and not auth_disabled:
+        return f"{scheme}://127.0.0.1:{port}/auto-login?t={token}"
+    return f"{scheme}://127.0.0.1:{port}/dashboard"
+
+
 def startup_security_check(host: str, auth_disabled: bool) -> None:
     """
     Hard-block dangerous startup combinations.
@@ -2592,7 +2604,6 @@ def web(
     import sys
     import uvicorn
     from pathlib import Path
-    from .security import get_auth_info
     from .tls import ensure_cert
 
     auth_disabled = os.getenv("FIN_AUTH_DISABLED", "").lower() in ("1", "true", "yes")
@@ -2606,6 +2617,13 @@ def web(
 
     from .config import ensure_data_dir
     ensure_data_dir(str(db_path))
+
+    # Establish persistent auth token so sessions survive restarts.
+    # Skip if the user already set FIN_API_TOKEN or disabled auth entirely.
+    if not auth_disabled and not os.environ.get("FIN_API_TOKEN"):
+        from .security import get_or_create_persistent_token
+        _persistent_token = get_or_create_persistent_token(db_path.parent)
+        os.environ["FIN_API_TOKEN"] = _persistent_token
 
     # Check if this looks like demo or real data
     if "demo" in str(db_path).lower():
@@ -2645,14 +2663,6 @@ def web(
     if not is_loopback:
         console.print("[yellow]Warning: Binding to all interfaces. Your financial data will be accessible on the network.[/yellow]")
         console.print()
-
-    # Show auth info
-    auth_info = get_auth_info()
-    if auth_info["auth_enabled"]:
-        console.print(f"[dim]API Token:[/dim] {auth_info['full_token']} [dim]({auth_info['source']})[/dim]")
-        console.print("[dim]Use this token to authenticate: set it as a cookie (fin_session) or Bearer header.[/dim]")
-    else:
-        console.print("[yellow]API Auth: Disabled[/yellow] (loopback only — set FIN_API_TOKEN to enable)")
 
     # --- Item 8: TLS setup — hard block on non-loopback if TLS unavailable ---
     ssl_kwargs = {}
@@ -2701,8 +2711,21 @@ def web(
             )
 
     display_host = host if is_loopback else "127.0.0.1"
+
+    # Surface the token to the terminal only for --no-browser (headless/SSH users).
+    if no_browser and not auth_disabled:
+        from .security import get_auth_info
+        _auth_info = get_auth_info()
+        if _auth_info.get("auth_enabled"):
+            console.print(f"[dim]API Token:[/dim] {_auth_info['full_token']} [dim](persistent — stored in {db_path.parent / 'auth_token'})[/dim]")
+            console.print("[dim]Use this token: set it as the fin_session cookie or Authorization: Bearer header.[/dim]")
+
     console.print(f"[dim]Dashboard:[/dim] {scheme}://{display_host}:{port}/dashboard")
     console.print()
+
+    _browser_open_url = _build_browser_open_url(
+        scheme, port, os.environ.get("FIN_API_TOKEN"), auth_disabled
+    )
 
     if not no_browser:
         import threading
@@ -2711,9 +2734,8 @@ def web(
         import urllib.request
         import ssl
 
-        def _open_browser_when_ready(scheme: str, port: int) -> None:
+        def _open_browser_when_ready(scheme: str, port: int, open_url: str) -> None:
             health_url = f"{scheme}://127.0.0.1:{port}/health"
-            dashboard_url = f"{scheme}://127.0.0.1:{port}/dashboard"
 
             # For self-signed certs, disable certificate verification in the poller only.
             if scheme == "https":
@@ -2728,7 +2750,7 @@ def web(
                 try:
                     with urllib.request.urlopen(health_url, context=ssl_ctx, timeout=2) as resp:
                         if resp.status == 200:
-                            webbrowser.open(dashboard_url)
+                            webbrowser.open(open_url)
                             return
                 except Exception:
                     pass
@@ -2738,10 +2760,63 @@ def web(
 
         browser_thread = threading.Thread(
             target=_open_browser_when_ready,
-            args=(scheme, port),
+            args=(scheme, port, _browser_open_url),
             daemon=True,
         )
         browser_thread.start()
+
+    # Anonymous startup ping: install_id (random UUID), version, OS, license status.
+    # No financial data transmitted. Controlled by KEPT_PING_URL env var.
+    _ping_url = os.getenv("KEPT_PING_URL", "").strip()
+    if _ping_url:
+        import threading
+        import uuid
+        import platform
+        import json as _json
+
+        def _send_ping(url: str, db_parent: Path) -> None:
+            import urllib.request
+            from importlib.metadata import version as _pkg_version, PackageNotFoundError
+
+            id_file = db_parent / "install_id"
+            try:
+                if id_file.exists():
+                    install_id = id_file.read_text().strip()
+                else:
+                    install_id = str(uuid.uuid4())
+                    id_file.write_text(install_id)
+            except Exception:
+                install_id = "unknown"
+
+            try:
+                _ver = _pkg_version("finproj")
+            except PackageNotFoundError:
+                _ver = "unknown"
+
+            payload = _json.dumps({
+                "install_id": install_id,
+                "version": _ver,
+                "os": platform.system(),
+                "licensed": False,
+            }).encode()
+
+            try:
+                req = urllib.request.Request(
+                    url,
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                urllib.request.urlopen(req, timeout=3)
+            except Exception:
+                pass
+
+        _ping_thread = threading.Thread(
+            target=_send_ping,
+            args=(_ping_url, db_path.parent),
+            daemon=True,
+        )
+        _ping_thread.start()
 
     uvicorn.run("fin.web:app", host=host, port=port, reload=False, **ssl_kwargs)
 

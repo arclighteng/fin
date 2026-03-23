@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Dashboard - fin{% endblock %}
+{% block title %}Dashboard - Kept{% endblock %}
 
 {% block content %}
 <style>
@@ -892,6 +892,122 @@
         animation-duration: 0.01ms !important;
     }
 }
+
+/* ===== SAVINGS RATE CARD ===== */
+.sr-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+.sr-col { display: flex; flex-direction: column; gap: 2px; }
+.sr-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.sr-value {
+    font-size: 22px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+}
+.sr-value.tier-wealth-building { color: #4ade80; }
+.sr-value.tier-progress        { color: #60a5fa; }
+.sr-value.tier-survival        { color: #facc15; }
+.sr-value.tier-negative        { color: #f87171; }
+.sr-bar-track {
+    width: 100%;
+    height: 4px;
+    background: var(--border-color);
+    border-radius: 2px;
+    overflow: hidden;
+    margin: 8px 0 4px;
+}
+.sr-bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    background: #60a5fa;
+}
+.sr-bar-fill.tier-wealth-building { background: #4ade80; }
+.sr-bar-fill.tier-survival        { background: #facc15; }
+.sr-bar-fill.tier-negative        { background: #f87171; }
+.sr-tier-label {
+    font-size: 12px;
+    font-weight: 500;
+}
+.sr-tier-label.tier-wealth-building { color: #4ade80; }
+.sr-tier-label.tier-progress        { color: #60a5fa; }
+.sr-tier-label.tier-survival        { color: #facc15; }
+.sr-tier-label.tier-negative        { color: #f87171; }
+.sr-raw {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 8px;
+}
+.card-help {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-decoration: none;
+    margin-left: 4px;
+}
+.card-help:hover { color: var(--text-secondary); }
+/* ===== INTRA-MONTH PACE CARD ===== */
+.pace-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 12px;
+}
+.pace-day-badge {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+}
+.pace-main {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+.pace-stat { display: flex; flex-direction: column; gap: 2px; }
+.pace-stat-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.pace-stat-value {
+    font-size: 20px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+}
+.pace-variance {
+    display: inline-block;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 2px 7px;
+    border-radius: 3px;
+    margin-top: 2px;
+}
+.pace-variance.over    { background: rgba(248,113,113,0.12); color: #f87171; }
+.pace-variance.under   { background: rgba(74,222,128,0.12);  color: #4ade80; }
+.pace-variance.neutral { background: var(--surface-2);       color: var(--text-muted); }
+.pace-drivers {
+    margin-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+.pace-driver-item {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+}
+.pace-driver-name     { color: var(--text-secondary); }
+.pace-driver-variance { font-family: var(--font-mono); color: #f87171; }
 </style>
 
 {% if show_no_data %}
@@ -955,7 +1071,7 @@
     {% if integrity_data and integrity_data.integrity_score < 0.8 %}
     <div class="integrity-banner-v3">
         <span>Some transactions need classification. The numbers below may be incomplete.</span>
-        <a href="#" onclick="finDrilldown.open('credit_other'); return false;">Review items &rarr;</a>
+        <a href="/audit">Review items &rarr;</a>
     </div>
     {% endif %}
 
@@ -1002,6 +1118,12 @@
                     <span class="cf-rate">{{ "%.0f"|format(savings_rate_pct) }}% of income</span>
                 {% endif %}
             </div>
+
+            {% if current_period.income_cents > 0 and current_period.recurring_cents > 0 %}
+            <div class="cf-comparison">
+                Baseline: <span>${{ "%.0f"|format((current_period.income_cents - current_period.recurring_cents) / 100) }}/mo</span> &middot; income minus commitments
+            </div>
+            {% endif %}
 
             {% if avg_cash_flow_cents != 0 %}
                 {% set diff = current_period.net_cents - avg_cash_flow_cents %}
@@ -1065,41 +1187,7 @@
             </p>
         </div>
 
-        <!-- ==================== CARD 2: HEADS UP ==================== -->
-        <div class="card-v3 card-full-v3">
-            <div class="card-title-v3">Heads Up</div>
-
-            {% set display_items = attention_items | rejectattr('type', 'equalto', 'integrity') | list %}
-            {% if display_items %}
-                <div id="headsUpContent">
-                    {% for item in display_items[:4] %}
-                    <div class="hu-item" id="huItem{{ loop.index }}" {% if item.drilldown_scope %}onclick="finDrilldown.open('{{ item.drilldown_scope }}')" onkeydown="if(event.key==='Enter')this.click()" role="button" tabindex="0" style="cursor:pointer"{% endif %}>
-                        <div class="hu-item-title">{{ item.title }}</div>
-                        {% if item.detail %}
-                        <div class="hu-item-detail">{{ item.detail }}</div>
-                        {% endif %}
-                        {% if item.action_type == 'alert' and not item.actioned %}
-                        <div class="hu-actions">
-                            <button class="hu-btn primary" onclick="event.stopPropagation(); dismissAlert('{{ item.key }}', 'not_suspicious', {{ loop.index }})">Looks fine</button>
-                            <button class="hu-btn" onclick="event.stopPropagation(); dismissAlert('{{ item.key }}', 'confirmed', {{ loop.index }})">Flag it</button>
-                        </div>
-                        {% endif %}
-                    </div>
-                    {% endfor %}
-                    {% if display_items|length > 4 %}
-                    <div style="text-align: center; margin-top: 12px; font-size: 13px; color: var(--text-muted);">
-                        + {{ display_items|length - 4 }} more items
-                    </div>
-                    {% endif %}
-                </div>
-            {% else %}
-                <div class="heads-up-empty">
-                    Nothing unusual this month. Looking good.
-                </div>
-            {% endif %}
-        </div>
-
-        <!-- ==================== CARD 3: COMMITMENTS ==================== -->
+        <!-- ==================== CARD 2: COMMITMENTS ==================== -->
         <div class="card-v3">
             <div class="card-title-v3">
                 Monthly Commitments
@@ -1204,6 +1292,116 @@
                     than your 3-month average
                 </div>
             {% endif %}
+        </div>
+        {% endif %}
+
+        <!-- ==================== CARD: SAVINGS RATE ==================== -->
+        {% if current_period and current_period.income_cents > 0 %}
+        <div class="card-v3 card-half-v3">
+            <div class="card-title-v3">
+                Savings Rate
+                <a href="#" class="card-help" title="(Income − Expenses) / Income. Benchmarks: 10% survival · 20% progress · 30%+ wealth-building">[?]</a>
+            </div>
+
+            <div class="sr-grid">
+                <div class="sr-col">
+                    <span class="sr-label">This month</span>
+                    <span class="sr-value tier-{{ savings_tier }}">{{ "%.0f"|format(savings_rate_pct) }}%</span>
+                </div>
+                <div class="sr-col">
+                    <span class="sr-label">3-mo avg</span>
+                    <span class="sr-value">{{ "%.0f"|format(avg_savings_rate_pct) }}%</span>
+                </div>
+                <div class="sr-col">
+                    <span class="sr-label">Target</span>
+                    <span class="sr-value" style="color: var(--text-muted);">20%+</span>
+                </div>
+            </div>
+
+            {% set bar_pct = savings_rate_pct if savings_rate_pct <= 100 else 100 %}
+            {% set bar_pct = bar_pct if bar_pct >= 0 else 0 %}
+            <div class="sr-bar-track">
+                <div class="sr-bar-fill tier-{{ savings_tier }}" style="width: {{ bar_pct }}%"></div>
+            </div>
+            <span class="sr-tier-label tier-{{ savings_tier }}">
+                {% if savings_tier == "wealth-building" %}Wealth-building
+                {% elif savings_tier == "progress" %}On track
+                {% elif savings_tier == "survival" %}Below target
+                {% else %}Spending more than earning
+                {% endif %}
+            </span>
+
+            <div class="sr-raw">
+                ${{ "%.0f"|format(current_period.net_cents / 100) }} kept of
+                ${{ "%.0f"|format(current_period.income_cents / 100) }} income
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- ==================== CARD: INTRA-MONTH PACE ==================== -->
+        {% if pace_data %}
+        <div class="card-v3 card-half-v3">
+            <div class="pace-header">
+                <span class="card-title-v3" style="margin-bottom:0">Month Pace</span>
+                <span class="pace-day-badge">day {{ pace_data.days_elapsed }} / {{ pace_data.days_in_month }}</span>
+            </div>
+
+            <div class="pace-main">
+                <div class="pace-stat">
+                    <span class="pace-stat-label">Projected spend</span>
+                    <span class="pace-stat-value">${{ "%.0f"|format(pace_data.projected_spend_cents / 100) }}</span>
+                </div>
+                <div class="pace-stat">
+                    <span class="pace-stat-label">Monthly avg</span>
+                    <span class="pace-stat-value">${{ "%.0f"|format(pace_data.avg_monthly_expenses_cents / 100) }}</span>
+                </div>
+            </div>
+
+            {% if pace_data.variance_cents > 2000 %}
+            <span class="pace-variance over">
+                +${{ "%.0f"|format(pace_data.variance_cents / 100) }} &nbsp;▲ {{ pace_data.variance_pct }}%
+            </span>
+            {% elif pace_data.variance_cents < -2000 %}
+            <span class="pace-variance under">
+                −${{ "%.0f"|format((pace_data.variance_cents * -1) / 100) }} &nbsp;▼ {{ (pace_data.variance_pct * -1) }}%
+            </span>
+            {% else %}
+            <span class="pace-variance neutral">On pace</span>
+            {% endif %}
+
+            {% if pace_data.top_drivers %}
+            <div class="pace-drivers">
+                {% for driver in pace_data.top_drivers %}
+                <div class="pace-driver-item">
+                    <span class="pace-driver-name">{{ driver.category_label }}</span>
+                    <span class="pace-driver-variance">+${{ "%.0f"|format(driver.variance_cents / 100) }}</span>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        <!-- ==================== CARD 4: HEADS UP (conditional) ==================== -->
+        {% if attention_items %}
+        <div class="card-v3 card-full-v3">
+            <div class="card-title-v3">Heads Up</div>
+            <div id="headsUpContent">
+                {% for item in attention_items %}
+                <div class="hu-item" id="huItem{{ loop.index }}" {% if item.drilldown_scope %}onclick="finDrilldown.open('{{ item.drilldown_scope }}')" onkeydown="if(event.key==='Enter')this.click()" role="button" tabindex="0" style="cursor:pointer"{% endif %}>
+                    <div class="hu-item-title">{{ item.title }}</div>
+                    {% if item.detail %}
+                    <div class="hu-item-detail">{{ item.detail }}</div>
+                    {% endif %}
+                    {% if item.action_type == 'alert' and not item.actioned %}
+                    <div class="hu-actions">
+                        <button class="hu-btn primary" onclick="event.stopPropagation(); dismissAlert('{{ item.key }}', 'not_suspicious', {{ loop.index }})">Looks fine</button>
+                        <button class="hu-btn" onclick="event.stopPropagation(); dismissAlert('{{ item.key }}', 'confirmed', {{ loop.index }})">Flag it</button>
+                    </div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
         </div>
         {% endif %}
 

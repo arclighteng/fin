@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>License Activation — Kept</title>
+    <style>
+        :root {
+            --bg-primary: #f5f7fa;
+            --bg-secondary: #ffffff;
+            --bg-tertiary: #f9fafb;
+            --border: #e1e5eb;
+            --text-primary: #1a1f36;
+            --text-secondary: #525f7f;
+            --text-muted: #8792a2;
+            --accent-blue: #2563eb;
+            --accent-green: #0e6245;
+            --accent-red: #c53030;
+            --accent-red-dim: #fed7d7;
+            --accent-yellow: #b7791f;
+            --accent-yellow-dim: #fefcbf;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg-primary: #0d1117;
+                --bg-secondary: #161b22;
+                --bg-tertiary: #21262d;
+                --border: #30363d;
+                --text-primary: #e6edf3;
+                --text-secondary: #8b949e;
+                --text-muted: #6e7681;
+                --accent-blue: #58a6ff;
+                --accent-green: #3fb950;
+                --accent-red: #f85149;
+                --accent-red-dim: rgba(248,81,73,0.15);
+                --accent-yellow: #d29922;
+                --accent-yellow-dim: rgba(210,153,34,0.15);
+                --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
+                --shadow-md: 0 4px 12px rgba(0,0,0,0.4);
+            }
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 560px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 28px;
+        }
+
+        .header .logo {
+            font-size: 28px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+            color: var(--text-primary);
+            margin-bottom: 8px;
+        }
+
+        .header .tagline {
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        .card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            box-shadow: var(--shadow-md);
+            overflow: hidden;
+        }
+
+        .card-header {
+            padding: 24px 28px 20px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .card-header h1 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .card-header p {
+            font-size: 13px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+        }
+
+        .card-body {
+            padding: 24px 28px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-primary);
+            margin-bottom: 6px;
+        }
+
+        textarea {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+            font-size: 12px;
+            line-height: 1.6;
+            resize: vertical;
+            min-height: 100px;
+            transition: border-color 0.15s;
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+        }
+
+        textarea::placeholder {
+            color: var(--text-muted);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            font-size: 13px;
+        }
+
+        .btn {
+            display: block;
+            width: 100%;
+            padding: 11px 20px;
+            background: var(--accent-blue);
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.15s;
+        }
+
+        .btn:hover { opacity: 0.88; }
+        .btn:active { opacity: 0.78; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .alert {
+            padding: 12px 14px;
+            border-radius: 8px;
+            font-size: 13px;
+            line-height: 1.5;
+            margin-bottom: 18px;
+        }
+
+        .alert-error {
+            background: var(--accent-red-dim);
+            border: 1px solid var(--accent-red);
+            color: var(--accent-red);
+        }
+
+        .alert-warning {
+            background: var(--accent-yellow-dim);
+            border: 1px solid var(--accent-yellow);
+            color: var(--accent-yellow);
+        }
+
+        .disclaimer {
+            margin-top: 20px;
+            padding: 16px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-size: 11px;
+            color: var(--text-muted);
+            line-height: 1.6;
+        }
+
+        .disclaimer strong {
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+
+        .disclaimer a {
+            color: var(--accent-blue);
+            text-decoration: none;
+        }
+
+        .disclaimer a:hover { text-decoration: underline; }
+
+        .eula-agree {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            margin-bottom: 18px;
+            font-size: 13px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+        }
+
+        .eula-agree input[type="checkbox"] {
+            margin-top: 2px;
+            flex-shrink: 0;
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+            accent-color: var(--accent-blue);
+        }
+
+        .eula-agree a {
+            color: var(--accent-blue);
+            text-decoration: none;
+        }
+
+        .eula-agree a:hover { text-decoration: underline; }
+
+        .divider {
+            height: 1px;
+            background: var(--border);
+            margin: 20px 0;
+        }
+
+        .footer-links {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .footer-links a {
+            color: var(--accent-blue);
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+
+    <div class="header">
+        <div class="logo">Kept</div>
+        <div class="tagline">Personal Finance — by Arclight Engineering</div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">
+            <h1>License Activation Required</h1>
+            <p>Enter the license key you received from Arclight Engineering to activate Kept on this device.</p>
+        </div>
+        <div class="card-body">
+
+            {% if error %}
+            <div class="alert alert-error">
+                <strong>Activation failed:</strong> {{ error }}
+            </div>
+            {% endif %}
+
+            {% if activation_pending %}
+            <div class="alert alert-warning">
+                <strong>Activation pending:</strong> Your license key is valid, but the activation
+                server could not be reached. Kept will continue to function normally and will retry
+                on next startup.
+            </div>
+            {% endif %}
+
+            <form method="post" action="/license/activate" id="licenseForm">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+                <div class="form-group">
+                    <label for="license_key">License Key</label>
+                    <textarea
+                        id="license_key"
+                        name="license_key"
+                        placeholder="Paste your license key here (the full text beginning with eyJ...)"
+                        spellcheck="false"
+                        autocomplete="off"
+                        autocorrect="off"
+                        autocapitalize="none"
+                        required
+                    >{{ key_prefill or "" }}</textarea>
+                </div>
+
+                <div class="eula-agree">
+                    <input type="checkbox" id="eula_agree" name="eula_agree" required>
+                    <label for="eula_agree" style="cursor:pointer;">
+                        I have read and agree to the
+                        <a href="/license/eula" target="_blank">End-User License Agreement</a>,
+                        including the financial data limitations described in Section 4.
+                        I understand that Kept displays data from manually imported CSV files,
+                        that data may be up to 24 hours old or more, and that I must verify
+                        all figures directly with my bank or financial institution.
+                    </label>
+                </div>
+
+                <button type="submit" class="btn" id="submitBtn">Activate License</button>
+            </form>
+
+            <div class="disclaimer">
+                <strong>Important — Financial Data Limitations:</strong>
+                Kept organizes data from CSV files you manually download from your financial
+                institutions and upload into the app. Data is <strong>not real-time</strong>
+                and may be <strong>24 hours or more out of date</strong>. Kept does not connect
+                directly to any bank or financial institution.
+                <br><br>
+                If you believe any balance, transaction, or figure shown in Kept is incorrect,
+                <strong>contact your bank, credit card issuer, or account servicer directly</strong>
+                via their official website, app, phone line, or branch to verify. Do not rely on
+                Kept as the authoritative source for any financial decision.
+                <br><br>
+                Arclight Engineering is not responsible for math errors, miscategorizations,
+                stale data, or any financial loss resulting from use of this software.
+                <a href="/license/eula">Full EULA →</a>
+            </div>
+
+        </div>
+    </div>
+
+    <div class="footer-links">
+        <a href="http://www.arclighteng.com" target="_blank">Arclight Engineering</a>
+        &nbsp;·&nbsp;
+        <a href="mailto:support@arclighteng.com">support@arclighteng.com</a>
+    </div>
+
+</div>
+
+<script>
+    document.getElementById("licenseForm").addEventListener("submit", function () {
+        const btn = document.getElementById("submitBtn");
+        btn.disabled = true;
+        btn.textContent = "Activating\u2026";
+    });
+</script>
+</body>
+</html>

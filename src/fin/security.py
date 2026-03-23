@@ -257,3 +257,40 @@ def get_auth_info() -> dict:
         "full_token": display_token,  # For CLI to show once
         "source": source,
     }
+
+
+def get_or_create_persistent_token(data_dir) -> str:
+    """
+    Get or create a persistent auth token stored in the data directory.
+
+    Reads <data_dir>/auth_token. If missing or empty, generates a new
+    token with secrets.token_urlsafe(32) and writes it to that file.
+
+    If the write fails (e.g. read-only filesystem), logs a warning and
+    returns the generated token without persisting — graceful fallback to
+    per-process behavior.
+
+    Args:
+        data_dir: Path-like object pointing at the app data directory
+                  (same directory as fin.db; already ACL-hardened on startup).
+
+    Returns:
+        A non-empty token string.
+    """
+    from pathlib import Path as _Path
+    token_file = _Path(data_dir) / "auth_token"
+    if token_file.exists():
+        existing = token_file.read_text().strip()
+        if existing:
+            return existing
+    new_token = secrets.token_urlsafe(32)
+    try:
+        token_file.write_text(new_token)
+    except Exception as exc:
+        log.warning(
+            "Could not persist auth token to %s: %s. "
+            "Using per-process token — sessions will not survive restarts.",
+            token_file,
+            exc,
+        )
+    return new_token

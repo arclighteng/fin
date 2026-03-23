@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}fin{% endblock %}</title>
+    <title>{% block title %}Kept{% endblock %}</title>
     <style>
         /* Light Mode (Default) - Professional, minimal like PayPal/Mint */
         :root {
@@ -3011,7 +3011,7 @@
         })();
     </script>
     <nav class="nav">
-        <a href="/" class="nav-brand">fin <span class="nav-version">Beta {{ app_version }}</span></a>
+        <a href="/" class="nav-brand">Kept <span class="nav-version">Beta {{ app_version }}</span></a>
         <div class="nav-links">
             <a href="/dashboard" {% if request.url.path == '/dashboard' %}class="active"{% endif %}>Dashboard</a>
             <a href="/subs" {% if request.url.path == '/subs' %}class="active"{% endif %}>Recurring</a>
@@ -3073,7 +3073,7 @@
     <div id="fin-auth-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;align-items:center;justify-content:center;">
         <div style="background:var(--bg-secondary,#fff);border-radius:8px;padding:32px 28px;max-width:360px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,0.3);">
             <h2 style="margin-bottom:8px;font-size:18px;color:var(--text-primary,#1a1f36);">Sign In</h2>
-            <p style="margin-bottom:20px;font-size:13px;color:var(--text-secondary,#525f7f);">Enter your fin API token to continue.</p>
+            <p style="margin-bottom:20px;font-size:13px;color:var(--text-secondary,#525f7f);">Enter your Kept API token to continue.</p>
             <input id="fin-auth-token-input" type="password" placeholder="API token"
                 style="width:100%;padding:10px 12px;border:1px solid var(--border,#e1e5eb);border-radius:6px;font-size:14px;margin-bottom:12px;box-sizing:border-box;">
             <div id="fin-auth-error" style="display:none;color:#c53030;font-size:12px;margin-bottom:8px;"></div>
@@ -3162,7 +3162,18 @@
     </div>
     {% endif %}
 
-    <!-- Demo data banner: shown when no real transactions exist -->
+    <!-- Empty state banner: no data imported yet -->
+    {% if is_empty is defined and is_empty and not (is_demo is defined and is_demo) %}
+    <div class="demo-banner" id="demoBanner">
+        <span class="demo-banner-text">No data yet. Import a bank CSV or connect via SimpleFIN to get started.</span>
+        <div class="demo-banner-actions">
+            <a href="/connect" class="demo-banner-btn demo-banner-btn-primary">Import CSV</a>
+            <a href="/connect#simplefin" class="demo-banner-btn demo-banner-btn-secondary">Connect via SimpleFIN</a>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Demo data banner: shown when demo transactions are loaded -->
     {% if is_demo is defined and is_demo %}
     <div class="demo-banner" id="demoBanner">
         <span class="demo-banner-text">You're viewing demo data. Connect your bank to see your real finances.</span>

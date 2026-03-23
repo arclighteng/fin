@@ -41,15 +41,6 @@ from datetime import date, datetime, timedelta
 
 from . import db as dbmod
 
-# Emit deprecation warning for summarize_month/classify_month/detect_alerts
-# Detection utilities (get_subscriptions, etc.) are still valid
-warnings.warn(
-    "legacy_classify.py: summarize_month, classify_month, detect_alerts are deprecated. "
-    "Use report_service.py for user-facing reporting.",
-    DeprecationWarning,
-    stacklevel=2,
-)
-
 
 # ---------------------------------------------------------------------------
 # Known Subscription Services Registry
@@ -985,6 +976,11 @@ def classify_month(
     Returns list of ClassifiedTransaction with classification labels.
     Uses the shared classify_transaction() function for consistent logic.
     """
+    warnings.warn(
+        "classify_month() is deprecated. Use report_service.py for user-facing reporting.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     # Get month boundaries (end-exclusive)
     start = date(year, month, 1)
     if month == 12:
@@ -1109,6 +1105,11 @@ def summarize_month(
     """
     Generate a complete financial summary for a month.
     """
+    warnings.warn(
+        "summarize_month() is deprecated. Use report_service.py for user-facing reporting.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     # Let classify_month() compute patterns with proper anchoring to month end
     # This ensures historical reports are reproducible
     classified = classify_month(conn, year, month, patterns=None)
@@ -1215,6 +1216,11 @@ def detect_alerts(
     - New merchants (first seen this month)
     - Bundle overlaps (multiple services in same family)
     """
+    warnings.warn(
+        "detect_alerts() is deprecated. Use report_service.py for user-facing reporting.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     if patterns is None:
         patterns = _detect_patterns(conn)
     
