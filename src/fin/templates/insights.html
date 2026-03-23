@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+{% block title %}Insights{% endblock %}
+
+{% block content %}
+<div class="ins-page">
+    <h1 class="ins-title">Financial Insights</h1>
+
+    {% if months_with_data == 0 %}
+    <div class="card-v3" style="color: var(--text-muted); text-align: center; padding: 48px;">
+        No data yet. Add transactions to see your financial trends.
+    </div>
+    {% else %}
+
+    <!-- ===== SUMMARY ROW ===== -->
+    <div class="ins-summary">
+
+        <div class="ins-metric-card">
+            <div class="ins-metric-label">Avg Savings Rate</div>
+            <div class="ins-metric-value">{{ "%.0f"|format(avg_savings_rate_pct) }}%</div>
+            <div class="ins-metric-sub">last {{ months_with_data }} month{% if months_with_data != 1 %}s{% endif %}</div>
+        </div>
+
+        <div class="ins-metric-card">
+            <div class="ins-metric-label">Income Stability</div>
+            <div class="ins-metric-value ins-stability-{{ income_stability }}">
+                {{ income_stability | capitalize }}
+            </div>
+            <div class="ins-metric-sub">
+                {% if income_stability == "stable" %}CV &lt; 10%
+                {% elif income_stability == "moderate" %}CV 10–25%
+                {% else %}CV &gt; 25%{% endif %}
+            </div>
+        </div>
+
+        <div class="ins-metric-card">
+            <div class="ins-metric-label">Savings Streak</div>
+            <div class="ins-metric-value">{{ savings_streak }}</div>
+            <div class="ins-metric-sub">
+                {% if savings_streak == 0 %}no positive months
+                {% elif savings_streak == 1 %}month running
+                {% else %}months running{% endif %}
+            </div>
+        </div>
+
+    </div>
+
+    <!-- ===== SPARKLINE ===== -->
+    {% if savings_history | length > 1 %}
+    {% set rates = savings_history | map(attribute='savings_rate_pct') | list %}
+    {% set max_rate = rates | max %}
+    {% set min_rate = rates | min %}
+    {% set range_rate = (max_rate - min_rate) if (max_rate - min_rate) > 0 else 1 %}
+    {% set chart_h = 80 %}
+    {% set chart_w = 480 %}
+    {% set n = savings_history | length %}
+    {% set step = (chart_w / (n - 1)) if n > 1 else chart_w %}
+    <div class="card-v3">
+        <div class="card-title-v3">Savings Rate — {{ n }} Months</div>
+        <svg viewBox="0 0 {{ chart_w }} {{ chart_h + 20 }}"
+             style="width:100%;max-width:600px;display:block;overflow:visible;"
+             aria-label="{{ n }}-month savings rate chart">
+            <!-- 20% target line -->
+            {% set target_y = chart_h - ((20 - min_rate) / range_rate * chart_h) %}
+            {% if target_y >= 0 and target_y <= chart_h %}
+            <line x1="0" y1="{{ target_y | int }}" x2="{{ chart_w }}" y2="{{ target_y | int }}"
+                  stroke="#374151" stroke-width="1" stroke-dasharray="4 3"/>
+            <text x="{{ chart_w - 2 }}" y="{{ (target_y - 3) | int }}"
+                  font-size="9" fill="#6b7280" text-anchor="end">20% target</text>
+            {% endif %}
+            <!-- Sparkline polyline -->
+            <polyline
+                points="{% for entry in savings_history %}{{ ((loop.index0 * step) | int) }},{{ ((chart_h - ((entry.savings_rate_pct - min_rate) / range_rate * chart_h)) | int) }} {% endfor %}"
+                fill="none" stroke="#60a5fa" stroke-width="2" stroke-linejoin="round"/>
+            <!-- Data points -->
+            {% for entry in savings_history %}
+            {% set cx = (loop.index0 * step) | int %}
+            {% set cy = (chart_h - ((entry.savings_rate_pct - min_rate) / range_rate * chart_h)) | int %}
+            <circle cx="{{ cx }}" cy="{{ cy }}" r="3"
+                fill="{% if entry.savings_rate_pct >= 30 %}#4ade80{% elif entry.savings_rate_pct >= 20 %}#60a5fa{% elif entry.savings_rate_pct > 0 %}#facc15{% else %}#f87171{% endif %}"/>
+            {% endfor %}
+            <!-- X-axis labels (first, mid, last) -->
+            <text x="0" y="{{ chart_h + 14 }}" font-size="9" fill="#6b7280">{{ savings_history[0].label }}</text>
+            {% if n > 2 %}
+            {% set mid_i = (n // 2) %}
+            <text x="{{ (mid_i * step) | int }}" y="{{ chart_h + 14 }}" font-size="9" fill="#6b7280" text-anchor="middle">{{ savings_history[mid_i].label }}</text>
+            {% endif %}
+            <text x="{{ chart_w }}" y="{{ chart_h + 14 }}" font-size="9" fill="#6b7280" text-anchor="end">{{ savings_history[-1].label }}</text>
+        </svg>
+    </div>
+    {% endif %}
+
+    <!-- ===== MONTHLY TABLE ===== -->
+    <div class="card-v3">
+        <div class="card-title-v3">Monthly Breakdown</div>
+        <table class="ins-table">
+            <thead>
+                <tr>
+                    <th>Month</th>
+                    <th class="num">Income</th>
+                    <th class="num">Saved</th>
+                    <th class="num">Rate</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for entry in savings_history | reverse %}
+            <tr>
+                <td>{{ entry.label }}</td>
+                <td class="num">${{ "%.0f"|format(entry.income_cents / 100) }}</td>
+                <td class="num {% if entry.net_cents < 0 %}neg{% elif entry.net_cents > 0 %}pos{% endif %}">
+                    {% if entry.net_cents >= 0 %}${{ "%.0f"|format(entry.net_cents / 100) }}{% else %}−${{ "%.0f"|format((entry.net_cents * -1) / 100) }}{% endif %}
+                </td>
+                <td class="num {% if entry.savings_rate_pct >= 20 %}pos{% elif entry.savings_rate_pct < 0 %}neg{% endif %}">
+                    {{ "%.1f"|format(entry.savings_rate_pct) }}%
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% endif %}
+</div>
+
+<style>
+.ins-page { max-width: 700px; margin: 0 auto; padding: 24px 16px; }
+.ins-title { font-size: 20px; font-weight: 600; margin-bottom: 20px; color: var(--text-primary); }
+
+.ins-summary {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-bottom: 16px;
+}
+.ins-metric-card {
+    background: var(--surface-2, #1a1a1a);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 16px;
+}
+.ins-metric-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 4px;
+}
+.ins-metric-value {
+    font-size: 24px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+}
+.ins-metric-sub {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+.ins-stability-stable   { color: #4ade80; }
+.ins-stability-moderate { color: #facc15; }
+.ins-stability-variable { color: #f87171; }
+
+.ins-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+.ins-table th {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border-color);
+    font-weight: 500;
+    text-align: left;
+}
+.ins-table td {
+    padding: 7px 8px;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-primary);
+}
+.ins-table tr:last-child td { border-bottom: none; }
+.ins-table .num { text-align: right; font-family: var(--font-mono); }
+.ins-table .pos { color: #4ade80; }
+.ins-table .neg { color: #f87171; }
+</style>
+{% endblock %}

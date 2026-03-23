@@ -2058,6 +2058,24 @@ def subs(
     })
 
 
+@app.get("/insights", response_class=HTMLResponse)
+def insights_page(
+    request: Request,
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Financial health insights: 12-month savings rate history and income variability."""
+    rs = ReportService(conn)
+    reports = rs.report_periods(TimePeriod.MONTH, num_periods=12)
+    insights = _compute_insights_data(reports)
+    return templates.TemplateResponse("insights.html", {"request": request, **insights})
+
+
+@app.get("/plan", response_class=HTMLResponse)
+def plan_page(request: Request):
+    """Plan page — placeholder shell for future cash flow / debt / goals features."""
+    return templates.TemplateResponse("plan.html", {"request": request})
+
+
 @app.get("/audit", response_class=HTMLResponse)
 def audit_page(
     request: Request,
@@ -4058,6 +4076,87 @@ def _compute_pace_data(
         "variance_cents": variance_cents,
         "variance_pct": variance_pct,
         "top_drivers": top_drivers[:3],
+    }
+
+
+def _compute_insights_data(reports: list) -> dict:
+    """
+    Compute financial health insights from a list of FinancialReport objects.
+
+    Args:
+        reports: list of FinancialReport, most-recent-first (as returned by
+                 report_service.report_periods). May be empty.
+
+    Returns dict with:
+        savings_history      — list of monthly dicts, chronological (oldest first)
+        avg_savings_rate_pct — mean savings rate across months with income > 0
+        income_cv            — coefficient of variation of monthly income (%)
+        income_stability     — "stable" / "moderate" / "variable"
+        savings_streak       — consecutive positive-net months from most recent
+        months_with_data     — count of months with income > 0
+    """
+    import math
+
+    # Build per-month entries (skip months with no income)
+    # Report has .totals (PeriodTotals) and .start_date
+    entries = []
+    for r in reports:
+        income = r.totals.income_cents
+        net = r.totals.net_cents
+        if income <= 0:
+            continue
+        rate = round(net / income * 100, 1)
+        entries.append({
+            "label": r.start_date.strftime("%b %Y"),
+            "savings_rate_pct": rate,
+            "net_cents": net,
+            "income_cents": income,
+        })
+
+    # Reverse to chronological order (oldest first) for chart rendering
+    entries = list(reversed(entries))
+
+    months_with_data = len(entries)
+
+    # Average savings rate
+    avg_savings_rate_pct = 0.0
+    if months_with_data > 0:
+        avg_savings_rate_pct = round(
+            sum(e["savings_rate_pct"] for e in entries) / months_with_data, 1
+        )
+
+    # Income coefficient of variation (std dev / mean × 100)
+    income_cv = 0.0
+    income_stability = "stable"
+    if months_with_data >= 2:
+        incomes = [e["income_cents"] for e in entries]
+        mean_income = sum(incomes) / len(incomes)
+        if mean_income > 0:
+            variance = sum((x - mean_income) ** 2 for x in incomes) / len(incomes)
+            std_dev = math.sqrt(variance)
+            income_cv = round(std_dev / mean_income * 100, 1)
+    if income_cv >= 25.0:
+        income_stability = "variable"
+    elif income_cv >= 10.0:
+        income_stability = "moderate"
+    else:
+        income_stability = "stable"
+
+    # Savings streak — count consecutive positive-net months from most recent
+    savings_streak = 0
+    for e in reversed(entries):
+        if e["net_cents"] > 0:
+            savings_streak += 1
+        else:
+            break
+
+    return {
+        "savings_history": entries,
+        "avg_savings_rate_pct": avg_savings_rate_pct,
+        "income_cv": income_cv,
+        "income_stability": income_stability,
+        "savings_streak": savings_streak,
+        "months_with_data": months_with_data,
     }
 
 

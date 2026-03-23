@@ -215,6 +215,23 @@
             display: inline-block;
         }
 
+        /* SSL / HTTP security warning banner — danger tier (red: active security risk) */
+        .ssl-warning-banner {
+            background: #fff5f5;
+            border-bottom: 1px solid #feb2b2;
+            color: #9b2c2c;
+            text-align: center;
+            padding: 6px 16px;
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        [data-theme="dark"] .ssl-warning-banner {
+            background: #1f1113;
+            border-bottom-color: #6e1a1a;
+            color: var(--text-primary);
+        }
+
         /* Read-only mode banner */
         .read-only-banner {
             background: var(--accent-yellow);
@@ -241,7 +258,7 @@
             background: rgba(255,255,255,0.15);
         }
 
-        /* Demo data banner */
+        /* Demo data banner — amber: prominent by design (viewing fake data deserves attention) */
         .demo-banner {
             background: #fef3c7;
             border-bottom: 1px solid #f59e0b;
@@ -257,8 +274,8 @@
         }
 
         [data-theme="dark"] .demo-banner {
-            background: #451a03;
-            border-bottom-color: #92400e;
+            background: #1a1100;
+            border-bottom-color: #7c4a00;
             color: #fde68a;
         }
 
@@ -3018,6 +3035,8 @@
             <a href="/budget" {% if request.url.path == '/budget' %}class="active"{% endif %}>Budget</a>
             <a href="/audit" {% if request.url.path == '/audit' %}class="active"{% endif %}>Audit</a>
             <a href="/sync-log" {% if request.url.path == '/sync-log' %}class="active"{% endif %}>Sync Log</a>
+            <a href="/insights" {% if request.url.path == '/insights' %}class="active"{% endif %}>Insights</a>
+            <a href="/plan" {% if request.url.path == '/plan' %}class="active"{% endif %}>Plan</a>
         </div>
         <div class="sync-container">
             <span id="syncStatus" class="sync-status"></span>
@@ -3062,7 +3081,7 @@
 
     <!-- Item 8: HTTP (unencrypted) connection banner -->
     {% if is_http is defined and is_http %}
-    <div style="background:#7c3907;color:#fff;text-align:center;padding:6px 16px;font-size:13px;font-weight:500;">
+    <div class="ssl-warning-banner">
         &#9888; Unencrypted connection (HTTP). Your session and financial data are not encrypted in transit.
         Install openssl and restart without --no-tls to enable HTTPS.
     </div>
