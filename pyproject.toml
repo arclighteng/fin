@@ -1,8 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fin"]
+
 [project]
-name = "finproj"
+name = "getfin"
 version = "1.0.0"
-description = "Local-first finance MVP (SimpleFin + subscriptions/anomalies)"
+description = "Local-first personal finance — sync with your bank, detect subscriptions, track spending. All data stays on your machine."
+readme = "README.md"
+license = {file = "LICENSE"}
 requires-python = ">=3.12"
+authors = [{name = "Arclight Engineering", email = "hello@arclighteng.com"}]
+urls = {Homepage = "https://github.com/arclighteng/fin", Documentation = "https://github.com/arclighteng/fin#readme"}
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Web Environment",
+  "Environment :: Console",
+  "Intended Audience :: End Users/Desktop",
+  "Topic :: Office/Business :: Financial",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
 dependencies = [
   "fastapi",
   "uvicorn",

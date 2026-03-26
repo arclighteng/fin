@@ -232,7 +232,7 @@ templates = Jinja2Templates(directory=str(templates_dir))
 
 # Inject package version
 try:
-    templates.env.globals["app_version"] = pkg_version("finproj")
+    templates.env.globals["app_version"] = pkg_version("getfin")
 except PackageNotFoundError:
     templates.env.globals["app_version"] = "dev"
 

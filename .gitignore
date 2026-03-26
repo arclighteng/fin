@@ -6,6 +6,8 @@ exports/
 __pycache__/
 .pytest_cache/
 *.egg-info/
+dist/
+build/
 *.log
 *.pyc
 *.pyo

@@ -2715,7 +2715,7 @@ def web(
                 install_id = "unknown"
 
             try:
-                _ver = _pkg_version("finproj")
+                _ver = _pkg_version("getfin")
             except PackageNotFoundError:
                 _ver = "unknown"
 
