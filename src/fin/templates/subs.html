@@ -61,10 +61,10 @@
         {% set actual_charge = sub[9] %}
         {% set cadence_label = 'Billed annually' if cadence == 'annual' else 'Billed quarterly' if cadence == 'quarterly' else 'Billed weekly' if cadence == 'weekly' else 'Billed biweekly' if cadence == 'biweekly' else '' %}
         <div class="sub-item" data-payee="{{ merchant }}">
-            <div class="sub-icon type-toggle" onclick="event.stopPropagation(); toggleType('{{ merchant }}', 'subscription')" title="Click to change to Bill">
+            <div class="sub-icon type-toggle" onclick="event.stopPropagation(); toggleType('{{ merchant }}', 'subscription')" title="Click to change to Bill" tabindex="0" role="button" aria-label="Change {{ merchant }} to bill" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();toggleType('{{ merchant }}', 'subscription')}">
                 {% if txn_type == 'insurance' %}&#128737;{% else %}&#128260;{% endif %}
             </div>
-            <div class="sub-info clickable" onclick="drillPayee('{{ merchant }}')">
+            <div class="sub-info clickable" onclick="drillPayee('{{ merchant }}')" tabindex="0" role="button" aria-label="View transactions for {{ merchant }}" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();drillPayee('{{ merchant }}')}">
                 <div class="sub-name">
                     {% if display_name %}{{ display_name }}{% else %}{{ merchant }}{% endif %}
                     {% if is_known %}<span class="badge badge-known">&#10003; Known</span>{% endif %}
@@ -76,7 +76,7 @@
                 </div>
             </div>
             <div class="sub-amount">${{ "%.2f"|format(monthly_cents / 100) }}<span class="sub-freq">/mo</span></div>
-            <div class="sub-expand clickable" onclick="drillPayee('{{ merchant }}')">&#9654;</div>
+            <div class="sub-expand clickable" onclick="drillPayee('{{ merchant }}')" tabindex="0" role="button" aria-label="Expand transactions for {{ merchant }}" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();drillPayee('{{ merchant }}')}">&#9654;</div>
         </div>
         <!-- Drill-down section (hidden by default) -->
         <div class="payee-drilldown" id="payee-{{ loop.index }}" data-payee="{{ merchant }}" style="display: none;">
@@ -116,16 +116,16 @@
         {% set first_seen = bill[3] %}
         {% set last_seen = bill[4] %}
         <div class="sub-item bill" data-payee="{{ merchant }}">
-            <div class="sub-icon type-toggle" onclick="event.stopPropagation(); toggleType('{{ merchant }}', 'bill')" title="Click to change to Subscription">&#9889;</div>
+            <div class="sub-icon type-toggle" onclick="event.stopPropagation(); toggleType('{{ merchant }}', 'bill')" title="Click to change to Subscription" tabindex="0" role="button" aria-label="Change {{ merchant }} to subscription" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();toggleType('{{ merchant }}', 'bill')}">&#9889;</div>
             {% set bill_cadence_label = 'Billed annually' if cadence == 'annual' else 'Billed quarterly' if cadence == 'quarterly' else 'Billed bimonthly' if cadence == 'bimonthly' else '' %}
-            <div class="sub-info clickable" onclick="drillPayee('{{ merchant }}')">
+            <div class="sub-info clickable" onclick="drillPayee('{{ merchant }}')" tabindex="0" role="button" aria-label="View transactions for {{ merchant }}" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();drillPayee('{{ merchant }}')}">
                 <div class="sub-name">{{ merchant }}</div>
                 <div class="sub-meta">
                     {% if bill_cadence_label %}{{ bill_cadence_label }} &bull; {% endif %}Since {{ first_seen.strftime('%b %Y') }}
                 </div>
             </div>
             <div class="sub-amount">${{ "%.2f"|format(monthly_cents / 100) }}<span class="sub-freq">/mo</span></div>
-            <div class="sub-expand clickable" onclick="drillPayee('{{ merchant }}')">&#9654;</div>
+            <div class="sub-expand clickable" onclick="drillPayee('{{ merchant }}')" tabindex="0" role="button" aria-label="Expand transactions for {{ merchant }}" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();drillPayee('{{ merchant }}')}">&#9654;</div>
         </div>
         <!-- Drill-down section -->
         <div class="payee-drilldown" id="bill-{{ loop.index }}" data-payee="{{ merchant }}" style="display: none;">

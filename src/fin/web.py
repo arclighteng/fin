@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Generator
 
 import uvicorn
-from fastapi import APIRouter, Depends, FastAPI, File, Query, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -211,6 +212,19 @@ _rate_limit_api = _os.getenv("FIN_RATE_LIMIT_API", "200/minute")
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+async def _validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Return 400 for commitment endpoints, 422 for everything else."""
+    if request.url.path.startswith("/api/commitments"):
+        errors = exc.errors()
+        msg = "; ".join(f"{e['loc'][-1]}: {e['msg']}" for e in errors) if errors else "invalid request body"
+        return JSONResponse({"error": msg}, status_code=400)
+    # Default FastAPI behavior for other endpoints
+    return JSONResponse({"detail": exc.errors()}, status_code=422)
+
+
+app.add_exception_handler(RequestValidationError, _validation_exception_handler)
 
 # Setup Jinja2 templates
 templates_dir = Path(__file__).parent / "templates"
@@ -643,7 +657,7 @@ def dashboard(
 
     # If no data mode, return empty state
     if show_no_data:
-        return templates.TemplateResponse("dashboard_v2.html", {
+        return templates.TemplateResponse(request, "dashboard_v2.html", {
             "request": request,
             "period_type": period,
             "current_period": None,
@@ -673,6 +687,9 @@ def dashboard(
             "avg_savings_rate_pct": 0.0,
             "savings_tier": "negative",
             "pace_data": None,
+            "commitments_nudge": False,
+            "commitments_confirmed": 0,
+            "commitments_suggestions": 0,
         })
 
     # Initialize ReportService - THE canonical source of truth
@@ -730,7 +747,7 @@ def dashboard(
     reports = report_service.report_periods(
         TimePeriod.MONTH, num_periods=6, account_filter=account_filter
     )
-    period_vms = compute_period_trends(reports)
+    period_vms = compute_period_trends(reports, conn=conn)
     periods_json = [vm.to_json_dict() for vm in period_vms]
 
     # Use current_period from custom range, or first historical period
@@ -1102,6 +1119,12 @@ def dashboard(
     # Recurring total
     total_recurring_cents = sum(abs(s[1]) for s in subscriptions) + sum(abs(b[1]) for b in bills)
 
+    from .db import get_commitments as _gc
+    _all_commitments = _gc(conn, include_dismissed=False)
+    commitments_confirmed = len([r for r in _all_commitments if r["confirmed"]])
+    commitments_suggestions = len([r for r in _all_commitments if not r["confirmed"]])
+    commitments_nudge = commitments_confirmed == 0 or commitments_suggestions > 0
+
     # V3 DASHBOARD TEMPLATE CONTEXT
     # =====================================================================
     # New template variables for v3 dashboard redesign:
@@ -1130,7 +1153,7 @@ def dashboard(
     #   - Used for top-of-page integrity banner when score < 0.8
     #   - NOT shown in attention_items card anymore
 
-    return templates.TemplateResponse("dashboard_v2.html", {
+    return templates.TemplateResponse(request, "dashboard_v2.html", {
         "request": request,
         "period_type": period,
         "current_period": current_period,
@@ -1170,6 +1193,9 @@ def dashboard(
         # Demo mode: shown when demo transactions are loaded
         "is_demo": is_demo,
         "is_empty": is_empty,
+        "commitments_nudge": commitments_nudge,
+        "commitments_confirmed": commitments_confirmed,
+        "commitments_suggestions": commitments_suggestions,
     })
 
 
@@ -2028,7 +2054,7 @@ def subs(
 
     # If no data mode, return empty state
     if show_no_data:
-        return templates.TemplateResponse("subs.html", {
+        return templates.TemplateResponse(request, "subs.html", {
             "request": request,
             "subscriptions": [],
             "bills": [],
@@ -2046,7 +2072,7 @@ def subs(
     # Get duplicates for flagging
     duplicates = detect_duplicates(conn, days=days, account_filter=account_filter)
 
-    return templates.TemplateResponse("subs.html", {
+    return templates.TemplateResponse(request, "subs.html", {
         "request": request,
         "subscriptions": subscriptions,
         "bills": bills,
@@ -2067,13 +2093,13 @@ def insights_page(
     rs = ReportService(conn)
     reports = rs.report_periods(TimePeriod.MONTH, num_periods=12)
     insights = _compute_insights_data(reports)
-    return templates.TemplateResponse("insights.html", {"request": request, **insights})
+    return templates.TemplateResponse(request, "insights.html", {"request": request, **insights})
 
 
 @app.get("/plan", response_class=HTMLResponse)
 def plan_page(request: Request):
     """Plan page — placeholder shell for future cash flow / debt / goals features."""
-    return templates.TemplateResponse("plan.html", {"request": request})
+    return templates.TemplateResponse(request, "plan.html", {"request": request})
 
 
 @app.get("/audit", response_class=HTMLResponse)
@@ -2092,7 +2118,7 @@ def audit_page(
     ).fetchall()
 
     if show_no_data:
-        return templates.TemplateResponse("audit.html", {
+        return templates.TemplateResponse(request, "audit.html", {
             "request": request,
             "all_accounts": all_accounts,
             "selected_accounts": [],
@@ -2238,7 +2264,7 @@ def audit_page(
         if txn.txn_type == TransactionType.EXPENSE and txn.category_id in (None, "other"):
             ghosts.append(txn)
 
-    return templates.TemplateResponse("audit.html", {
+    return templates.TemplateResponse(request, "audit.html", {
         "request": request,
         "all_accounts": all_accounts,
         "selected_accounts": account_filter or [],
@@ -2458,7 +2484,7 @@ def export_summary(
     # Use canonical ReportService for all totals
     service = ReportService(conn)
     reports = service.report_periods(period_type, num_periods=12)
-    periods = compute_period_trends(reports, avg_window=3)
+    periods = compute_period_trends(reports, avg_window=3, conn=conn)
 
     output = io.StringIO()
     writer = csv.writer(output)
@@ -2567,6 +2593,12 @@ def api_sync(request: Request, _auth: bool = Depends(verify_auth_token)):
             # Check for post-close adjustments (transactions that landed in closed periods)
             adjustment_results = check_for_adjustments_on_ingest(conn)
             adjustment_count = sum(len(adj) for adj in adjustment_results.values())
+
+            try:
+                from .db import suggest_commitments_from_heuristics as _shf
+                _shf(conn)
+            except Exception:
+                pass  # Don't fail sync if suggestion seeding errors
 
             return JSONResponse(content={
                 "status": "ok",
@@ -3212,7 +3244,7 @@ def budget_page(
         if cid not in ("income", "transfer", "one_time_deposit")
     ]
 
-    return templates.TemplateResponse("budget.html", {
+    return templates.TemplateResponse(request, "budget.html", {
         "request": request,
         "budget_rows": budget_rows,
         "total_budget_cents": total_budget,
@@ -3459,181 +3491,7 @@ def sync_log_page(
         """
     ).fetchall()
 
-    html_content = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Sync Audit Log - fin</title>
-        <style>
-            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f7fa; margin: 0; padding: 20px; }}
-            .container {{ max-width: 1000px; margin: 0 auto; }}
-            h1 {{ color: #1a1f36; }}
-            .back-link {{ color: #2563eb; text-decoration: none; }}
-            .card {{ background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
-            .card h2 {{ margin-top: 0; font-size: 16px; color: #525f7f; text-transform: uppercase; letter-spacing: 0.5px; }}
-            .stats {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; }}
-            .stat {{ text-align: center; }}
-            .stat-value {{ font-size: 24px; font-weight: 600; color: #1a1f36; }}
-            .stat-label {{ font-size: 12px; color: #8792a2; }}
-            table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
-            th {{ text-align: left; padding: 8px; border-bottom: 2px solid #e1e5eb; color: #525f7f; font-weight: 500; }}
-            td {{ padding: 8px; border-bottom: 1px solid #e1e5eb; }}
-            .positive {{ color: #0e6245; }}
-            .negative {{ color: #c53030; }}
-            .muted {{ color: #8792a2; font-size: 11px; }}
-            .badge {{ display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }}
-            .badge-new {{ background: #c6f6d5; color: #0e6245; }}
-            .badge-updated {{ background: #feebc8; color: #b7791f; }}
-            .trust-banner {{ background: #e6fffa; border: 1px solid #38b2ac; border-radius: 8px; padding: 16px; margin-bottom: 20px; }}
-            .trust-banner h3 {{ margin: 0 0 8px 0; color: #234e52; font-size: 14px; }}
-            .trust-banner p {{ margin: 0; color: #285e61; font-size: 13px; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <p><a href="/dashboard" class="back-link">&larr; Back to Dashboard</a></p>
-            <h1>Sync Audit Log</h1>
-
-            <div class="trust-banner">
-                <h3>Data Retention Policy</h3>
-                <p>fin persists all data locally. Sync operations are <strong>append-only</strong>: new records are inserted,
-                existing records may be updated, but nothing is deleted. You control your data retention.</p>
-            </div>
-
-            <div class="card">
-                <h2>Data Overview</h2>
-                <div class="stats">
-                    <div class="stat">
-                        <div class="stat-value">{stats['total_txns']:,}</div>
-                        <div class="stat-label">Total Transactions</div>
-                    </div>
-                    <div class="stat">
-                        <div class="stat-value">{stats['earliest'][:10] if stats['earliest'] else 'N/A'}</div>
-                        <div class="stat-label">Earliest Transaction</div>
-                    </div>
-                    <div class="stat">
-                        <div class="stat-value">{stats['latest'][:10] if stats['latest'] else 'N/A'}</div>
-                        <div class="stat-label">Latest Transaction</div>
-                    </div>
-                    <div class="stat">
-                        <div class="stat-value">{len(runs)}</div>
-                        <div class="stat-label">Total Syncs</div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="card">
-                <h2>Sync History</h2>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>When</th>
-                            <th>Fetched</th>
-                            <th>New</th>
-                            <th>Updated</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-    """
-
-    for run in runs:
-        ran_at = run["ran_at"][:16].replace("T", " ") if run["ran_at"] else "Unknown"
-        html_content += f"""
-                        <tr>
-                            <td>{ran_at}</td>
-                            <td>{run['txns_fetched']}</td>
-                            <td class="positive">+{run['txns_inserted']}</td>
-                            <td>{run['txns_updated']}</td>
-                        </tr>
-        """
-
-    html_content += """
-                    </tbody>
-                </table>
-            </div>
-
-            <div class="card">
-                <h2>Recently Added Transactions</h2>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>First Seen</th>
-                            <th>Date</th>
-                            <th>Payee</th>
-                            <th>Amount</th>
-                            <th>Account</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-    """
-
-    for txn in recent_inserts:
-        created = txn["created_at"][:16].replace("T", " ") if txn["created_at"] else ""
-        posted = txn["posted_at"][:10] if txn["posted_at"] else ""
-        amount = txn["amount_cents"] / 100
-        amount_class = "positive" if amount >= 0 else "negative"
-        html_content += f"""
-                        <tr>
-                            <td class="muted">{created}</td>
-                            <td>{posted}</td>
-                            <td>{html.escape(txn['payee'][:40])}</td>
-                            <td class="{amount_class}">${abs(amount):.2f}</td>
-                            <td>{html.escape(txn['account_name'])}</td>
-                        </tr>
-        """
-
-    html_content += """
-                    </tbody>
-                </table>
-            </div>
-
-            <div class="card">
-                <h2>Recently Updated Transactions</h2>
-    """
-
-    if recent_updates:
-        html_content += """
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Updated</th>
-                            <th>Date</th>
-                            <th>Payee</th>
-                            <th>Amount</th>
-                            <th>Account</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-        """
-        for txn in recent_updates:
-            updated = txn["updated_at"][:16].replace("T", " ") if txn["updated_at"] else ""
-            posted = txn["posted_at"][:10] if txn["posted_at"] else ""
-            amount = txn["amount_cents"] / 100
-            amount_class = "positive" if amount >= 0 else "negative"
-            html_content += f"""
-                        <tr>
-                            <td class="muted">{updated}</td>
-                            <td>{posted}</td>
-                            <td>{html.escape(txn['payee'][:40])}</td>
-                            <td class="{amount_class}">${abs(amount):.2f}</td>
-                            <td>{html.escape(txn['account_name'])}</td>
-                        </tr>
-            """
-        html_content += """
-                    </tbody>
-                </table>
-        """
-    else:
-        html_content += "<p style='color: #8792a2;'>No transactions have been updated since they were first synced.</p>"
-
-    html_content += """
-            </div>
-        </div>
-    </body>
-    </html>
-    """
-
-    return templates.TemplateResponse("sync-log.html", {
+    return templates.TemplateResponse(request, "sync-log.html", {
         "request": request,
         "runs": runs,
         "stats": stats,
@@ -3847,7 +3705,7 @@ def connect_page(request: Request):
     Onboarding page: CSV import and SimpleFIN connection.
     Public — no auth required (same as /dashboard in demo mode).
     """
-    return templates.TemplateResponse("connect.html", {"request": request})
+    return templates.TemplateResponse(request, "connect.html", {"request": request})
 
 
 # ---------------------------------------------------------------------------
@@ -4158,6 +4016,286 @@ def _compute_insights_data(reports: list) -> dict:
         "savings_streak": savings_streak,
         "months_with_data": months_with_data,
     }
+
+
+# ---------------------------------------------------------------------------
+# Commitments REST API + Page
+# ---------------------------------------------------------------------------
+from .db import (
+    get_commitments as _get_commitments,
+    upsert_commitment as _upsert_commitment,
+    delete_commitment as _delete_commitment,
+    find_matching_transactions as _find_matching_transactions,
+    suggest_commitments_from_heuristics as _suggest_heuristics,
+    VALID_CADENCES as _VALID_CADENCES,
+    VALID_SOURCES as _VALID_SOURCES,
+    VALID_DIRECTIONS as _VALID_DIRECTIONS,
+)
+from .projections import _compute_next_due_date as _proj_next_due
+
+
+_CADENCE_MULTS_LOCAL = {
+    "monthly": 1.0, "weekly": 4.33, "biweekly": 2.17,
+    "quarterly": 1/3, "annual": 1/12,
+}
+
+_commitment_log = _logging.getLogger("fin.commitments")
+
+
+class CommitmentCreateRequest(BaseModel):
+    """Validated request body for POST /api/commitments."""
+
+    name: str
+    merchant_norm: str | None = None
+    expected_cents: int | None = None
+    cadence: str = "monthly"
+    day_of_month: int | None = None
+    reference_date: str | None = None
+    confirmed: int = 1
+    source: str = "manual"
+    direction: str = "expense"
+
+
+class CommitmentPatchRequest(BaseModel):
+    """Validated request body for PATCH /api/commitments/{id}.
+
+    All fields are optional — only supplied fields are applied.
+    direction is not patchable (delete and re-create instead).
+    """
+
+    model_config = {"extra": "forbid"}
+
+    name: str | None = None
+    merchant_norm: str | None = None
+    expected_cents: int | None = None
+    cadence: str | None = None
+    day_of_month: int | None = None
+    reference_date: str | None = None
+    confirmed: int | None = None
+    source: str | None = None
+
+
+def _monthly_equivalent(c: dict, conn) -> int:
+    """Compute monthly-equivalent cents for a commitment."""
+    ec = c.get("expected_cents")
+    cadence = c.get("cadence", "monthly")
+    if cadence == "one_time":
+        return 0
+    if ec is None:
+        matches = _find_matching_transactions(
+            conn,
+            merchant_norm=c.get("merchant_norm") or "",
+            day_of_month=c.get("day_of_month"),
+            cadence=cadence,
+            expected_cents=None,
+            source=c.get("source", "detected"),
+            direction=c.get("direction", "expense"),
+        )
+        if not matches:
+            return 0
+        amounts = sorted(abs(m["amount_cents"]) for m in matches[:3])
+        ec = amounts[len(amounts) // 2]
+    return int(ec * _CADENCE_MULTS_LOCAL.get(cadence, 1.0))
+
+
+def _enrich_commitment(c: dict, conn) -> dict:
+    """Add computed fields: monthly_equivalent_cents, next_due_date, confirmed as bool."""
+    from datetime import date as _date
+    c = dict(c)
+    c["confirmed"] = bool(c.get("confirmed"))
+    c["monthly_equivalent_cents"] = _monthly_equivalent(c, conn)
+    today = _date.today()
+    next_due = _proj_next_due(
+        cadence=c.get("cadence", "monthly"),
+        day_of_month=c.get("day_of_month"),
+        reference_date_str=c.get("reference_date"),
+        today=today,
+    )
+    c["next_due_date"] = next_due.isoformat() if next_due else None
+    return c
+
+
+@app.get("/api/commitments/suggest")
+def api_commitments_suggest(
+    merchant_norm: str,
+    expected_cents: int | None = None,
+    day_of_month: int | None = None,
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Preview matching transactions for a potential commitment."""
+    matches = _find_matching_transactions(
+        conn,
+        merchant_norm=merchant_norm,
+        day_of_month=day_of_month,
+        cadence="monthly",
+        expected_cents=expected_cents,
+        source="detected",
+    )
+    amounts = [abs(m["amount_cents"]) for m in matches]
+    median = sorted(amounts)[len(amounts) // 2] if amounts else None
+    return JSONResponse({
+        "count": len(matches),
+        "median_cents": median,
+        "transactions": matches,
+    })
+
+
+@app.get("/api/commitments")
+def api_list_commitments(
+    include_dismissed: int = 0,
+    confirmed_only: int = 0,
+    direction: str | None = None,
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    if direction is not None and direction not in _VALID_DIRECTIONS:
+        return JSONResponse({"error": f"invalid direction: {direction}"}, status_code=400)
+    rows = _get_commitments(
+        conn,
+        include_dismissed=bool(include_dismissed),
+        confirmed_only=bool(confirmed_only),
+        direction=direction,
+    )
+    return JSONResponse([_enrich_commitment(r, conn) for r in rows])
+
+
+@app.post("/api/commitments", status_code=201)
+async def api_create_commitment(
+    body: CommitmentCreateRequest,
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    if not body.name.strip():
+        return JSONResponse({"error": "name is required"}, status_code=400)
+    if body.cadence not in _VALID_CADENCES:
+        return JSONResponse({"error": f"invalid cadence: {body.cadence}"}, status_code=400)
+    if body.cadence == "one_time" and not body.reference_date:
+        return JSONResponse({"error": "reference_date required for one_time cadence"}, status_code=400)
+    if body.direction not in _VALID_DIRECTIONS:
+        return JSONResponse({"error": f"invalid direction: {body.direction}"}, status_code=400)
+    if body.day_of_month is not None and not (1 <= body.day_of_month <= 31):
+        return JSONResponse({"error": "day_of_month must be between 1 and 31"}, status_code=400)
+    try:
+        new_id = _upsert_commitment(
+            conn,
+            name=body.name,
+            merchant_norm=body.merchant_norm,
+            expected_cents=body.expected_cents,
+            cadence=body.cadence,
+            day_of_month=body.day_of_month,
+            reference_date=body.reference_date,
+            confirmed=body.confirmed,
+            source=body.source,
+            direction=body.direction,
+        )
+        row = conn.execute("SELECT * FROM commitments WHERE id=?", (new_id,)).fetchone()
+        return JSONResponse(_enrich_commitment(dict(row), conn), status_code=201)
+    except Exception:
+        _commitment_log.exception("Commitment creation failed")
+        return JSONResponse({"error": "Failed to create commitment"}, status_code=500)
+
+
+@app.patch("/api/commitments/{commitment_id}")
+async def api_patch_commitment(
+    commitment_id: int,
+    body: CommitmentPatchRequest,
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    existing = conn.execute(
+        "SELECT * FROM commitments WHERE id=?", (commitment_id,)
+    ).fetchone()
+    if existing is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    if body.source is not None and body.source not in _VALID_SOURCES:
+        return JSONResponse({"error": f"invalid source: {body.source}"}, status_code=400)
+    if body.cadence is not None and body.cadence not in _VALID_CADENCES:
+        return JSONResponse({"error": f"invalid cadence: {body.cadence}"}, status_code=400)
+    if body.day_of_month is not None and not (1 <= body.day_of_month <= 31):
+        return JSONResponse({"error": "day_of_month must be between 1 and 31"}, status_code=400)
+    current = dict(existing)
+    new_confirmed = body.confirmed if body.confirmed is not None else current["confirmed"]
+    new_source = body.source if body.source is not None else current["source"]
+    _commitment_log.info(
+        "PATCH id=%d: confirmed %s→%s, source %s→%s, direction=%s",
+        commitment_id, current["confirmed"], new_confirmed,
+        current["source"], new_source, current["direction"],
+    )
+    try:
+        _upsert_commitment(
+            conn,
+            commitment_id=commitment_id,
+            name=body.name if body.name is not None else current["name"],
+            merchant_norm=body.merchant_norm if body.merchant_norm is not None else current["merchant_norm"],
+            expected_cents=body.expected_cents if body.expected_cents is not None else current["expected_cents"],
+            cadence=body.cadence if body.cadence is not None else current["cadence"],
+            day_of_month=body.day_of_month if body.day_of_month is not None else current["day_of_month"],
+            reference_date=body.reference_date if body.reference_date is not None else current["reference_date"],
+            confirmed=new_confirmed,
+            source=new_source,
+            direction=current["direction"],
+        )
+    except Exception:
+        _commitment_log.exception("Commitment update failed for id=%d", commitment_id)
+        return JSONResponse({"error": "Failed to update commitment"}, status_code=500)
+    row = conn.execute("SELECT * FROM commitments WHERE id=?", (commitment_id,)).fetchone()
+    after = dict(row)
+    _commitment_log.info(
+        "PATCH id=%d result: confirmed=%s, source=%s, direction=%s",
+        commitment_id, after["confirmed"], after["source"], after["direction"],
+    )
+    return JSONResponse(_enrich_commitment(after, conn))
+
+
+@app.delete("/api/commitments/{commitment_id}", status_code=204)
+def api_delete_commitment(
+    commitment_id: int,
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    existing = conn.execute(
+        "SELECT id FROM commitments WHERE id=?", (commitment_id,)
+    ).fetchone()
+    if existing is None:
+        raise HTTPException(status_code=404, detail="not found")
+    _delete_commitment(conn, commitment_id)
+    return Response(status_code=204)
+
+
+@app.get("/commitments", response_class=HTMLResponse)
+def commitments_page(
+    request: Request,
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Income & Commitments management page."""
+    _suggest_heuristics(conn)
+    all_rows = _get_commitments(conn, include_dismissed=False)
+    dismissed_rows = _get_commitments(conn, include_dismissed=True)
+    # Dismissed = in the full set but not in the filtered set (by id)
+    active_ids = {r["id"] for r in all_rows}
+    dismissed_only = [r for r in dismissed_rows if r["id"] not in active_ids]
+
+    income_confirmed = [_enrich_commitment(r, conn) for r in all_rows if r["confirmed"] and r.get("direction") == "income"]
+    income_suggestions = [_enrich_commitment(r, conn) for r in all_rows if not r["confirmed"] and r.get("direction") == "income"]
+    expense_confirmed = [_enrich_commitment(r, conn) for r in all_rows if r["confirmed"] and r.get("direction", "expense") == "expense"]
+    expense_suggestions = [_enrich_commitment(r, conn) for r in all_rows if not r["confirmed"] and r.get("direction", "expense") == "expense"]
+    income_dismissed = [_enrich_commitment(r, conn) for r in dismissed_only if r.get("direction") == "income"]
+    expense_dismissed = [_enrich_commitment(r, conn) for r in dismissed_only if r.get("direction", "expense") == "expense"]
+
+    income_monthly_total = sum(r["monthly_equivalent_cents"] for r in income_confirmed)
+    expense_monthly_total = sum(r["monthly_equivalent_cents"] for r in expense_confirmed)
+    net_monthly = income_monthly_total - expense_monthly_total
+
+    return templates.TemplateResponse(request, "commitments.html", {
+        "request": request,
+        "income_confirmed": income_confirmed,
+        "income_suggestions": income_suggestions,
+        "expense_confirmed": expense_confirmed,
+        "expense_suggestions": expense_suggestions,
+        "income_dismissed": income_dismissed,
+        "expense_dismissed": expense_dismissed,
+        "income_monthly_total": income_monthly_total,
+        "expense_monthly_total": expense_monthly_total,
+        "net_monthly": net_monthly,
+        "income_suggestion_count": len(income_suggestions),
+        "expense_suggestion_count": len(expense_suggestions),
+    })
 
 
 if __name__ == "__main__":

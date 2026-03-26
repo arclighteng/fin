@@ -14,7 +14,7 @@
             --border: #e1e5eb;
             --text-primary: #1a1f36;
             --text-secondary: #525f7f;
-            --text-muted: #8792a2;
+            --text-muted: #656d76;
             --accent-green: #0e6245;
             --accent-green-dim: #c6f6d5;
             --accent-red: #c53030;
@@ -37,8 +37,8 @@
             --border: #30363d;
             --text-primary: #e6edf3;
             --text-secondary: #8b949e;
-            --text-muted: #6e7681;
-            --accent-green: #3fb950;
+            --text-muted: #8b949e;
+            --accent-green: #56d364;
             --accent-green-dim: #238636;
             --accent-red: #f85149;
             --accent-red-dim: #da3633;
@@ -585,7 +585,7 @@
         }
 
         .hero-insight.negative {
-            border-bottom: 3px solid var(--accent-yellow);
+            border-bottom: 3px solid var(--accent-red);
         }
 
         .hero-headline {
@@ -605,7 +605,7 @@
         }
 
         .hero-insight.negative .hero-amount {
-            color: var(--accent-yellow);
+            color: var(--accent-red);
         }
 
         .hero-transfers {
@@ -2714,6 +2714,30 @@
             background: var(--text-muted);
         }
 
+        /* Focus visibility — keyboard navigation only */
+        :focus-visible {
+            outline: 2px solid var(--accent-blue);
+            outline-offset: 2px;
+        }
+
+        /* Skip-to-content link — visually hidden until focused */
+        .skip-link {
+            position: absolute;
+            top: -40px;
+            left: 0;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            padding: 8px 16px;
+            z-index: 100;
+            font-size: 14px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+        }
+        .skip-link:focus {
+            top: 8px;
+            left: 8px;
+        }
+
         /* =================================================================
            MOBILE RESPONSIVE STYLES
            ================================================================= */
@@ -3027,16 +3051,17 @@
             }
         })();
     </script>
+    <a href="#main-content" class="skip-link">Skip to main content</a>
     <nav class="nav">
         <a href="/" class="nav-brand">Kept <span class="nav-version">Beta {{ app_version }}</span></a>
         <div class="nav-links">
             <a href="/dashboard" {% if request.url.path == '/dashboard' %}class="active"{% endif %}>Dashboard</a>
+            <a href="/commitments" {% if request.url.path == '/commitments' %}class="active"{% endif %}>Income & Expenses</a>
             <a href="/subs" {% if request.url.path == '/subs' %}class="active"{% endif %}>Recurring</a>
             <a href="/budget" {% if request.url.path == '/budget' %}class="active"{% endif %}>Budget</a>
+            <a href="/insights" {% if request.url.path == '/insights' %}class="active"{% endif %}>Insights</a>
             <a href="/audit" {% if request.url.path == '/audit' %}class="active"{% endif %}>Audit</a>
             <a href="/sync-log" {% if request.url.path == '/sync-log' %}class="active"{% endif %}>Sync Log</a>
-            <a href="/insights" {% if request.url.path == '/insights' %}class="active"{% endif %}>Insights</a>
-            <a href="/plan" {% if request.url.path == '/plan' %}class="active"{% endif %}>Plan</a>
         </div>
         <div class="sync-container">
             <span id="syncStatus" class="sync-status"></span>
@@ -3217,7 +3242,7 @@
     </script>
     {% endif %}
 
-    <div class="container">
+    <div id="main-content" class="container">
         {% block content %}{% endblock %}
     </div>
 

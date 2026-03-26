@@ -105,9 +105,62 @@ def project_cash_flow(
 
     upcoming_charges: list[UpcomingCharge] = []
 
+    # ── Confirmed commitments first pass (confidence=1.0) ──
+    from .db import get_commitments, find_matching_transactions
+
+    confirmed_commitments = get_commitments(conn, confirmed_only=True, direction="expense")
+    covered_merchants: set[str] = set()
+
+    for commitment in confirmed_commitments:
+        merchant_norm = commitment.get("merchant_norm") or ""
+        expected_cents = commitment.get("expected_cents")
+
+        # Resolve amount
+        if expected_cents is None:
+            matches = find_matching_transactions(
+                conn,
+                merchant_norm=merchant_norm,
+                day_of_month=commitment.get("day_of_month"),
+                cadence=commitment["cadence"],
+                expected_cents=None,
+                source=commitment["source"],
+            )
+            if not matches:
+                continue  # Cannot project without amount
+            amounts = sorted(abs(m["amount_cents"]) for m in matches[:3])
+            expected_cents = amounts[len(amounts) // 2]
+
+        next_due = _compute_next_due_date(
+            cadence=commitment["cadence"],
+            day_of_month=commitment.get("day_of_month"),
+            reference_date_str=commitment.get("reference_date"),
+            today=today,
+        )
+
+        if next_due and today <= next_due <= end_date:
+            upcoming_charges.append(UpcomingCharge(
+                merchant=merchant_norm or commitment["name"],
+                display_name=commitment["name"],
+                expected_date=next_due,
+                expected_amount_cents=expected_cents,
+                confidence=1.0,
+                cadence=commitment["cadence"],
+                bucket=SpendingBucket.FIXED_OBLIGATIONS,
+                is_subscription=False,
+                last_charge_date=None,
+            ))
+
+        if merchant_norm:
+            # Add to covered_merchants even if outside window — prevents heuristics from
+            # double-emitting a charge that's confirmed to exist but not due within the window
+            covered_merchants.add(merchant_norm.lower())
+
     # Project subscription charges
     for sub in subscriptions:
         merchant, monthly_cents, cadence, first_seen, last_seen, is_dup, txn_type, is_known, display_name, actual_cents = sub
+
+        if merchant.lower() in covered_merchants:
+            continue
 
         # Predict next charge date based on cadence and last seen
         if cadence == "monthly":
@@ -148,7 +201,12 @@ def project_cash_flow(
 
     # Project bill charges
     for bill in bills:
-        merchant, monthly_cents, cadence, first_seen, last_seen, is_dup, txn_type, is_known, display_name, actual_cents = bill
+        merchant, monthly_cents, cadence, first_seen, last_seen, txn_type = bill
+        display_name = None
+        actual_cents = monthly_cents
+
+        if merchant.lower() in covered_merchants:
+            continue
 
         if cadence == "monthly":
             next_charge = _next_monthly_date(last_seen, today)
@@ -333,8 +391,8 @@ def _next_monthly_date(last_date: date, after: date) -> date:
     day = min(last_date.day, last_day)
     candidate = date(year, month, day)
 
-    # Keep advancing until we're after the target date
-    while candidate <= after:
+    # Keep advancing until we're on or after the target date
+    while candidate < after:
         month += 1
         if month > 12:
             month = 1
@@ -356,7 +414,31 @@ def _estimate_income(
 
     TRUTH CONTRACT: Uses canonical ReportService to get income.
     Only counts TransactionType.INCOME - never credits_other.
+
+    Override: if confirmed income commitments exist, use their monthly
+    equivalent sum instead of the rolling average heuristic.
     """
+    from .db import get_commitments
+
+    confirmed_income = get_commitments(conn, confirmed_only=True, direction="income")
+    if confirmed_income:
+        cadence_multipliers = {
+            "monthly": 1.0,
+            "weekly": 4.33,
+            "biweekly": 2.17,
+            "quarterly": 1 / 3,
+            "annual": 1 / 12,
+        }
+        monthly_sum = 0
+        for c in confirmed_income:
+            ec = c.get("expected_cents")
+            cadence = c.get("cadence", "monthly")
+            if cadence == "one_time" or ec is None:
+                continue
+            monthly_sum += int(ec * cadence_multipliers.get(cadence, 1.0))
+        if monthly_sum > 0:
+            return int(monthly_sum * days_forward / 30)
+
     from .report_service import ReportService
     from .dates import TimePeriod
 
@@ -407,3 +489,67 @@ def _estimate_flexible_spending(
     # Scale to days_forward
     scale = days_forward / 30
     return int(variable * scale), int(discretionary * scale)
+
+
+def _compute_next_due_date(
+    cadence: str,
+    day_of_month: Optional[int],
+    reference_date_str: Optional[str],
+    today: date,
+) -> Optional[date]:
+    """Compute next due date for a commitment given its cadence and anchors.
+
+    Returns None if next occurrence cannot be determined.
+    """
+    if cadence == "monthly":
+        if day_of_month is not None:
+            anchor_day = day_of_month
+        elif reference_date_str:
+            anchor_day = date.fromisoformat(reference_date_str).day
+        else:
+            anchor_day = 1  # default: first of month
+        # Clamp to valid day for current month (handles day 29-31)
+        _, last_day = calendar.monthrange(today.year, today.month)
+        anchor_day = min(anchor_day, last_day)
+        return _next_monthly_date(
+            date(today.year, today.month, anchor_day), today
+        )
+
+    if reference_date_str is None:
+        return None  # Cannot project without reference_date
+
+    ref = date.fromisoformat(reference_date_str)
+
+    if cadence == "one_time":
+        return ref if ref >= today else None
+
+    if cadence == "weekly":
+        days_ahead = (ref.weekday() - today.weekday()) % 7
+        candidate = today + timedelta(days=days_ahead)
+        return candidate
+
+    if cadence == "biweekly":
+        days_since_ref = (today - ref).days
+        n = max(1, days_since_ref // 14 + 1)
+        candidate = ref + timedelta(days=14 * n)
+        while candidate <= today:
+            candidate += timedelta(days=14)
+        return candidate
+
+    if cadence == "quarterly":
+        days_since_ref = (today - ref).days
+        n = max(1, days_since_ref // 91 + 1)
+        candidate = ref + timedelta(days=91 * n)
+        while candidate <= today:
+            candidate += timedelta(days=91)
+        return candidate
+
+    if cadence == "annual":
+        days_since_ref = (today - ref).days
+        n = max(1, days_since_ref // 365 + 1)
+        candidate = ref + timedelta(days=365 * n)
+        while candidate <= today:
+            candidate += timedelta(days=365)
+        return candidate
+
+    return None

@@ -1093,14 +1093,14 @@
             <div class="cf-bars">
                 <div class="cf-bar-row">
                     <span class="cf-bar-label">Income</span>
-                    <div class="cf-bar-track" onclick="finDrilldown.open('income')" onkeydown="if(event.key==='Enter')this.click()" role="button" tabindex="0" title="Click for details">
+                    <div class="cf-bar-track" onclick="finDrilldown.open('income')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}" role="button" tabindex="0" title="Click for details">
                         <div class="cf-bar-fill income" style="width: {{ income_width }}%"></div>
                     </div>
                     <span class="cf-bar-amount">${{ "%.0f"|format(current_period.income_cents / 100) }}</span>
                 </div>
                 <div class="cf-bar-row">
                     <span class="cf-bar-label">Expenses</span>
-                    <div class="cf-bar-track" onclick="finDrilldown.open('spend')" onkeydown="if(event.key==='Enter')this.click()" role="button" tabindex="0" title="Click for details">
+                    <div class="cf-bar-track" onclick="finDrilldown.open('spend')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}" role="button" tabindex="0" title="Click for details">
                         <div class="cf-bar-fill expenses" style="width: {{ expense_width }}%"></div>
                     </div>
                     <span class="cf-bar-amount">${{ "%.0f"|format((current_period.recurring_cents + current_period.discretionary_cents) / 100) }}</span>
@@ -1213,7 +1213,7 @@
                     {% set merchant = item[0] %}
                     {% set amount = item[1] %}
                     {% set pc = price_changes_by_merchant.get(merchant) %}
-                    <li class="commit-item" onclick="finDrilldown.open('merchant:{{ merchant | lower }}')" onkeydown="if(event.key==='Enter')this.click()" role="button" tabindex="0" title="Click for details">
+                    <li class="commit-item" onclick="finDrilldown.open('merchant:{{ merchant | lower }}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}" role="button" tabindex="0" title="Click for details">
                         <div>
                             <div class="commit-name">{{ display_name }}</div>
                             {% if pc %}
@@ -1227,7 +1227,7 @@
                     </li>
                 {% endfor %}
                 {% if all_recurring|length > 8 %}
-                    <li class="commit-more" onclick="finDrilldown.open('recurring')" onkeydown="if(event.key==='Enter')this.click()" role="button" tabindex="0">View all recurring this month</li>
+                    <li class="commit-more" onclick="finDrilldown.open('recurring')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}" role="button" tabindex="0">View all recurring this month</li>
                 {% endif %}
             </ul>
 
@@ -1237,6 +1237,17 @@
             <div class="commit-footer">
                 <span>${{ "%.0f"|format(subs_total / 100) }}/mo subscriptions</span>
                 <span>${{ "%.0f"|format(bills_total / 100) }}/mo bills</span>
+            </div>
+            {% endif %}
+            {% if commitments_nudge is defined and commitments_nudge %}
+            <div class="commit-nudge">
+                <a href="/commitments">
+                    {%- if commitments_confirmed == 0 -%}
+                    Set your income & commitments →
+                    {%- else -%}
+                    {{ commitments_suggestions }} suggestion{{ 's' if commitments_suggestions != 1 }} to review →
+                    {%- endif -%}
+                </a>
             </div>
             {% endif %}
         </div>
@@ -1256,7 +1267,7 @@
                     {% set bar_width = (net_cents / max_category_amount * 100) | int if max_category_amount > 0 else 0 %}
                     {% set avg_cents = category_averages.get(category.id, 0) if category_averages else prev_category_map.get(category.id, 0) %}
                     {% set outlier_pct = category_outliers.get(category.id, 0) if category_outliers else (((net_cents - avg_cents) / avg_cents * 100) | int if avg_cents > 0 else 0) %}
-                    <li class="spend-item" onclick="finDrilldown.open('category:{{ category.id }}')" onkeydown="if(event.key==='Enter')this.click()" role="button" tabindex="0" title="Click for details">
+                    <li class="spend-item" onclick="finDrilldown.open('category:{{ category.id }}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}" role="button" tabindex="0" title="Click for details">
                         <div class="spend-row">
                             <span class="spend-name">{{ category.name }}</span>
                             <div class="spend-bar-track">
@@ -1388,7 +1399,7 @@
             <div class="card-title-v3">Heads Up</div>
             <div id="headsUpContent">
                 {% for item in attention_items %}
-                <div class="hu-item" id="huItem{{ loop.index }}" {% if item.drilldown_scope %}onclick="finDrilldown.open('{{ item.drilldown_scope }}')" onkeydown="if(event.key==='Enter')this.click()" role="button" tabindex="0" style="cursor:pointer"{% endif %}>
+                <div class="hu-item" id="huItem{{ loop.index }}" {% if item.drilldown_scope %}onclick="finDrilldown.open('{{ item.drilldown_scope }}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}" role="button" tabindex="0" style="cursor:pointer"{% endif %}>
                     <div class="hu-item-title">{{ item.title }}</div>
                     {% if item.detail %}
                     <div class="hu-item-detail">{{ item.detail }}</div>
@@ -1417,7 +1428,7 @@
                     {% set is_current = loop.last %}
                     {% set kept_amt = p.net_cents / 100 %}
                     {% set bar_height = ((p.net_cents | abs) / max_kept * 100) | int if max_kept > 0 else 10 %}
-                    <div class="trend-col" onclick="navigateToMonth('{{ p.start_date }}')" onkeydown="if(event.key==='Enter')this.click()" role="button" tabindex="0" title="Click to view {{ p.period_label }}">
+                    <div class="trend-col" onclick="navigateToMonth('{{ p.start_date }}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}" role="button" tabindex="0" title="Click to view {{ p.period_label }}">
                         <span class="trend-val">{{ '+' if kept_amt >= 0 else '-' }}${{ "%.0f"|format(kept_amt | abs) }}</span>
                         <div class="trend-bar {% if kept_amt < 0 %}negative{% endif %} {% if is_current and period_type == 'this_month' %}in-progress{% endif %}" style="height: {{ bar_height }}%"></div>
                         <span class="trend-month {% if is_current %}current{% endif %}">{{ p.period_label.split()[0][:3] }}</span>
@@ -1654,29 +1665,61 @@ async function dismissAlert(key, action, index) {
             return;
         }
 
-        let html = '';
+        // Build results via DOM API to avoid XSS from inline onclick string concatenation
+        resultsEl.innerHTML = '';
+        const fragment = document.createDocumentFragment();
+
         for (const txn of data.matches.slice(0, 20)) {
             const amt = Math.abs(txn.amount_cents / 100).toFixed(2);
             const sign = txn.amount_cents >= 0 ? '+' : '-';
             const amountClass = txn.amount_cents >= 0 ? 'positive' : 'negative';
             const merchantRaw = txn.merchant || txn.description || 'Unknown';
-            const merchantDisplay = escapeHtml(merchantRaw);
-            const account = escapeHtml(txn.account_name || '');
 
-            html += '<div class="search-result-item-v3" onclick="finDrilldown.open(\'merchant:' + encodeURIComponent(merchantRaw.toLowerCase()) + '\')">';
-            html += '<div class="search-result-info-v3">';
-            html += '<div class="search-result-merchant-v3">' + merchantDisplay + '</div>';
-            html += '<div class="search-result-meta-v3">' + txn.date + ' &bull; ' + account + '</div>';
-            html += '</div>';
-            html += '<div class="search-result-amount-v3 ' + amountClass + '">' + sign + '$' + amt + '</div>';
-            html += '</div>';
+            const resultItem = document.createElement('div');
+            resultItem.className = 'search-result-item-v3';
+            resultItem.setAttribute('tabindex', '0');
+            resultItem.setAttribute('role', 'button');
+            resultItem.setAttribute('aria-label', 'View transactions for ' + merchantRaw);
+            const capturedMerchant = merchantRaw.toLowerCase();
+            resultItem.addEventListener('click', () => finDrilldown.open('merchant:' + encodeURIComponent(capturedMerchant)));
+            resultItem.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    finDrilldown.open('merchant:' + encodeURIComponent(capturedMerchant));
+                }
+            });
+
+            const infoDiv = document.createElement('div');
+            infoDiv.className = 'search-result-info-v3';
+
+            const merchantDiv = document.createElement('div');
+            merchantDiv.className = 'search-result-merchant-v3';
+            merchantDiv.textContent = merchantRaw;
+
+            const metaDiv = document.createElement('div');
+            metaDiv.className = 'search-result-meta-v3';
+            metaDiv.textContent = txn.date + ' \u2022 ' + (txn.account_name || '');
+
+            infoDiv.appendChild(merchantDiv);
+            infoDiv.appendChild(metaDiv);
+
+            const amountDiv = document.createElement('div');
+            amountDiv.className = 'search-result-amount-v3 ' + amountClass;
+            amountDiv.textContent = sign + '$' + amt;
+
+            resultItem.appendChild(infoDiv);
+            resultItem.appendChild(amountDiv);
+            fragment.appendChild(resultItem);
         }
 
         if (data.matches_count > 20) {
-            html += '<div class="search-empty-v3">' + (data.matches_count - 20) + ' more results</div>';
+            const moreDiv = document.createElement('div');
+            moreDiv.className = 'search-empty-v3';
+            moreDiv.textContent = (data.matches_count - 20) + ' more results';
+            fragment.appendChild(moreDiv);
         }
 
-        resultsEl.innerHTML = html;
+        resultsEl.appendChild(fragment);
         resultsEl.style.display = 'block';
     }
 

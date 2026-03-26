@@ -5,11 +5,21 @@ View models for adapting Report data to template expectations.
 This module bridges the canonical Report model to what templates expect,
 allowing gradual migration without breaking existing templates.
 """
+import sqlite3
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Optional
 
 from .reporting_models import Report, TransactionType
+
+
+_CADENCE_MONTHLY_MULTIPLIERS: dict[str, float] = {
+    "monthly": 1.0,
+    "weekly": 4.33,
+    "biweekly": 2.17,
+    "quarterly": 1 / 3,
+    "annual": 1 / 12,
+}
 
 
 @dataclass
@@ -171,7 +181,11 @@ def reports_to_json(reports: list[Report]) -> list[dict]:
     return [PeriodViewModel.from_report(r).to_json_dict() for r in reports]
 
 
-def compute_period_trends(reports: list[Report], avg_window: int = 3) -> list[PeriodViewModel]:
+def compute_period_trends(
+    reports: list[Report],
+    avg_window: int = 3,
+    conn: Optional[sqlite3.Connection] = None,
+) -> list[PeriodViewModel]:
     """
     Convert Reports to PeriodViewModels with computed trends and rolling averages.
 
@@ -180,17 +194,73 @@ def compute_period_trends(reports: list[Report], avg_window: int = 3) -> list[Pe
     Args:
         reports: List of Reports (most recent first)
         avg_window: Number of periods for rolling average
+        conn: Optional database connection. If provided, overrides avg_recurring_cents
+              with the confirmed commitments monthly-equivalent sum.
 
     Returns:
         List of PeriodViewModels with populated avg_* and *_trend fields
     """
+    import warnings
+
+    # Compute confirmed commitments monthly sum if conn provided
+    confirmed_monthly_sum: int | None = None
+    confirmed_income_sum: int | None = None
+
+    if conn is not None:
+        from .db import get_commitments, find_matching_transactions
+
+        # Compute confirmed expenses
+        confirmed = get_commitments(conn, confirmed_only=True)
+        if confirmed:
+            total = 0
+            for c in confirmed:
+                ec = c.get("expected_cents")
+                cadence = c.get("cadence", "monthly")
+                if cadence == "one_time":
+                    continue
+                if ec is None:
+                    matches = find_matching_transactions(
+                        conn,
+                        merchant_norm=c.get("merchant_norm") or "",
+                        day_of_month=c.get("day_of_month"),
+                        cadence=cadence,
+                        expected_cents=None,
+                        source=c.get("source", "detected"),
+                    )
+                    if not matches:
+                        warnings.warn(
+                            f"Commitment {c['id']} ({c['name']}): no expected_cents "
+                            "and no matching transactions — using 0"
+                        )
+                        ec = 0
+                    else:
+                        amounts = sorted(abs(m["amount_cents"]) for m in matches[:3])
+                        ec = amounts[len(amounts) // 2]
+                total += int(ec * _CADENCE_MONTHLY_MULTIPLIERS.get(cadence, 1.0))
+            if total > 0:
+                confirmed_monthly_sum = total
+
+        # Compute confirmed income
+        confirmed_income = get_commitments(conn, confirmed_only=True, direction="income")
+        if confirmed_income:
+            income_total = 0
+            for c in confirmed_income:
+                ec = c.get("expected_cents")
+                cadence = c.get("cadence", "monthly")
+                if cadence == "one_time":
+                    continue
+                if ec is not None and ec > 0:
+                    income_total += int(ec * _CADENCE_MONTHLY_MULTIPLIERS.get(cadence, 1.0))
+            if income_total > 0:
+                confirmed_income_sum = income_total
+
     view_models = []
 
     for i, report in enumerate(reports):
         vm = PeriodViewModel.from_report(report)
 
         # Compute rolling averages from subsequent periods (which are older)
-        avg_periods = reports[i:i + avg_window]
+        avg_periods = reports[i : i + avg_window]
         if avg_periods:
             vm.avg_income_cents = sum(
                 PeriodViewModel.from_report(r).income_cents for r in avg_periods
@@ -202,6 +272,14 @@ def compute_period_trends(reports: list[Report], avg_window: int = 3) -> list[Pe
                 PeriodViewModel.from_report(r).discretionary_cents for r in avg_periods
             ) // len(avg_periods)
 
+        # Override avg_recurring_cents with confirmed commitments sum if available
+        if confirmed_monthly_sum is not None:
+            vm.avg_recurring_cents = confirmed_monthly_sum
+
+        # Override avg_income_cents with confirmed income sum if available
+        if confirmed_income_sum is not None and confirmed_income_sum > 0:
+            vm.avg_income_cents = confirmed_income_sum
+
         # Compute trends vs previous period
         if i + 1 < len(reports):
             prev = PeriodViewModel.from_report(reports[i + 1])
@@ -211,7 +289,9 @@ def compute_period_trends(reports: list[Report], avg_window: int = 3) -> list[Pe
 
             vm.income_trend = _compute_trend(vm.income_cents, prev.income_cents)
             vm.recurring_trend = _compute_trend(vm.recurring_cents, prev.recurring_cents)
-            vm.discretionary_trend = _compute_trend(vm.discretionary_cents, prev.discretionary_cents)
+            vm.discretionary_trend = _compute_trend(
+                vm.discretionary_cents, prev.discretionary_cents
+            )
 
         view_models.append(vm)
 

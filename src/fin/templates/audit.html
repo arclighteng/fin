@@ -97,7 +97,7 @@
             </thead>
             <tbody>
                 {% for m in top_merchants %}
-                <tr style="cursor: pointer;" onclick="finDrilldown.open('merchant:{{ m.merchant | lower }}')">
+                <tr style="cursor: pointer;" onclick="finDrilldown.open('merchant:{{ m.merchant | lower }}')" tabindex="0" role="row" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();finDrilldown.open('merchant:{{ m.merchant | lower }}')}">
                     <td>{{ m.merchant }}</td>
                     <td class="num">{{ m.count }}</td>
                     <td class="num">${{ "%.2f"|format(m.total_cents / 100) }}</td>
@@ -142,7 +142,7 @@
             </thead>
             <tbody>
                 {% for item in not_yet_posted %}
-                <tr style="cursor: pointer;" onclick="finDrilldown.open('merchant:{{ item.merchant | lower }}')">
+                <tr style="cursor: pointer;" onclick="finDrilldown.open('merchant:{{ item.merchant | lower }}')" tabindex="0" role="row" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();finDrilldown.open('merchant:{{ item.merchant | lower }}')}">
                     <td>{{ item.merchant }}</td>
                     <td>{{ item.cadence }}</td>
                     <td class="num">${{ "%.2f"|format(item.median_amount / 100) }}</td>
@@ -178,7 +178,7 @@
             </thead>
             <tbody>
                 {% for txn in low_confidence %}
-                <tr style="cursor: pointer;" onclick="finDrilldown.open('merchant:{{ txn.merchant_norm }}')">
+                <tr style="cursor: pointer;" onclick="finDrilldown.open('merchant:{{ txn.merchant_norm }}')" tabindex="0" role="row" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();finDrilldown.open('merchant:{{ txn.merchant_norm }}')}">
                     <td>{{ txn.posted_at }}</td>
                     <td>{{ txn.merchant_norm }}</td>
                     <td class="num">${{ "%.2f"|format(txn.amount_cents|abs / 100) }}</td>

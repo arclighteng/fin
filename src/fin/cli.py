@@ -1225,7 +1225,7 @@ def export_csv(
         summary_path = os.path.join(out, "monthly_summary.csv")
         service = ReportService(conn)
         reports = service.report_periods(TimePeriod.MONTH, num_periods=12)
-        periods = compute_period_trends(reports, avg_window=3)
+        periods = compute_period_trends(reports, avg_window=3, conn=conn)
         with open(summary_path, "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             w.writerow([
@@ -1975,7 +1975,7 @@ def export_summary_cmd(
         # Using canonical ReportService for all totals
         service = ReportService(conn)
         reports = service.report_periods(period_type, num_periods=num_periods)
-        periods = compute_period_trends(reports, avg_window=3)
+        periods = compute_period_trends(reports, avg_window=3, conn=conn)
 
         out_path = os.path.join(out, f"{period}_summary.csv")
         with open(out_path, "w", newline="", encoding="utf-8") as f:
@@ -2035,7 +2035,7 @@ def dashboard_cli(
             console.print("[yellow]No transaction data available.[/yellow]")
             return
 
-        periods = compute_period_trends(reports, avg_window=3)
+        periods = compute_period_trends(reports, avg_window=3, conn=conn)
         p = periods[0]
 
         # Format trend arrows

@@ -9,7 +9,7 @@
 <div class="search-container">
     <div class="search-box">
         <input type="text" id="searchInput" placeholder="Search transactions (merchant, description)..." autocomplete="off">
-        <button class="search-clear" id="searchClear" style="display: none;" onclick="clearSearch()">&#10005;</button>
+        <button class="search-clear" id="searchClear" style="display: none;" onclick="clearSearch()" aria-label="Clear search">&#10005;</button>
     </div>
     <div class="search-results" id="searchResults" style="display: none;">
         <div class="search-results-header">
@@ -143,7 +143,7 @@
     </div>
 
     <div class="stats-grid">
-        <div class="stat-box clickable" onclick="drillStatBox('recurring')" title="Click to see recurring transactions">
+        <div class="stat-box clickable" onclick="drillStatBox('recurring')" title="Click to see recurring transactions" tabindex="0" role="button" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}">
             <div class="stat-label">Recurring</div>
             <div class="stat-value neutral">${{ "%.2f"|format(current_period.recurring_cents / 100) }}</div>
             <div class="stat-trend {{ current_period.recurring_trend }}">
@@ -153,7 +153,7 @@
             <div class="stat-avg">avg: ${{ "%.0f"|format(current_period.avg_recurring_cents / 100) }}</div>
         </div>
 
-        <div class="stat-box clickable" onclick="drillStatBox('discretionary')" title="Click to see one-time transactions">
+        <div class="stat-box clickable" onclick="drillStatBox('discretionary')" title="Click to see one-time transactions" tabindex="0" role="button" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}">
             <div class="stat-label">One-time</div>
             <div class="stat-value neutral">${{ "%.2f"|format(current_period.discretionary_cents / 100) }}</div>
             <div class="stat-trend {{ current_period.discretionary_trend }}">
@@ -233,23 +233,23 @@
 
     <!-- Secondary Stats Row -->
     <div class="stats-secondary">
-        <div class="stat-secondary clickable" onclick="drillStatBox('income')" title="Click to see income">
+        <div class="stat-secondary clickable" onclick="drillStatBox('income')" title="Click to see income" tabindex="0" role="button" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}">
             <div class="stat-secondary-label">Income</div>
             <div class="stat-secondary-value positive">${{ "%.0f"|format(current_period.income_cents / 100) }}</div>
         </div>
         {% if current_period.incoming_transfer_cents > 0 %}
-        <div class="stat-secondary clickable" onclick="drillStatBox('transfer')" title="Click to see transfers in">
+        <div class="stat-secondary clickable" onclick="drillStatBox('transfer')" title="Click to see transfers in" tabindex="0" role="button" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}">
             <div class="stat-secondary-label">Transfers In</div>
             <div class="stat-secondary-value transfers">+${{ "%.0f"|format(current_period.incoming_transfer_cents / 100) }}</div>
         </div>
         {% endif %}
         <div class="stat-secondary-divider">−</div>
-        <div class="stat-secondary clickable" onclick="drillStatBox('recurring')" title="Click to see recurring">
+        <div class="stat-secondary clickable" onclick="drillStatBox('recurring')" title="Click to see recurring" tabindex="0" role="button" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}">
             <div class="stat-secondary-label">Recurring</div>
             <div class="stat-secondary-value">${{ "%.0f"|format(current_period.recurring_cents / 100) }}</div>
         </div>
         <div class="stat-secondary-divider">−</div>
-        <div class="stat-secondary clickable" onclick="drillStatBox('discretionary')" title="Click to see discretionary">
+        <div class="stat-secondary clickable" onclick="drillStatBox('discretionary')" title="Click to see discretionary" tabindex="0" role="button" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}">
             <div class="stat-secondary-label">Discretionary</div>
             <div class="stat-secondary-value">${{ "%.0f"|format(current_period.discretionary_cents / 100) }}</div>
         </div>
@@ -262,7 +262,7 @@
 
     <!-- Checksum Verification (clickable for transform details) -->
     <div class="checksum-container">
-        <div class="checksum-indicator {{ 'valid' if current_period.checksum_valid else 'invalid' }} clickable" onclick="toggleTransformDetails()">
+        <div class="checksum-indicator {{ 'valid' if current_period.checksum_valid else 'invalid' }} clickable" onclick="toggleTransformDetails()" tabindex="0" role="button" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}">
             {% if current_period.checksum_valid %}
             <span class="checksum-icon">✓</span> {{ current_period.transaction_count }} transactions verified
             <span class="checksum-expand">▸ Show math</span>
@@ -370,7 +370,7 @@
             {% set is_confirmed = merchant in income_sources %}
             {% set is_excluded = merchant in excluded_sources %}
             <div class="income-item{% if is_confirmed %} confirmed{% elif is_excluded %} excluded{% endif %}" data-merchant="{{ merchant }}">
-                <div class="income-row clickable" onclick="drillIncomeSource('{{ merchant }}', this)">
+                <div class="income-row clickable" onclick="drillIncomeSource('{{ merchant }}', this)" tabindex="0" role="button" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}">
                     <div class="income-merchant">
                         {{ merchant }}
                         {% if is_confirmed %}
@@ -428,7 +428,7 @@
     <div class="card-body">
     <div class="category-breakdown">
         {% for category, net_cents, count, gross_cents, refund_cents in category_breakdown %}
-        <div class="category-item clickable" onclick="drillCategory('{{ category.id }}')" data-category="{{ category.id }}" data-search="{{ category.name|lower }}">
+        <div class="category-item clickable" onclick="drillCategory('{{ category.id }}')" data-category="{{ category.id }}" data-search="{{ category.name|lower }}" tabindex="0" role="button" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}">
             <div class="category-icon">{{ category.icon }}</div>
             <div class="category-info">
                 <div class="category-name">{{ category.name }}</div>
@@ -482,7 +482,7 @@
                 {% if item.alert.severity == 'high' %}&#128308;{% elif item.alert.severity == 'medium' %}&#128993;{% else %}&#9898;{% endif %}
             </span>
             <div class="alert-content" style="flex: 1;">
-                <div class="alert-title" onclick="toggleAlertDetails(this)" style="cursor: pointer;">
+                <div class="alert-title" onclick="toggleAlertDetails(this)" style="cursor: pointer;" tabindex="0" role="button" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleAlertDetails(this)}">
                     <span class="alert-expand-icon">&#9654;</span>
                     {{ item.alert.pattern_type|replace('_', ' ')|title }}: {{ item.alert.merchant_norm }}
                     {% if item.alert.amount_cents %}
@@ -647,8 +647,8 @@
             {% set cadence = sub[2] %}
             {% set last_seen = sub[4] %}
             {% set cadence_suffix = '/yr' if cadence == 'annual' else '/qtr' if cadence == 'quarterly' else '/wk' if cadence == 'weekly' else '/mo' %}
-            <tr data-type="subscriptions" data-is-dup="{{ 'yes' if sub[5] else 'no' }}" data-merchant="{{ sub[0] }}" class="clickable-row" onclick="drillDashboardPayee('{{ sub[0] }}', this)">
-                <td><span class="type-badge subscription clickable" onclick="event.stopPropagation(); toggleType('{{ sub[0] }}', 'subscription')" title="Click to change to Bill">&#128260; Sub</span></td>
+            <tr data-type="subscriptions" data-is-dup="{{ 'yes' if sub[5] else 'no' }}" data-merchant="{{ sub[0] }}" class="clickable-row" onclick="drillDashboardPayee('{{ sub[0] }}', this)" tabindex="0" role="row" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();drillDashboardPayee('{{ sub[0] }}', this)}">
+                <td><span class="type-badge subscription clickable" onclick="event.stopPropagation(); toggleType('{{ sub[0] }}', 'subscription')" title="Click to change to Bill" tabindex="0" role="button" aria-label="Change {{ sub[0] }} to bill" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();toggleType('{{ sub[0] }}', 'subscription')}">&#128260; Sub</span></td>
                 <td>
                     {% if display_name %}{{ display_name }}{% else %}{{ sub[0] }}{% endif %}
                     {% if display_name and display_name != sub[0] %}<br><small style="color: var(--text-muted);">{{ sub[0] }}</small>{% endif %}
@@ -657,7 +657,7 @@
                 <td>{{ last_seen }}</td>
                 <td class="status-cell">
                     {% if sub[5] %}
-                    <span class="status-badge warning clickable" onclick="event.stopPropagation(); dismissDuplicate('{{ sub[0] }}')" title="Possible duplicate subscription. Click to dismiss this warning.">⚠️ Dup?</span>
+                    <span class="status-badge warning clickable" onclick="event.stopPropagation(); dismissDuplicate('{{ sub[0] }}')" title="Possible duplicate subscription. Click to dismiss this warning." tabindex="0" role="button" aria-label="Dismiss duplicate warning for {{ sub[0] }}" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();dismissDuplicate('{{ sub[0] }}')}">⚠️ Dup?</span>
                     {% elif is_known %}
                     <span class="status-badge success">✓ Known</span>
                     {% else %}
@@ -677,8 +677,8 @@
             </tr>
             {% endfor %}
             {% for bill in bills %}
-            <tr data-type="bills" data-merchant="{{ bill[0] }}" class="clickable-row" onclick="drillDashboardPayee('{{ bill[0] }}', this)">
-                <td><span class="type-badge bill clickable" onclick="event.stopPropagation(); toggleType('{{ bill[0] }}', 'bill')" title="Click to change to Subscription">&#9889; Bill</span></td>
+            <tr data-type="bills" data-merchant="{{ bill[0] }}" class="clickable-row" onclick="drillDashboardPayee('{{ bill[0] }}', this)" tabindex="0" role="row" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();drillDashboardPayee('{{ bill[0] }}', this)}">
+                <td><span class="type-badge bill clickable" onclick="event.stopPropagation(); toggleType('{{ bill[0] }}', 'bill')" title="Click to change to Subscription" tabindex="0" role="button" aria-label="Change {{ bill[0] }} to subscription" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();toggleType('{{ bill[0] }}', 'bill')}">&#9889; Bill</span></td>
                 <td>{{ bill[0] }}</td>
                 <td data-value="{{ bill[1] }}">${{ "%.2f"|format(bill[1] / 100) }}/mo</td>
                 <td>{{ bill[4] }}</td>
@@ -756,17 +756,43 @@
 
 {% block scripts %}
 <script>
-    // Date limit modal
+    // Date limit modal with focus trap
+    function trapFocus(modal) {
+        const focusable = modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+
+        modal._trapHandler = function(e) {
+            if (e.key === 'Tab') {
+                if (e.shiftKey && document.activeElement === first) {
+                    e.preventDefault();
+                    last.focus();
+                } else if (!e.shiftKey && document.activeElement === last) {
+                    e.preventDefault();
+                    first.focus();
+                }
+            }
+            if (e.key === 'Escape') {
+                hideDateLimitModal();
+            }
+        };
+        modal.addEventListener('keydown', modal._trapHandler);
+        if (first) first.focus();
+    }
+
     function showDateLimitModal() {
         const modal = document.getElementById('dateLimitModal');
         modal.style.display = 'flex';
-        modal.querySelector('button').focus();
-        document.addEventListener('keydown', handleModalEscape);
+        trapFocus(modal);
     }
 
     function hideDateLimitModal() {
-        document.getElementById('dateLimitModal').style.display = 'none';
-        document.removeEventListener('keydown', handleModalEscape);
+        const modal = document.getElementById('dateLimitModal');
+        modal.style.display = 'none';
+        if (modal._trapHandler) {
+            modal.removeEventListener('keydown', modal._trapHandler);
+            modal._trapHandler = null;
+        }
     }
 
     function handleModalEscape(e) {

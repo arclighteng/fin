@@ -374,7 +374,9 @@
                 </div>
                 <div class="budget-row-amounts drillable"
                      onclick="event.stopPropagation(); finDrilldown.open('category:{{ row.category.id }}')"
-                     title="View transactions">
+                     title="View transactions"
+                     tabindex="0" role="button" aria-label="View transactions for {{ row.category.name }}"
+                     onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();finDrilldown.open('category:{{ row.category.id }}')}">
                     <span class="spent">${{ "%.0f"|format(row.spent_cents / 100) }}</span>
                     / ${{ "%.0f"|format(row.target_cents / 100) }}
                 </div>
@@ -398,7 +400,9 @@
                 <div class="budget-row-bar"></div>
                 <div class="budget-row-amounts drillable"
                      onclick="event.stopPropagation(); finDrilldown.open('category:{{ row.category.id }}')"
-                     title="View transactions">
+                     title="View transactions"
+                     tabindex="0" role="button" aria-label="View transactions for {{ row.category.name }}"
+                     onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();finDrilldown.open('category:{{ row.category.id }}')}">
                     <span class="spent">${{ "%.0f"|format(row.spent_cents / 100) }}</span>
                     <span style="color: var(--text-muted);">no target</span>
                 </div>
@@ -421,19 +425,28 @@
                    style="width: 100px;" />
             <span style="color: var(--text-muted); font-size: 0.85rem;">/mo</span>
             <button class="btn-add" onclick="setBudgetTarget()">Set Target</button>
+            <span id="budgetFormError" role="alert" style="color: var(--accent-red); font-size: 0.85rem; display: none;"></span>
         </div>
     </div>
 </div>
 
 <script>
+function showBudgetFormError(msg) {
+    const el = document.getElementById('budgetFormError');
+    if (!el) return;
+    el.textContent = msg;
+    el.style.display = msg ? 'inline' : 'none';
+}
+
 async function setBudgetTarget() {
     const select = document.getElementById('budgetCategorySelect');
     const input = document.getElementById('budgetAmountInput');
     const categoryId = select.value;
     const amount = parseInt(input.value, 10);
 
-    if (!categoryId) { alert('Select a category'); return; }
-    if (!amount || amount < 0) { alert('Enter a valid amount'); return; }
+    if (!categoryId) { showBudgetFormError('Select a category first.'); select.focus(); return; }
+    if (!amount || amount < 0) { showBudgetFormError('Enter a valid amount greater than 0.'); input.focus(); return; }
+    showBudgetFormError('');
 
     try {
         const resp = await fetch('/api/budget/target', {
@@ -450,17 +463,16 @@ async function setBudgetTarget() {
         });
         if (!resp.ok) {
             const err = await resp.json();
-            alert(err.error || 'Failed to set target');
+            showBudgetFormError(err.error || 'Failed to set target.');
             return;
         }
         location.reload();
     } catch (e) {
-        alert('Error: ' + e.message);
+        showBudgetFormError('Error: ' + e.message);
     }
 }
 
-async function deleteBudgetTarget(categoryId) {
-    if (!confirm('Remove budget target for this category?')) return;
+async function actuallyDeleteBudgetTarget(categoryId) {
     try {
         const resp = await fetch('/api/budget/target/' + encodeURIComponent(categoryId), {
             method: 'DELETE',
@@ -470,13 +482,52 @@ async function deleteBudgetTarget(categoryId) {
             },
         });
         if (!resp.ok) {
-            alert('Failed to remove target');
+            showBudgetFormError('Failed to remove target.');
             return;
         }
         location.reload();
     } catch (e) {
-        alert('Error: ' + e.message);
+        showBudgetFormError('Error: ' + e.message);
     }
+}
+
+function deleteBudgetTarget(categoryId) {
+    // Find the delete button for this row and show inline confirmation
+    const row = document.querySelector('.budget-row[data-category="' + categoryId + '"]');
+    if (!row) { actuallyDeleteBudgetTarget(categoryId); return; }
+    const actionsCell = row.querySelector('.budget-row-actions');
+    if (!actionsCell) { actuallyDeleteBudgetTarget(categoryId); return; }
+
+    const original = actionsCell.innerHTML;
+    actionsCell.innerHTML =
+        '<span style="font-size:0.8rem; color:var(--text-secondary); white-space:nowrap;">' +
+        '<span id="confirmDeleteBtn" style="color:var(--accent-red);cursor:pointer;font-weight:600;" tabindex="0" role="button">Delete?</span>' +
+        '&nbsp;<span id="cancelDeleteBtn" style="color:var(--accent-blue);cursor:pointer;" tabindex="0" role="button">Cancel</span>' +
+        '</span>';
+
+    actionsCell.querySelector('#confirmDeleteBtn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        actuallyDeleteBudgetTarget(categoryId);
+    });
+    actionsCell.querySelector('#confirmDeleteBtn').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); actuallyDeleteBudgetTarget(categoryId); }
+    });
+    actionsCell.querySelector('#cancelDeleteBtn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        actionsCell.innerHTML = original;
+        // Re-bind the restored button
+        const newBtn = actionsCell.querySelector('.btn-icon.delete');
+        if (newBtn) newBtn.addEventListener('click', (ev) => { ev.stopPropagation(); deleteBudgetTarget(categoryId); });
+    });
+    actionsCell.querySelector('#cancelDeleteBtn').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault(); e.stopPropagation();
+            actionsCell.innerHTML = original;
+            const newBtn = actionsCell.querySelector('.btn-icon.delete');
+            if (newBtn) newBtn.addEventListener('click', (ev) => { ev.stopPropagation(); deleteBudgetTarget(categoryId); });
+        }
+    });
+    actionsCell.querySelector('#confirmDeleteBtn').focus();
 }
 
 // Make budget rows clickable to set/edit targets
@@ -490,7 +541,7 @@ document.querySelectorAll('.budget-row').forEach(row => {
         const actions = document.createElement('div');
         actions.className = 'budget-row-actions';
         actions.innerHTML = `
-            <button class="btn-icon delete" onclick="event.stopPropagation(); deleteBudgetTarget('${catId}')" title="Remove target">&#10005;</button>
+            <button class="btn-icon delete" onclick="event.stopPropagation(); deleteBudgetTarget('${catId}')" title="Remove target" aria-label="Remove budget target">&#10005;</button>
         `;
         row.appendChild(actions);
         row.style.gridTemplateColumns = '200px 1fr 120px 80px 40px';

@@ -1,0 +1,461 @@
+{% extends "base.html" %}
+{% block title %}Expected Income & Expenses{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Expected Income & Expenses</h1>
+</div>
+
+<!-- Summary bar -->
+<div style="display:flex; gap:16px; margin-bottom:24px;">
+  <div style="flex:1; background:var(--bg-secondary); border:1px solid var(--border); border-radius:8px; padding:16px; box-shadow:var(--shadow-sm);">
+    <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-secondary); margin-bottom:4px;">Monthly Income</div>
+    <div style="font-size:20px; font-weight:600; font-family:monospace; color:var(--accent-green);">${{ "%.2f"|format(income_monthly_total / 100) }}<span style="font-size:12px; font-weight:400; color:var(--text-muted);">/mo</span></div>
+  </div>
+  <div style="flex:1; background:var(--bg-secondary); border:1px solid var(--border); border-radius:8px; padding:16px; box-shadow:var(--shadow-sm);">
+    <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-secondary); margin-bottom:4px;">Monthly Expenses</div>
+    <div style="font-size:20px; font-weight:600; font-family:monospace; color:var(--accent-red);">${{ "%.2f"|format(expense_monthly_total / 100) }}<span style="font-size:12px; font-weight:400; color:var(--text-muted);">/mo</span></div>
+  </div>
+  <div style="flex:1; background:var(--bg-secondary); border:1px solid var(--border); border-radius:8px; padding:16px; box-shadow:var(--shadow-sm);">
+    <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-secondary); margin-bottom:4px;">Net</div>
+    <div style="font-size:20px; font-weight:600; font-family:monospace; color:{% if net_monthly >= 0 %}var(--accent-green){% else %}var(--accent-red){% endif %};">
+      {% if net_monthly >= 0 %}+{% endif %}${{ "%.2f"|format(net_monthly / 100) }}<span style="font-size:12px; font-weight:400; color:var(--text-muted);">/mo</span>
+    </div>
+  </div>
+</div>
+
+<!-- ── Income section ── -->
+<section style="margin-bottom:32px;">
+  <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+    <h2 style="font-size:15px; font-weight:600; color:var(--text-primary); display:flex; align-items:center; gap:8px; margin:0;">
+      Income Sources
+      {% if income_suggestion_count > 0 %}
+      <span style="font-size:11px; background:var(--accent-green-dim); color:var(--text-primary); border-radius:12px; padding:2px 8px; font-weight:500;">{{ income_suggestion_count }} detected</span>
+      {% endif %}
+    </h2>
+    <button onclick="toggleAddForm('income')" style="background:none; border:1px solid var(--border); border-radius:6px; padding:4px 12px; font-size:12px; color:var(--text-secondary); cursor:pointer;">+ Add income</button>
+  </div>
+
+  <!-- Inline add form for income -->
+  <form id="add-form-income" class="hidden" onsubmit="submitAddForm(event, 'income')" style="background:var(--bg-secondary); border:1px solid var(--border); border-radius:8px; padding:16px; margin-bottom:16px;">
+    <div style="font-size:12px; color:var(--text-secondary); margin-bottom:12px;">Add a recurring income source — a paycheck, side gig, or any account not connected via SimpleFin.</div>
+    <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end;">
+      <div style="display:flex; flex-direction:column; gap:4px; flex:1; min-width:160px;">
+        <label for="income-name" style="font-size:11px; color:var(--text-secondary);">Source name</label>
+        <input id="income-name" name="name" placeholder="e.g. ACME Corp Payroll" required style="padding:6px 10px; border:1px solid var(--border); border-radius:6px; background:var(--bg-primary); color:var(--text-primary); font-size:13px;">
+      </div>
+      <div style="display:flex; flex-direction:column; gap:4px;">
+        <label for="income-amount" style="font-size:11px; color:var(--text-secondary);">Amount</label>
+        <div style="display:flex; align-items:center; gap:0;">
+          <span style="padding:6px 8px; background:var(--bg-tertiary); border:1px solid var(--border); border-right:none; border-radius:6px 0 0 6px; font-size:13px; color:var(--text-secondary);" aria-hidden="true">$</span>
+          <input id="income-amount" name="amount_dollars" type="number" step="0.01" min="0" placeholder="0.00" style="padding:6px 10px; border:1px solid var(--border); border-radius:0 6px 6px 0; background:var(--bg-primary); color:var(--text-primary); font-size:13px; width:120px;">
+        </div>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:4px;">
+        <label for="income-cadence" style="font-size:11px; color:var(--text-secondary);">Frequency</label>
+        <select id="income-cadence" name="cadence" style="padding:6px 10px; border:1px solid var(--border); border-radius:6px; background:var(--bg-primary); color:var(--text-primary); font-size:13px;">
+          <option value="monthly">Monthly</option>
+          <option value="biweekly">Biweekly</option>
+          <option value="weekly">Weekly</option>
+          <option value="annual">Annual</option>
+          <option value="quarterly">Quarterly</option>
+          <option value="one_time">One-time</option>
+        </select>
+      </div>
+      <button type="submit" style="padding:6px 16px; background:var(--accent-blue); color:#fff; border:none; border-radius:6px; font-size:13px; cursor:pointer;">Save</button>
+      <button type="button" onclick="toggleAddForm('income')" style="padding:6px 12px; background:none; border:1px solid var(--border); border-radius:6px; font-size:13px; color:var(--text-secondary); cursor:pointer;">Cancel</button>
+    </div>
+  </form>
+
+  {% if income_confirmed %}
+  <div style="margin-bottom:16px;">
+    <table style="width:100%; border-collapse:collapse; background:var(--bg-secondary); border-radius:8px; overflow:hidden; border:1px solid var(--border);">
+      <thead>
+        <tr style="border-bottom:1px solid var(--border); background:var(--bg-tertiary);">
+          <th style="padding:8px 12px; text-align:left; font-size:11px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;">Name</th>
+          <th style="padding:8px 12px; text-align:left; font-size:11px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;">Frequency</th>
+          <th style="padding:8px 12px; text-align:right; font-size:11px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;">Amount</th>
+          <th style="padding:8px 12px; text-align:right; font-size:11px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;">Monthly eq.</th>
+          <th style="padding:8px 12px;"></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for c in income_confirmed %}
+      <tr id="row-{{ c.id }}" style="border-bottom:1px solid var(--border);">
+        <td style="padding:10px 12px; font-size:13px;">{{ c.name }}</td>
+        <td style="padding:10px 12px; font-size:13px; color:var(--text-secondary);"><span class="editable-cadence" data-id="{{ c.id }}" data-cadence="{{ c.cadence }}" title="Click to change frequency" style="cursor:pointer; border-bottom:1px dashed var(--border);">{{ c.cadence }}</span></td>
+        <td style="padding:10px 12px; font-size:13px; font-family:monospace; text-align:right; color:var(--accent-green);">{% if c.expected_cents %}${{ "%.2f"|format(c.expected_cents / 100) }}{% else %}—{% endif %}</td>
+        <td style="padding:10px 12px; font-size:13px; font-family:monospace; text-align:right; color:var(--text-secondary);">{% if c.monthly_equivalent_cents %}${{ "%.0f"|format(c.monthly_equivalent_cents / 100) }}{% else %}—{% endif %}</td>
+        <td style="padding:10px 12px; text-align:right;"><button onclick="deleteCommitment({{ c.id }})" aria-label="Delete commitment {{ c.name }}" style="background:none; border:none; cursor:pointer; color:var(--text-muted); font-size:13px; padding:2px 6px; border-radius:4px;">✕</button></td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if income_suggestions %}
+  <div>
+    <div style="font-size:12px; color:var(--text-secondary); margin-bottom:8px;">We detected these from your transaction history. Click Confirm to add, ✕ to dismiss.</div>
+    <table style="width:100%; border-collapse:collapse; background:var(--bg-secondary); border-radius:8px; overflow:hidden; border:1px solid var(--border);">
+      <thead>
+        <tr style="border-bottom:1px solid var(--border); background:var(--bg-tertiary);">
+          <th style="padding:8px 12px; width:80px;"></th>
+          <th style="padding:8px 12px; text-align:left; font-size:11px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;">Name</th>
+          <th style="padding:8px 12px; text-align:left; font-size:11px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;">Frequency</th>
+          <th style="padding:8px 12px; text-align:right; font-size:11px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;">Amount</th>
+          <th style="padding:8px 12px;"></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for s in income_suggestions %}
+      <tr id="row-{{ s.id }}" style="border-bottom:1px solid var(--border);">
+        <td style="padding:10px 12px;"><button onclick="confirmCommitment({{ s.id }}, this)" aria-label="Confirm income {{ s.name }}" style="padding:4px 10px; background:var(--accent-green-dim); border:1px solid var(--accent-green); border-radius:6px; font-size:12px; color:var(--text-primary); cursor:pointer;">Confirm</button></td>
+        <td style="padding:10px 12px; font-size:13px;">{{ s.name }}</td>
+        <td style="padding:10px 12px; font-size:13px; color:var(--text-secondary);"><span class="editable-cadence" data-id="{{ s.id }}" data-cadence="{{ s.cadence }}" title="Click to change frequency" style="cursor:pointer; border-bottom:1px dashed var(--border);">{{ s.cadence }}</span></td>
+        <td style="padding:10px 12px; font-size:13px; font-family:monospace; text-align:right; color:var(--accent-green);">{% if s.expected_cents %}${{ "%.2f"|format(s.expected_cents / 100) }}{% else %}—{% endif %}</td>
+        <td style="padding:10px 12px; text-align:right;"><button onclick="dismissCommitment({{ s.id }}, this)" aria-label="Dismiss suggestion {{ s.name }}" style="background:none; border:none; cursor:pointer; color:var(--text-muted); font-size:13px; padding:2px 6px; border-radius:4px;">✕</button></td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if income_dismissed %}
+  <div style="margin-top:12px;">
+    <button onclick="toggleDismissed('income')" style="background:none; border:none; cursor:pointer; font-size:12px; color:var(--text-muted); padding:0;">
+      <span id="dismissed-toggle-income">Show {{ income_dismissed|length }} dismissed</span>
+    </button>
+    <div id="dismissed-income" class="hidden" style="margin-top:8px;">
+      <table style="width:100%; border-collapse:collapse; background:var(--bg-secondary); border-radius:8px; overflow:hidden; border:1px solid var(--border); opacity:0.7;">
+        <tbody>
+        {% for d in income_dismissed %}
+        <tr id="row-{{ d.id }}" style="border-bottom:1px solid var(--border);">
+          <td style="padding:10px 12px; width:80px;"><button onclick="restoreCommitment({{ d.id }}, this)" aria-label="Restore {{ d.name }}" style="padding:4px 10px; background:none; border:1px solid var(--border); border-radius:6px; font-size:12px; color:var(--text-secondary); cursor:pointer;">Restore</button></td>
+          <td style="padding:10px 12px; font-size:13px; color:var(--text-muted);">{{ d.name }}</td>
+          <td style="padding:10px 12px; font-size:13px; color:var(--text-muted);">{{ d.cadence }}</td>
+          <td style="padding:10px 12px; font-size:13px; font-family:monospace; text-align:right; color:var(--text-muted);">{% if d.expected_cents %}${{ "%.2f"|format(d.expected_cents / 100) }}{% else %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if not income_confirmed and not income_suggestions %}
+  <p style="color:var(--text-secondary); font-size:13px; padding:16px; background:var(--bg-secondary); border:1px solid var(--border); border-radius:8px;">No income sources yet. Click "+ Add income" to enter a paycheck or other recurring deposit.</p>
+  {% endif %}
+</section>
+
+<!-- ── Expenses section ── -->
+<section>
+  <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+    <h2 style="font-size:15px; font-weight:600; color:var(--text-primary); display:flex; align-items:center; gap:8px; margin:0;">
+      Recurring Expenses
+      {% if expense_suggestion_count > 0 %}
+      <span style="font-size:11px; background:var(--accent-red-dim); color:var(--text-primary); border-radius:12px; padding:2px 8px; font-weight:500;">{{ expense_suggestion_count }} detected</span>
+      {% endif %}
+    </h2>
+    <button onclick="toggleAddForm('expense')" style="background:none; border:1px solid var(--border); border-radius:6px; padding:4px 12px; font-size:12px; color:var(--text-secondary); cursor:pointer;">+ Add expense</button>
+  </div>
+
+  <!-- Inline add form for expense -->
+  <form id="add-form-expense" class="hidden" onsubmit="submitAddForm(event, 'expense')" style="background:var(--bg-secondary); border:1px solid var(--border); border-radius:8px; padding:16px; margin-bottom:16px;">
+    <div style="font-size:12px; color:var(--text-secondary); margin-bottom:12px;">Add a recurring bill or subscription — rent, utilities, streaming services, etc.</div>
+    <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end;">
+      <div style="display:flex; flex-direction:column; gap:4px; flex:1; min-width:160px;">
+        <label for="expense-name" style="font-size:11px; color:var(--text-secondary);">Expense name</label>
+        <input id="expense-name" name="name" placeholder="e.g. Netflix, Rent, Electric" required style="padding:6px 10px; border:1px solid var(--border); border-radius:6px; background:var(--bg-primary); color:var(--text-primary); font-size:13px;">
+      </div>
+      <div style="display:flex; flex-direction:column; gap:4px;">
+        <label for="expense-amount" style="font-size:11px; color:var(--text-secondary);">Amount</label>
+        <div style="display:flex; align-items:center; gap:0;">
+          <span style="padding:6px 8px; background:var(--bg-tertiary); border:1px solid var(--border); border-right:none; border-radius:6px 0 0 6px; font-size:13px; color:var(--text-secondary);" aria-hidden="true">$</span>
+          <input id="expense-amount" name="amount_dollars" type="number" step="0.01" min="0" placeholder="0.00" style="padding:6px 10px; border:1px solid var(--border); border-radius:0 6px 6px 0; background:var(--bg-primary); color:var(--text-primary); font-size:13px; width:120px;">
+        </div>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:4px;">
+        <label for="expense-cadence" style="font-size:11px; color:var(--text-secondary);">Frequency</label>
+        <select id="expense-cadence" name="cadence" style="padding:6px 10px; border:1px solid var(--border); border-radius:6px; background:var(--bg-primary); color:var(--text-primary); font-size:13px;">
+          <option value="monthly">Monthly</option>
+          <option value="weekly">Weekly</option>
+          <option value="biweekly">Biweekly</option>
+          <option value="annual">Annual</option>
+          <option value="quarterly">Quarterly</option>
+          <option value="one_time">One-time</option>
+        </select>
+      </div>
+      <button type="submit" style="padding:6px 16px; background:var(--accent-blue); color:#fff; border:none; border-radius:6px; font-size:13px; cursor:pointer;">Save</button>
+      <button type="button" onclick="toggleAddForm('expense')" style="padding:6px 12px; background:none; border:1px solid var(--border); border-radius:6px; font-size:13px; color:var(--text-secondary); cursor:pointer;">Cancel</button>
+    </div>
+  </form>
+
+  {% if expense_confirmed %}
+  <div style="margin-bottom:16px;">
+    <table style="width:100%; border-collapse:collapse; background:var(--bg-secondary); border-radius:8px; overflow:hidden; border:1px solid var(--border);">
+      <thead>
+        <tr style="border-bottom:1px solid var(--border); background:var(--bg-tertiary);">
+          <th style="padding:8px 12px; text-align:left; font-size:11px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;">Name</th>
+          <th style="padding:8px 12px; text-align:left; font-size:11px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;">Frequency</th>
+          <th style="padding:8px 12px; text-align:right; font-size:11px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;">Amount</th>
+          <th style="padding:8px 12px; text-align:right; font-size:11px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;">Monthly eq.</th>
+          <th style="padding:8px 12px;"></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for c in expense_confirmed %}
+      <tr id="row-{{ c.id }}" style="border-bottom:1px solid var(--border);">
+        <td style="padding:10px 12px; font-size:13px;">{{ c.name }}</td>
+        <td style="padding:10px 12px; font-size:13px; color:var(--text-secondary);"><span class="editable-cadence" data-id="{{ c.id }}" data-cadence="{{ c.cadence }}" title="Click to change frequency" style="cursor:pointer; border-bottom:1px dashed var(--border);">{{ c.cadence }}</span></td>
+        <td style="padding:10px 12px; font-size:13px; font-family:monospace; text-align:right; color:var(--text-primary);">{% if c.expected_cents %}${{ "%.2f"|format(c.expected_cents / 100) }}{% else %}—{% endif %}</td>
+        <td style="padding:10px 12px; font-size:13px; font-family:monospace; text-align:right; color:var(--text-secondary);">{% if c.monthly_equivalent_cents %}${{ "%.0f"|format(c.monthly_equivalent_cents / 100) }}{% else %}—{% endif %}</td>
+        <td style="padding:10px 12px; text-align:right;"><button onclick="deleteCommitment({{ c.id }})" aria-label="Delete commitment {{ c.name }}" style="background:none; border:none; cursor:pointer; color:var(--text-muted); font-size:13px; padding:2px 6px; border-radius:4px;">✕</button></td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if expense_suggestions %}
+  <div>
+    <div style="font-size:12px; color:var(--text-secondary); margin-bottom:8px;">We detected these from your transaction history. Click Confirm to add, ✕ to dismiss.</div>
+    <table style="width:100%; border-collapse:collapse; background:var(--bg-secondary); border-radius:8px; overflow:hidden; border:1px solid var(--border);">
+      <thead>
+        <tr style="border-bottom:1px solid var(--border); background:var(--bg-tertiary);">
+          <th style="padding:8px 12px; width:80px;"></th>
+          <th style="padding:8px 12px; text-align:left; font-size:11px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;">Name</th>
+          <th style="padding:8px 12px; text-align:left; font-size:11px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;">Frequency</th>
+          <th style="padding:8px 12px; text-align:right; font-size:11px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;">Amount</th>
+          <th style="padding:8px 12px;"></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for s in expense_suggestions %}
+      <tr id="row-{{ s.id }}" style="border-bottom:1px solid var(--border);">
+        <td style="padding:10px 12px;"><button onclick="confirmCommitment({{ s.id }}, this)" aria-label="Confirm expense {{ s.name }}" style="padding:4px 10px; background:var(--accent-red-dim); border:1px solid var(--accent-red); border-radius:6px; font-size:12px; color:var(--text-primary); cursor:pointer;">Confirm</button></td>
+        <td style="padding:10px 12px; font-size:13px;">{{ s.name }}</td>
+        <td style="padding:10px 12px; font-size:13px; color:var(--text-secondary);"><span class="editable-cadence" data-id="{{ s.id }}" data-cadence="{{ s.cadence }}" title="Click to change frequency" style="cursor:pointer; border-bottom:1px dashed var(--border);">{{ s.cadence }}</span></td>
+        <td style="padding:10px 12px; font-size:13px; font-family:monospace; text-align:right; color:var(--text-primary);">{% if s.expected_cents %}${{ "%.2f"|format(s.expected_cents / 100) }}{% else %}—{% endif %}</td>
+        <td style="padding:10px 12px; text-align:right;"><button onclick="dismissCommitment({{ s.id }}, this)" aria-label="Dismiss suggestion {{ s.name }}" style="background:none; border:none; cursor:pointer; color:var(--text-muted); font-size:13px; padding:2px 6px; border-radius:4px;">✕</button></td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if expense_dismissed %}
+  <div style="margin-top:12px;">
+    <button onclick="toggleDismissed('expense')" style="background:none; border:none; cursor:pointer; font-size:12px; color:var(--text-muted); padding:0;">
+      <span id="dismissed-toggle-expense">Show {{ expense_dismissed|length }} dismissed</span>
+    </button>
+    <div id="dismissed-expense" class="hidden" style="margin-top:8px;">
+      <table style="width:100%; border-collapse:collapse; background:var(--bg-secondary); border-radius:8px; overflow:hidden; border:1px solid var(--border); opacity:0.7;">
+        <tbody>
+        {% for d in expense_dismissed %}
+        <tr id="row-{{ d.id }}" style="border-bottom:1px solid var(--border);">
+          <td style="padding:10px 12px; width:80px;"><button onclick="restoreCommitment({{ d.id }}, this)" aria-label="Restore {{ d.name }}" style="padding:4px 10px; background:none; border:1px solid var(--border); border-radius:6px; font-size:12px; color:var(--text-secondary); cursor:pointer;">Restore</button></td>
+          <td style="padding:10px 12px; font-size:13px; color:var(--text-muted);">{{ d.name }}</td>
+          <td style="padding:10px 12px; font-size:13px; color:var(--text-muted);">{{ d.cadence }}</td>
+          <td style="padding:10px 12px; font-size:13px; font-family:monospace; text-align:right; color:var(--text-muted);">{% if d.expected_cents %}${{ "%.2f"|format(d.expected_cents / 100) }}{% else %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if not expense_confirmed and not expense_suggestions %}
+  <p style="color:var(--text-secondary); font-size:13px; padding:16px; background:var(--bg-secondary); border:1px solid var(--border); border-radius:8px;">No recurring expenses yet. Click "+ Add expense" to enter a bill or subscription.</p>
+  {% endif %}
+</section>
+
+<style>.hidden { display: none; }</style>
+<script>
+function toggleAddForm(direction) {
+  const form = document.getElementById(`add-form-${direction}`);
+  form.classList.toggle('hidden');
+  if (!form.classList.contains('hidden')) {
+    form.querySelector('input[name="name"]').focus();
+  }
+}
+
+async function confirmCommitment(id, btn) {
+  btn.textContent = 'Confirmed!';
+  btn.disabled = true;
+  btn.style.opacity = '0.7';
+  const row = btn.closest('tr');
+  row.style.background = 'var(--accent-green-dim)';
+  const resp = await fetch(`/api/commitments/${id}`, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json', 'X-CSRF-Token': CSRF_TOKEN},
+    body: JSON.stringify({confirmed: 1})
+  });
+  if (!resp.ok) { btn.textContent = 'Retry'; btn.disabled = false; btn.style.opacity = '1'; return; }
+
+  // Brief visual feedback, then reload so summary totals update
+  setTimeout(() => location.reload(), 600);
+}
+
+function dismissCommitment(id, btn) {
+  const originalHTML = btn.innerHTML;
+  btn.innerHTML = 'Undo';
+  btn.style.color = 'var(--accent-blue)';
+  const row = btn.closest('tr');
+  row.style.opacity = '0.5';
+
+  const timer = setTimeout(async () => {
+    const resp = await fetch(`/api/commitments/${id}`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json', 'X-CSRF-Token': CSRF_TOKEN},
+      body: JSON.stringify({confirmed: 0, source: 'dismissed'})
+    });
+    if (resp.ok) {
+      row.remove();
+    } else {
+      console.error('Dismiss failed:', resp.status, await resp.text());
+      row.style.opacity = '1';
+      btn.innerHTML = originalHTML;
+      btn.style.color = '';
+    }
+  }, 3000);
+
+  btn.onclick = () => {
+    clearTimeout(timer);
+    btn.innerHTML = originalHTML;
+    btn.style.color = '';
+    row.style.opacity = '1';
+    btn.onclick = () => dismissCommitment(id, btn);
+  };
+}
+
+async function deleteCommitment(id) {
+  if (!confirm('Delete this commitment?')) return;
+  await fetch(`/api/commitments/${id}`, {method: 'DELETE', headers: {'X-CSRF-Token': CSRF_TOKEN}});
+  document.getElementById(`row-${id}`).remove();
+}
+
+function toggleDismissed(direction) {
+  const container = document.getElementById(`dismissed-${direction}`);
+  const toggle = document.getElementById(`dismissed-toggle-${direction}`);
+  const isHidden = container.classList.toggle('hidden');
+  toggle.textContent = toggle.textContent.replace(isHidden ? 'Hide' : 'Show', isHidden ? 'Show' : 'Hide');
+}
+
+async function restoreCommitment(id, btn) {
+  btn.textContent = 'Restoring…';
+  btn.disabled = true;
+  const resp = await fetch(`/api/commitments/${id}`, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json', 'X-CSRF-Token': CSRF_TOKEN},
+    body: JSON.stringify({source: 'detected', confirmed: 0})
+  });
+  if (resp.ok) {
+    location.reload();
+  } else {
+    btn.textContent = 'Retry';
+    btn.disabled = false;
+  }
+}
+
+// Click-to-edit cadence on confirmed items
+const CADENCE_OPTIONS = [
+  ['monthly', 'Monthly'],
+  ['biweekly', 'Biweekly'],
+  ['weekly', 'Weekly'],
+  ['annual', 'Annual'],
+  ['quarterly', 'Quarterly'],
+  ['one_time', 'One-time'],
+];
+
+document.querySelectorAll('.editable-cadence').forEach(span => {
+  span.addEventListener('click', function() {
+    const id = this.dataset.id;
+    const current = this.dataset.cadence;
+    const td = this.parentElement;
+
+    const select = document.createElement('select');
+    select.style.cssText = 'padding:4px 8px; border:1px solid var(--accent-blue); border-radius:6px; background:var(--bg-primary); color:var(--text-primary); font-size:13px; outline:none;';
+    select.setAttribute('aria-label', 'Change frequency');
+    for (const [value, label] of CADENCE_OPTIONS) {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = label;
+      if (value === current) opt.selected = true;
+      select.appendChild(opt);
+    }
+
+    td.replaceChild(select, this);
+    select.focus();
+
+    const revert = () => {
+      if (td.contains(select)) td.replaceChild(span, select);
+    };
+
+    select.addEventListener('change', async () => {
+      const newCadence = select.value;
+      if (newCadence === current) { revert(); return; }
+      select.disabled = true;
+      select.style.opacity = '0.6';
+      const resp = await fetch(`/api/commitments/${id}`, {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json', 'X-CSRF-Token': CSRF_TOKEN},
+        body: JSON.stringify({cadence: newCadence})
+      });
+      if (resp.ok) {
+        location.reload();
+      } else {
+        select.disabled = false;
+        select.style.opacity = '1';
+      }
+    });
+
+    select.addEventListener('blur', () => {
+      // Small delay so change event fires first if user picked a value
+      setTimeout(revert, 150);
+    });
+  });
+});
+
+function showFormError(formId, message) {
+  let errorEl = document.getElementById(`${formId}-error`);
+  if (!errorEl) {
+    errorEl = document.createElement('div');
+    errorEl.id = `${formId}-error`;
+    errorEl.style.cssText = 'color: var(--accent-red); font-size: 13px; margin-top: 8px;';
+    errorEl.setAttribute('role', 'alert');
+    document.getElementById(formId).appendChild(errorEl);
+  }
+  errorEl.textContent = message;
+  setTimeout(() => { errorEl.textContent = ''; }, 5000);
+}
+
+async function submitAddForm(e, direction) {
+  e.preventDefault();
+  const form = e.target;
+  const fd = new FormData(form);
+  const data = {
+    name: fd.get('name'),
+    direction: direction,
+    cadence: fd.get('cadence'),
+    source: 'manual',
+    confirmed: 1
+  };
+  const dollars = fd.get('amount_dollars');
+  if (dollars) data.expected_cents = Math.round(parseFloat(dollars) * 100);
+  const resp = await fetch('/api/commitments', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRF-Token': CSRF_TOKEN},
+    body: JSON.stringify(data),
+  });
+  if (resp.ok) location.reload();
+  else {
+    const body = await resp.json().catch(() => null);
+    showFormError(`add-form-${direction}`, body?.error || 'Failed to save. Please fill in at least a name.');
+  }
+}
+</script>
+{% endblock %}

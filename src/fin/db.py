@@ -1,7 +1,8 @@
+import calendar
 import os
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -166,6 +167,26 @@ CREATE INDEX IF NOT EXISTS idx_txn_posted_at ON transactions(posted_at);
 CREATE INDEX IF NOT EXISTS idx_txn_account_posted ON transactions(account_id, posted_at);
 CREATE INDEX IF NOT EXISTS idx_txn_pending ON transactions(pending) WHERE pending = 1;
 CREATE INDEX IF NOT EXISTS idx_txn_amount ON transactions(amount_cents);
+
+-- User-confirmed recurring commitments (source of truth for projections)
+CREATE TABLE IF NOT EXISTS commitments (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  name           TEXT NOT NULL,
+  merchant_norm  TEXT,            -- nullable; links to transaction matching
+  expected_cents INTEGER,         -- nullable; use detected median if NULL
+  cadence        TEXT NOT NULL DEFAULT 'monthly',
+                                  -- monthly | weekly | annual | quarterly
+                                  -- biweekly | one_time
+  day_of_month   INTEGER,         -- expected charge day (1–31), nullable
+  reference_date TEXT,            -- YYYY-MM-DD; anchor for non-monthly cadences
+  confirmed      INTEGER NOT NULL DEFAULT 0,  -- 0=suggestion, 1=user-confirmed
+  source         TEXT NOT NULL DEFAULT 'detected',
+                                  -- detected | manual | dismissed
+  direction      TEXT NOT NULL DEFAULT 'expense',
+                                  -- expense | income
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
+);
 """
 
 
@@ -202,6 +223,12 @@ def init_db(conn: sqlite3.Connection) -> None:
     # Migration: add pending column if it doesn't exist
     try:
         conn.execute("ALTER TABLE transactions ADD COLUMN pending INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    # Migration: add direction column to commitments if it doesn't exist
+    try:
+        conn.execute("ALTER TABLE commitments ADD COLUMN direction TEXT NOT NULL DEFAULT 'expense'")
         conn.commit()
     except sqlite3.OperationalError:
         pass  # Column already exists
@@ -904,3 +931,380 @@ def get_txn_type_override(
             return row["target_type"]
 
     return None
+
+
+
+# ---------------------------------------------------------------------------
+# Commitments
+# ---------------------------------------------------------------------------
+
+VALID_CADENCES = frozenset({"monthly", "weekly", "annual", "quarterly", "biweekly", "one_time"})
+VALID_SOURCES = frozenset({"detected", "manual", "dismissed"})
+VALID_DIRECTIONS = frozenset({"expense", "income"})
+
+
+def get_commitments(
+    conn: sqlite3.Connection,
+    confirmed_only: bool = False,
+    include_dismissed: bool = False,
+    direction: str | None = None,
+) -> list[dict]:
+    """
+    Get commitments as a list of dicts.
+
+    Args:
+        conn: Database connection
+        confirmed_only: If True, return only confirmed=1 rows
+        include_dismissed: If True, include source='dismissed' rows. Otherwise exclude them.
+        direction: If set, filter by direction (expense or income). Otherwise return all.
+
+    Returns:
+        List of commitment dicts, ordered by confirmed DESC then name ASC
+    """
+    clauses = []
+    params = []
+    if not include_dismissed:
+        clauses.append("source != 'dismissed'")
+    if confirmed_only:
+        clauses.append("confirmed = 1")
+    if direction is not None:
+        clauses.append("direction = ?")
+        params.append(direction)
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    try:
+        rows = conn.execute(
+            f"SELECT * FROM commitments {where} ORDER BY confirmed DESC, name ASC",
+            params
+        ).fetchall()
+    except Exception:
+        return []
+    return [dict(row) for row in rows]
+
+
+def upsert_commitment(
+    conn: sqlite3.Connection,
+    name: str,
+    cadence: str = "monthly",
+    commitment_id: int | None = None,
+    merchant_norm: str | None = None,
+    expected_cents: int | None = None,
+    day_of_month: int | None = None,
+    reference_date: str | None = None,
+    confirmed: int = 0,
+    source: str = "detected",
+    direction: str = "expense",
+) -> int:
+    """
+    Insert or update a commitment.
+
+    If commitment_id is provided and exists, updates that row. Otherwise inserts a new row.
+
+    Args:
+        conn: Database connection
+        name: Commitment name
+        cadence: Recurring frequency (monthly, weekly, annual, quarterly, biweekly, one_time)
+        commitment_id: If provided, update this row. If None, insert new.
+        merchant_norm: Normalized merchant name (optional)
+        expected_cents: Expected amount in cents (optional)
+        day_of_month: Expected day of month (optional, 1-31)
+        reference_date: Anchor date as YYYY-MM-DD (optional, for non-monthly cadences)
+        confirmed: 0=suggestion, 1=user-confirmed
+        source: "detected", "manual", or "dismissed"
+        direction: "expense" or "income"
+
+    Returns:
+        The commitment_id of the inserted or updated commitment
+    """
+    now = _utcnow_iso()
+    if commitment_id is not None:
+        cur = conn.execute(
+            """
+            UPDATE commitments
+            SET name=?, merchant_norm=?, expected_cents=?, cadence=?,
+                day_of_month=?, reference_date=?, confirmed=?, source=?,
+                direction=?, updated_at=?
+            WHERE id=?
+            """,
+            (name, merchant_norm, expected_cents, cadence,
+             day_of_month, reference_date, confirmed, source, direction, now, commitment_id),
+        )
+        if cur.rowcount == 0:
+            raise ValueError(f"Commitment id={commitment_id} not found")
+        conn.commit()
+        return commitment_id
+    cur = conn.execute(
+        """
+        INSERT INTO commitments
+          (name, merchant_norm, expected_cents, cadence, day_of_month,
+           reference_date, confirmed, source, direction, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (name, merchant_norm, expected_cents, cadence, day_of_month,
+         reference_date, confirmed, source, direction, now, now),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def delete_commitment(conn: sqlite3.Connection, commitment_id: int) -> None:
+    """
+    Hard-delete a commitment by commitment_id.
+
+    Args:
+        conn: Database connection
+        commitment_id: Commitment id to delete
+    """
+    conn.execute("DELETE FROM commitments WHERE id=?", (commitment_id,))
+    conn.commit()
+
+
+
+def find_matching_transactions(
+    conn: sqlite3.Connection,
+    merchant_norm: str,
+    day_of_month: int | None,
+    cadence: str,  # Reserved for future cadence-dependent matching logic (e.g., weekly ±7 days)
+    expected_cents: int | None,
+    source: str = "detected",
+    direction: str = "expense",
+) -> list[dict]:
+    """Find transactions matching a commitment's criteria.
+
+    Applies matching rule:
+    1. merchant_norm match (case-insensitive), sign matches direction
+    2. Amount in [0.5×anchor, 1.5×anchor]
+    3. ≥4 distinct calendar months (skipped for source='manual')
+    4. day_of_month ±3 with month-end clamping (skipped if day_of_month is None)
+
+    Returns empty list if any non-skipped condition fails.
+
+    Args:
+        direction: "expense" (amount_cents < 0) or "income" (amount_cents > 0)
+    """
+
+    sign_filter = "AND amount_cents < 0" if direction == "expense" else "AND amount_cents > 0"
+    rows = conn.execute(
+        f"""
+        SELECT posted_at, amount_cents, merchant, fingerprint
+        FROM transactions
+        WHERE LOWER(merchant) = LOWER(?)
+          {sign_filter}
+        ORDER BY posted_at DESC
+        """,
+        (merchant_norm,),
+    ).fetchall()
+
+    if not rows:
+        return []
+
+    # Determine anchor for amount range
+    if expected_cents is not None:
+        anchor = expected_cents
+    else:
+        recent_amounts = sorted(abs(r["amount_cents"]) for r in rows[:3])
+        if not recent_amounts:
+            return []
+        anchor = recent_amounts[len(recent_amounts) // 2]
+
+    anchor = abs(anchor)
+    lo = int(anchor * 0.5)
+    hi = int(anchor * 1.5)
+
+    amount_matches = [r for r in rows if lo <= abs(r["amount_cents"]) <= hi]
+    if not amount_matches:
+        return []
+
+    # Filter by day_of_month ±3 if set
+    if day_of_month is not None:
+        day_matches = []
+        for r in amount_matches:
+            txn_date = date.fromisoformat(r["posted_at"][:10])
+            _, last_day = calendar.monthrange(txn_date.year, txn_date.month)
+            anchor_day = min(day_of_month, last_day)
+            if abs(txn_date.day - anchor_day) <= 3:
+                day_matches.append(r)
+    else:
+        day_matches = amount_matches
+
+    # Check ≥4 distinct calendar months (skipped for manual)
+    if source != "manual":
+        months_seen = set()
+        for r in day_matches:
+            txn_date = date.fromisoformat(r["posted_at"][:10])
+            months_seen.add((txn_date.year, txn_date.month))
+        if len(months_seen) < 4:
+            return []
+    # distinct-month check runs on day-filtered results; months where the charge
+    # landed outside the ±3-day window are not counted, by design
+
+    return [dict(r) for r in day_matches]
+
+
+
+def suggest_commitments_from_heuristics(conn: sqlite3.Connection) -> None:
+    """Seed unconfirmed commitment suggestions from heuristic detection.
+
+    Reads get_subscriptions() and get_bills() from legacy_classify for expenses.
+    Also seeds income suggestions from merchant_rules (rule_type='income') and
+    payroll keyword fallback.
+
+    Inserts unconfirmed rows idempotently — never duplicates, never
+    overwrites confirmed entries.
+
+    Dedup key: same merchant_norm (case-insensitive), direction, and source != 'dismissed'.
+    """
+    from .legacy_classify import get_subscriptions, get_bills
+    import statistics
+
+    now = _utcnow_iso()
+
+    # Process subscriptions (10-tuple)
+    for sub in get_subscriptions(conn, days=400):
+        merchant, monthly_cents, cadence, first_seen, last_seen, \
+            is_dup, txn_type, is_known, display_name, actual_cents = sub
+
+        name = display_name or merchant
+        merchant_norm = merchant
+        expected_cents = actual_cents
+
+        _seed_commitment_if_new(
+            conn, name=name, merchant_norm=merchant_norm,
+            expected_cents=expected_cents, cadence=cadence, now=now,
+            direction="expense",
+        )
+
+    # Process bills (6-tuple)
+    for bill in get_bills(conn, days=400):
+        merchant, monthly_cents, cadence, first_seen, last_seen, txn_type = bill
+
+        _seed_commitment_if_new(
+            conn, name=merchant, merchant_norm=merchant,
+            expected_cents=monthly_cents, cadence=cadence, now=now,
+            direction="expense",
+        )
+
+    # ── Income pass ──────────────────────────────────────────────────────────
+    # Fetch all positive transactions to scan for income patterns
+    all_positive = conn.execute(
+        "SELECT merchant, amount_cents, posted_at FROM transactions WHERE amount_cents > 0"
+    ).fetchall()
+
+    income_merchants = get_income_sources(conn)
+
+    # Determine which rows to consider for income seeding
+    PAYROLL_KEYWORDS = {"payroll", "direct deposit", "paycheck", "salary"}
+
+    def _is_income_candidate(merchant_lower: str) -> bool:
+        if income_merchants:
+            return any(pat in merchant_lower for pat in income_merchants)
+        # Fallback: keyword matching when no explicit income sources configured
+        return any(kw in merchant_lower for kw in PAYROLL_KEYWORDS)
+
+    # Group positive txns by normalised merchant
+    merchant_txns: dict[str, list[dict]] = {}
+    for row in all_positive:
+        if not row["merchant"]:
+            continue
+        norm = row["merchant"].lower().strip()
+        if _is_income_candidate(norm):
+            merchant_txns.setdefault(norm, []).append(dict(row))
+
+    for merchant_norm, txns in merchant_txns.items():
+        # Need ≥2 distinct calendar months
+        months_seen = set()
+        for t in txns:
+            d = t["posted_at"][:7]  # YYYY-MM
+            months_seen.add(d)
+        if len(months_seen) < 2:
+            continue
+
+        # Infer cadence from median gap between consecutive deposits
+        dates_sorted = sorted(t["posted_at"][:10] for t in txns)
+        if len(dates_sorted) >= 2:
+            from datetime import date as _date
+            date_objs = [_date.fromisoformat(d) for d in dates_sorted]
+            gaps = [(date_objs[i + 1] - date_objs[i]).days for i in range(len(date_objs) - 1)]
+            median_gap = statistics.median(gaps)
+            if 5 <= median_gap <= 10:
+                cadence = "weekly"
+            elif 11 <= median_gap <= 18:
+                cadence = "biweekly"
+            elif 19 <= median_gap <= 35:
+                cadence = "monthly"
+            elif 80 <= median_gap <= 100:
+                cadence = "quarterly"
+            else:
+                cadence = "monthly"
+        else:
+            cadence = "monthly"
+
+        # Compute median expected amount
+        amounts = [t["amount_cents"] for t in txns]
+        median_cents = int(statistics.median(amounts))
+
+        _seed_commitment_if_new(
+            conn,
+            name=merchant_norm,
+            merchant_norm=merchant_norm,
+            expected_cents=median_cents,
+            cadence=cadence,
+            now=now,
+            direction="income",
+        )
+
+    conn.commit()
+
+
+def _seed_commitment_if_new(
+    conn: sqlite3.Connection,
+    name: str,
+    merchant_norm: str,
+    expected_cents: int | None,
+    cadence: str,
+    now: str,
+    direction: str = "expense",
+) -> None:
+    """Insert a single unconfirmed suggestion if no non-dismissed row exists for this merchant+direction."""
+    if not merchant_norm:
+        return
+
+    existing = conn.execute(
+        """
+        SELECT id, confirmed FROM commitments
+        WHERE LOWER(merchant_norm) = LOWER(?)
+          AND direction = ?
+        """,
+        (merchant_norm, direction),
+    ).fetchone()
+
+    if existing is not None:
+        return  # Already exists (confirmed, unconfirmed, or dismissed) for this direction
+
+    cur = conn.execute(
+        """
+        INSERT INTO commitments
+          (name, merchant_norm, expected_cents, cadence, confirmed, source,
+           direction, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 0, 'detected', ?, ?, ?)
+        """,
+        (name, merchant_norm, expected_cents, cadence, direction, now, now),
+    )
+    new_id = cur.lastrowid
+
+    # Populate reference_date from most recent matching transaction
+    ref_row = conn.execute(
+        """
+        SELECT DATE(posted_at) AS ref_date
+        FROM transactions
+        WHERE LOWER(merchant) = LOWER(?)
+        ORDER BY posted_at DESC
+        LIMIT 1
+        """,
+        (merchant_norm,),
+    ).fetchone()
+
+    if ref_row and ref_row["ref_date"]:
+        conn.execute(
+            "UPDATE commitments SET reference_date=? WHERE id=?",
+            (ref_row["ref_date"], new_id),
+        )

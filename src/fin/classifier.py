@@ -562,3 +562,37 @@ def classify_transaction(
             ),
             spending_bucket=spending_bucket,
         )
+
+
+def _detect_patterns(
+    conn,
+    lookback_days: int = 400,
+    account_filter=None,
+) -> dict[str, "MerchantPattern"]:
+    """Detect merchant patterns and return as classifier.MerchantPattern objects.
+
+    Wraps legacy_classify._detect_patterns, adapting the result to the
+    classifier.MerchantPattern shape (is_subscription, is_habitual, etc.).
+    """
+    import sqlite3
+    from .legacy_classify import _detect_patterns as _legacy_detect_patterns
+
+    legacy_patterns = _legacy_detect_patterns(
+        conn, lookback_days=lookback_days, account_filter=account_filter
+    )
+
+    result: dict[str, MerchantPattern] = {}
+    for merchant, lp in legacy_patterns.items():
+        # Map legacy fields → classifier.MerchantPattern fields
+        # is_subscription: legacy uses is_recurring with a cadence_label
+        is_sub = lp.is_recurring and lp.cadence_label in ("weekly", "monthly", "annual", "biweekly", "quarterly")
+        result[merchant] = MerchantPattern(
+            merchant_norm=lp.merchant_norm,
+            occurrence_count=lp.occurrence_count,
+            is_subscription=is_sub,
+            is_habitual=lp.is_habitual,
+            is_transfer=lp.is_transfer,
+            avg_amount_cents=lp.median_amount_cents,
+            cadence_days=float(lp.median_interval_days) if lp.median_interval_days else None,
+        )
+    return result
