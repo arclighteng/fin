@@ -5,6 +5,15 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/fin"]
 
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/fin/",
+  "tests/",
+  "pyproject.toml",
+  "README.md",
+  "LICENSE",
+]
+
 [project]
 name = "getfin"
 version = "1.0.0"
