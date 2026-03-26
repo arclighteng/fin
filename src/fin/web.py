@@ -827,6 +827,23 @@ def dashboard(
             "drilldown_scope": f"merchant:{deviation['merchant']}",
         })
 
+    # Add high-severity duplicate subscription warnings
+    duplicates = detect_duplicates(conn, days=400, account_filter=account_filter)
+    for dup in duplicates:
+        if dup.severity == 'high':
+            merchant_list = ", ".join(item[0] for item in dup.items[:2])
+            attention_items.append({
+                "type": "duplicate_sub",
+                "title": f"Possible duplicate: {merchant_list}",
+                "detail": f"${dup.total_monthly_cents/100:.2f}/mo combined — {dup.detail}",
+                "severity": "warning",
+                "action_type": "link",
+                "key": f"dup_{'_'.join(item[0] for item in dup.items[:2])}",
+                "drilldown_scope": None,
+                "link": "/commitments",
+                "link_label": "View on Commitments",
+            })
+
     # Limit to 4 items total
     attention_items = attention_items[:4]
 
@@ -1153,6 +1170,7 @@ def drilldown(
 
     # Get existing overrides for these transactions
     fp_overrides, _ = dbmod.get_txn_type_overrides(conn)
+    cat_overrides = dbmod.get_category_overrides(conn)
 
     sorted_txns = sorted(transactions, key=lambda t: t.posted_at, reverse=True)
     all_fps = [txn.fingerprint for txn in sorted_txns]
@@ -1162,10 +1180,12 @@ def drilldown(
     for txn in sorted_txns:
         ann = annotations.get(txn.fingerprint, {"note": None, "tags": []})
         cat = CATEGORIES.get(txn.category_id) if txn.category_id else None
+        merchant_norm = txn.merchant_norm or txn.raw_description or "Unknown"
+        is_category_override = merchant_norm in cat_overrides
         txn_list.append({
             "fingerprint": txn.fingerprint,
             "date": txn.posted_at.isoformat(),
-            "merchant": txn.merchant_norm or txn.raw_description or "Unknown",
+            "merchant": merchant_norm,
             "amount_cents": txn.amount_cents,
             "type": txn.txn_type.value if txn.txn_type else "unknown",
             "account_id": txn.account_id,
@@ -1174,9 +1194,16 @@ def drilldown(
             "category_id": txn.category_id,
             "category": cat.name if cat else None,
             "category_icon": cat.icon if cat else None,
+            "category_is_override": is_category_override,
             "note": ann["note"],
             "tags": ann["tags"],
         })
+
+    # Build categories list for the category-override dropdown
+    categories_list = [
+        {"id": cid, "name": cat.name, "icon": cat.icon}
+        for cid, cat in CATEGORIES.items()
+    ]
 
     response_data = {
         "scope": scope,
@@ -1189,6 +1216,7 @@ def drilldown(
         "excluded": excluded,
         "transactions": txn_list,
         "accounts": acct_names,
+        "categories": categories_list,
     }
 
     if resolution_context:
@@ -1811,56 +1839,10 @@ def get_transactions_by_type(
     })
 
 
-@app.get("/subs", response_class=HTMLResponse)
-def subs(
-    request: Request,
-    days: int = 400,
-    accounts: str | None = Query(None, description="Comma-separated account IDs to filter"),
-    conn: sqlite3.Connection = Depends(get_db),
-):
-    """Recurring charges page with styled layout and drill-down."""
-    # Parse account filter using normalized helper
-    account_filter, show_no_data = parse_account_filter(accounts)
-
-    # Get all accounts for the filter UI
-    all_accounts = conn.execute(
-        """
-        SELECT account_id, name, institution, type
-        FROM accounts
-        ORDER BY institution, name
-        """
-    ).fetchall()
-
-    # If no data mode, return empty state
-    if show_no_data:
-        return templates.TemplateResponse(request, "subs.html", {
-            "request": request,
-            "subscriptions": [],
-            "bills": [],
-            "duplicates": [],
-            "days": days,
-            "all_accounts": all_accounts,
-            "selected_accounts": [],
-            "show_no_data": True,
-        })
-
-    # Get subscriptions and bills
-    subscriptions = get_subscriptions(conn, days=days, account_filter=account_filter)
-    bills = get_bills(conn, days=days, account_filter=account_filter)
-
-    # Get duplicates for flagging
-    duplicates = detect_duplicates(conn, days=days, account_filter=account_filter)
-
-    return templates.TemplateResponse(request, "subs.html", {
-        "request": request,
-        "subscriptions": subscriptions,
-        "bills": bills,
-        "duplicates": duplicates,
-        "days": days,
-        "all_accounts": all_accounts,
-        "selected_accounts": account_filter or [],
-        "show_no_data": False,
-    })
+@app.get("/subs")
+def subs_redirect():
+    """Redirect /subs to /commitments (legacy URL)."""
+    return RedirectResponse(url="/commitments", status_code=301)
 
 
 @app.get("/insights", response_class=HTMLResponse)
@@ -1875,19 +1857,25 @@ def insights_page(
     return templates.TemplateResponse(request, "insights.html", {"request": request, **insights})
 
 
-@app.get("/plan", response_class=HTMLResponse)
-def plan_page(request: Request):
-    """Plan page — placeholder shell for future cash flow / debt / goals features."""
-    return templates.TemplateResponse(request, "plan.html", {"request": request})
+@app.get("/plan")
+def plan_redirect():
+    """Plan page removed — redirect to dashboard."""
+    return RedirectResponse(url="/dashboard", status_code=301)
 
 
-@app.get("/audit", response_class=HTMLResponse)
-def audit_page(
+@app.get("/audit")
+def audit_redirect():
+    """Audit page renamed to Review — permanent redirect."""
+    return RedirectResponse(url="/review", status_code=301)
+
+
+@app.get("/review", response_class=HTMLResponse)
+def review_page(
     request: Request,
     accounts: str | None = Query(None, description="Comma-separated account IDs to filter"),
     conn: sqlite3.Connection = Depends(get_db),
 ):
-    """Financial audit page — coverage report, missing charges, ghost transactions."""
+    """Review page — triage queue for uncategorized and low-confidence transactions."""
     from .reporting_models import TransactionType
 
     account_filter, show_no_data = parse_account_filter(accounts)
@@ -1897,14 +1885,13 @@ def audit_page(
     ).fetchall()
 
     if show_no_data:
-        return templates.TemplateResponse(request, "audit.html", {
+        return templates.TemplateResponse(request, "review.html", {
             "request": request,
             "all_accounts": all_accounts,
             "selected_accounts": [],
             "show_no_data": True,
             "coverage": {},
             "top_merchants": [],
-            "not_yet_posted": [],
             "low_confidence": [],
             "ghosts": [],
             "categories": CATEGORIES,
@@ -2000,36 +1987,6 @@ def audit_page(
             "status": status,
         })
 
-    # --- Not yet posted (expected recurring charges not seen this month) ---
-    cadence_days_map = {"weekly": 7, "biweekly": 14, "monthly": 30, "bimonthly": 60,
-                        "quarterly": 91, "annual": 365}
-    not_yet_posted = []
-    for items in (subscriptions, bills):
-        for item in items:
-            merchant_name = item[0]
-            cadence = item[2]
-            last_seen = item[4]
-            median_amount = item[1]
-            interval = cadence_days_map.get(cadence, 30)
-            expected_next = last_seen + timedelta(days=interval)
-            days_since = (today - expected_next).days
-            if days_since <= 7 or days_since > 90:
-                continue
-            has_current = any(
-                t.merchant_norm == merchant_name and t.posted_at >= month_start
-                for t in report.transactions
-            )
-            if has_current:
-                continue
-            not_yet_posted.append({
-                "merchant": merchant_name,
-                "cadence": cadence,
-                "median_amount": median_amount,
-                "last_seen": last_seen,
-                "expected_date": expected_next,
-            })
-    not_yet_posted.sort(key=lambda x: x["expected_date"])
-
     # --- Low confidence transactions ---
     low_confidence = []
     for txn in report.transactions:
@@ -2043,14 +2000,13 @@ def audit_page(
         if txn.txn_type == TransactionType.EXPENSE and txn.category_id in (None, "other"):
             ghosts.append(txn)
 
-    return templates.TemplateResponse(request, "audit.html", {
+    return templates.TemplateResponse(request, "review.html", {
         "request": request,
         "all_accounts": all_accounts,
         "selected_accounts": account_filter or [],
         "show_no_data": False,
         "coverage": coverage,
         "top_merchants": top_merchants,
-        "not_yet_posted": not_yet_posted,
         "low_confidence": low_confidence,
         "ghosts": ghosts,
         "categories": CATEGORIES,
@@ -4047,6 +4003,45 @@ def commitments_page(
     expense_monthly_total = sum(r["monthly_equivalent_cents"] for r in expense_confirmed)
     net_monthly = income_monthly_total - expense_monthly_total
 
+    # Load recurring data for Heads Up (duplicates) and Not Yet Posted sections
+    subscriptions = get_subscriptions(conn, days=400)
+    bills = get_bills(conn, days=400)
+    duplicates = detect_duplicates(conn, days=400)
+
+    today = dates_mod.today()
+    cadence_days_map = {"weekly": 7, "biweekly": 14, "monthly": 30, "bimonthly": 60,
+                        "quarterly": 91, "annual": 365}
+    not_yet_posted = []
+    month_start = date(today.year, today.month, 1)
+    month_end = today + timedelta(days=1)
+    report_service = ReportService(conn)
+    report = report_service.report_period(month_start, month_end)
+    for items in (subscriptions, bills):
+        for item in items:
+            merchant_name = item[0]
+            cadence = item[2]
+            last_seen = item[4]
+            median_amount = item[1]
+            interval = cadence_days_map.get(cadence, 30)
+            expected_next = last_seen + timedelta(days=interval)
+            days_since = (today - expected_next).days
+            if days_since <= 7 or days_since > 90:
+                continue
+            has_current = any(
+                t.merchant_norm == merchant_name and t.posted_at >= month_start
+                for t in report.transactions
+            )
+            if has_current:
+                continue
+            not_yet_posted.append({
+                "merchant": merchant_name,
+                "cadence": cadence,
+                "median_amount": median_amount,
+                "last_seen": last_seen,
+                "expected_date": expected_next,
+            })
+    not_yet_posted.sort(key=lambda x: x["expected_date"])
+
     return templates.TemplateResponse(request, "commitments.html", {
         "request": request,
         "income_confirmed": income_confirmed,
@@ -4060,6 +4055,8 @@ def commitments_page(
         "net_monthly": net_monthly,
         "income_suggestion_count": len(income_suggestions),
         "expense_suggestion_count": len(expense_suggestions),
+        "duplicates": duplicates,
+        "not_yet_posted": not_yet_posted,
     })
 
 

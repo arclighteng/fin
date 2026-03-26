@@ -5,6 +5,73 @@
   <h1>Expected Income & Expenses</h1>
 </div>
 
+<!-- ── Heads Up: Duplicate subscriptions ── -->
+{% if duplicates %}
+<section style="margin-bottom:24px;">
+  <div style="background:var(--bg-secondary); border:1px solid var(--border); border-radius:8px; padding:16px; box-shadow:var(--shadow-sm);">
+    <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+      <span style="font-size:16px;">⚠️</span>
+      <h2 style="font-size:14px; font-weight:600; color:var(--text-primary); margin:0;">Heads Up — Possible Duplicate Subscriptions</h2>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:8px;">
+      {% for dup in duplicates %}
+      <div id="dup-group-{{ loop.index }}" style="display:flex; align-items:flex-start; gap:12px; padding:10px 12px; background:var(--bg-tertiary); border-radius:6px; border-left:3px solid {% if dup.severity == 'high' %}var(--accent-red){% else %}var(--accent-yellow){% endif %};">
+        <span style="font-size:14px; flex-shrink:0;">{% if dup.severity == 'high' %}&#128308;{% else %}&#128993;{% endif %}</span>
+        <div style="flex:1; min-width:0;">
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+            <span style="font-size:13px; font-weight:500;">{{ dup.detail }}</span>
+            <span style="font-size:12px; font-family:monospace; color:var(--accent-red);">${{ "%.2f"|format(dup.total_monthly_cents / 100) }}/mo combined</span>
+            <span style="font-size:11px; padding:1px 6px; border-radius:4px; font-weight:600; background:{% if dup.severity == 'high' %}var(--accent-red-dim){% else %}#fef3cd{% endif %}; color:{% if dup.severity == 'high' %}var(--accent-red){% else %}var(--accent-yellow){% endif %};">{{ dup.severity|upper }}</span>
+          </div>
+          <div style="font-size:12px; color:var(--text-secondary); margin-top:3px;">
+            {% for item in dup.items %}{{ item[0] }} (${{ "%.2f"|format(item[1] / 100) }}/mo, {{ item[2] }}){% if not loop.last %} &bull; {% endif %}{% endfor %}
+          </div>
+        </div>
+        <button onclick="dismissDuplicateGroup('{{ dup.items[0][0] }}', 'dup-group-{{ loop.index }}')" style="flex-shrink:0; background:none; border:1px solid var(--border); border-radius:6px; padding:3px 10px; font-size:12px; color:var(--text-secondary); cursor:pointer;">Dismiss</button>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+{% endif %}
+
+<!-- ── Not Yet Posted ── -->
+{% if not_yet_posted %}
+<section style="margin-bottom:24px;">
+  <div style="background:var(--bg-secondary); border:1px solid var(--border); border-radius:8px; padding:16px; box-shadow:var(--shadow-sm);">
+    <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+      <span style="font-size:16px;">&#128336;</span>
+      <h2 style="font-size:14px; font-weight:600; color:var(--text-primary); margin:0;">Not Yet Posted ({{ not_yet_posted|length }})</h2>
+      <span style="font-size:12px; color:var(--text-secondary);">Expected recurring charges that haven't appeared yet</span>
+    </div>
+    <table style="width:100%; border-collapse:collapse; font-size:13px;">
+      <thead>
+        <tr style="border-bottom:1px solid var(--border);">
+          <th style="padding:6px 8px; text-align:left; font-size:11px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;">Merchant</th>
+          <th style="padding:6px 8px; text-align:left; font-size:11px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;">Cadence</th>
+          <th style="padding:6px 8px; text-align:right; font-size:11px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;">Typical Amount</th>
+          <th style="padding:6px 8px; text-align:left; font-size:11px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;">Last Seen</th>
+          <th style="padding:6px 8px; text-align:left; font-size:11px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;">Expected By</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in not_yet_posted %}
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:8px 8px; color:var(--text-muted); font-style:italic;">{{ item.merchant }}</td>
+          <td style="padding:8px 8px; color:var(--text-secondary);">{{ item.cadence }}</td>
+          <td style="padding:8px 8px; text-align:right; font-family:monospace; color:var(--text-secondary);">${{ "%.2f"|format(item.median_amount / 100) }}</td>
+          <td style="padding:8px 8px; color:var(--text-secondary);">{{ item.last_seen }}</td>
+          <td style="padding:8px 8px;">
+            <span style="font-size:11px; padding:2px 6px; border-radius:4px; background:var(--bg-tertiary); color:var(--text-muted); border:1px solid var(--border);">Pending {{ item.expected_date }}</span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
 <!-- Summary bar -->
 <div style="display:flex; gap:16px; margin-bottom:24px;">
   <div style="flex:1; background:var(--bg-secondary); border:1px solid var(--border); border-radius:8px; padding:16px; box-shadow:var(--shadow-sm);">
@@ -334,8 +401,10 @@ function dismissCommitment(id, btn) {
 
 async function deleteCommitment(id) {
   if (!confirm('Delete this commitment?')) return;
-  await fetch(`/api/commitments/${id}`, {method: 'DELETE'});
-  document.getElementById(`row-${id}`).remove();
+  const resp = await fetch(`/api/commitments/${id}`, {method: 'DELETE'});
+  if (resp.ok) {
+    document.getElementById(`row-${id}`).remove();
+  }
 }
 
 function toggleDismissed(direction) {
@@ -455,6 +524,33 @@ async function submitAddForm(e, direction) {
   else {
     const body = await resp.json().catch(() => null);
     showFormError(`add-form-${direction}`, body?.error || 'Failed to save. Please fill in at least a name.');
+  }
+}
+
+async function dismissDuplicateGroup(merchant, groupId) {
+  const groupEl = document.getElementById(groupId);
+  if (groupEl) {
+    groupEl.style.opacity = '0.5';
+    groupEl.style.pointerEvents = 'none';
+  }
+  try {
+    const resp = await fetch('/api/dismiss-duplicate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ merchant: merchant, dismiss: true }),
+    });
+    if (resp.ok) {
+      if (groupEl) groupEl.remove();
+      // Hide the entire Heads Up section if no groups remain
+      const headsUpSection = groupEl ? groupEl.closest('section') : null;
+      if (headsUpSection && headsUpSection.querySelectorAll('[id^="dup-group-"]').length === 0) {
+        headsUpSection.remove();
+      }
+    } else {
+      if (groupEl) { groupEl.style.opacity = '1'; groupEl.style.pointerEvents = ''; }
+    }
+  } catch (err) {
+    if (groupEl) { groupEl.style.opacity = '1'; groupEl.style.pointerEvents = ''; }
   }
 }
 </script>

@@ -103,19 +103,16 @@ const finDrilldown = (function() {
         document.getElementById('drilldownFilters').innerHTML = filtersHtml;
 
         // Render table
-        _renderTable(data.transactions, data.resolution_context);
+        _renderTable(data.transactions, data.resolution_context, data.categories);
 
         // Footer
         _renderFooter(data);
     }
 
-    // Suggested tags for autocomplete
-    const SUGGESTED_TAGS = ['reimbursable', 'tax-deductible', 'split', 'gift', 'business'];
-
     // Scopes that span multiple categories — show a Category column
     const MULTI_CAT_SCOPES = new Set(['spend', 'income', 'net', 'recurring', 'discretionary']);
 
-    function _renderTable(transactions, resolutionContext) {
+    function _renderTable(transactions, resolutionContext, categories) {
         if (!transactions || transactions.length === 0) {
             document.getElementById('drilldownTable').innerHTML = '<div class="drilldown-empty">No transactions</div>';
             return;
@@ -123,7 +120,6 @@ const finDrilldown = (function() {
 
         const showResolution = resolutionContext && resolutionContext.allows_resolution;
         const showCategory = !showResolution && currentData && MULTI_CAT_SCOPES.has(currentData.scope);
-        const colCount = showResolution ? 5 : (showCategory ? 6 : 5);
 
         let html = '<table><thead><tr><th>Date</th><th>Merchant</th><th class="text-right">Amount</th><th>Account</th>';
         if (showCategory) html += '<th>Category</th>';
@@ -133,22 +129,15 @@ const finDrilldown = (function() {
 
         transactions.forEach(t => {
             const amtClass = t.amount_cents > 0 ? 'positive' : '';
-            const hasNote = t.note ? ' has-note' : '';
-            const hasTags = (t.tags && t.tags.length > 0) ? ' has-tags' : '';
-            const annotationIndicator = (t.note || (t.tags && t.tags.length > 0))
-                ? '<span class="annotation-dot" title="Has notes/tags"></span>' : '';
 
-            html += `<tr class="txn-row${hasNote}${hasTags}" data-fp="${finUI.escapeHtml(t.fingerprint)}" onclick="finDrilldown.toggleAnnotation(this)">
+            html += `<tr class="txn-row" data-fp="${finUI.escapeHtml(t.fingerprint)}">
                 <td>${finUI.formatDate(t.date)}</td>
-                <td>${annotationIndicator}${finUI.escapeHtml(t.merchant)}</td>
+                <td>${finUI.escapeHtml(t.merchant)}</td>
                 <td class="text-right ${amtClass}">${finUI.formatCents(t.amount_cents)}</td>
                 <td class="muted">${finUI.escapeHtml(t.account_name || '')}</td>`;
 
             if (showCategory) {
-                const catLabel = t.category_icon && t.category
-                    ? `${finUI.escapeHtml(t.category_icon)} ${finUI.escapeHtml(t.category)}`
-                    : (t.category ? finUI.escapeHtml(t.category) : '<span class="muted">—</span>');
-                html += `<td class="muted">${catLabel}</td>`;
+                html += _renderCategoryCell(t, categories);
             }
 
             if (!showResolution) {
@@ -167,150 +156,126 @@ const finDrilldown = (function() {
             }
 
             html += '</tr>';
-
-            // Annotation row (hidden by default)
-            const tagsHtml = (t.tags || []).map(tag =>
-                `<span class="txn-tag">${finUI.escapeHtml(tag)}<button class="tag-remove" onclick="event.stopPropagation(); finDrilldown.removeTag('${finUI.escapeHtml(t.fingerprint)}', '${finUI.escapeHtml(tag)}')">&times;</button></span>`
-            ).join('');
-
-            html += `<tr class="annotation-row" id="ann-${finUI.escapeHtml(t.fingerprint)}" style="display:none" onclick="event.stopPropagation()">
-                <td colspan="${colCount}">
-                    <div class="annotation-panel">
-                        <div class="annotation-note">
-                            <textarea class="note-input" id="note-${finUI.escapeHtml(t.fingerprint)}"
-                                placeholder="Add a note..." onblur="finDrilldown.saveNote('${finUI.escapeHtml(t.fingerprint)}')">${finUI.escapeHtml(t.note || '')}</textarea>
-                        </div>
-                        <div class="annotation-tags">
-                            <div class="tags-list" id="tags-${finUI.escapeHtml(t.fingerprint)}">${tagsHtml}</div>
-                            <div class="tag-add">
-                                <input type="text" class="tag-input" id="tag-input-${finUI.escapeHtml(t.fingerprint)}"
-                                    placeholder="Add tag..." onkeydown="if(event.key==='Enter'){event.preventDefault(); finDrilldown.addTag('${finUI.escapeHtml(t.fingerprint)}')}" list="tag-suggestions">
-                                <button class="btn-tag-add" onclick="finDrilldown.addTag('${finUI.escapeHtml(t.fingerprint)}')">+</button>
-                            </div>
-                        </div>
-                    </div>
-                </td>
-            </tr>`;
         });
         html += '</tbody></table>';
-
-        // Tag suggestions datalist
-        html += '<datalist id="tag-suggestions">';
-        SUGGESTED_TAGS.forEach(tag => { html += `<option value="${finUI.escapeHtml(tag)}">`; });
-        html += '</datalist>';
 
         document.getElementById('drilldownTable').innerHTML = html;
     }
 
-    function toggleAnnotation(row) {
-        const fp = row.dataset.fp;
-        const annRow = document.getElementById('ann-' + fp);
-        if (!annRow) return;
-        const isVisible = annRow.style.display !== 'none';
-        // Close all others
-        document.querySelectorAll('.annotation-row').forEach(r => r.style.display = 'none');
-        document.querySelectorAll('.txn-row').forEach(r => r.classList.remove('expanded'));
-        if (!isVisible) {
-            annRow.style.display = 'table-row';
-            row.classList.add('expanded');
-        }
+    function _renderCategoryCell(t, categories) {
+        // Build label text
+        const catLabel = t.category_icon && t.category
+            ? `${finUI.escapeHtml(t.category_icon)} ${finUI.escapeHtml(t.category)}`
+            : (t.category ? finUI.escapeHtml(t.category) : '<span class="muted">—</span>');
+
+        const overrideBadge = t.category_is_override
+            ? ' <span class="cat-override-badge" title="Category manually set">*</span>' : '';
+
+        const merchantEsc = finUI.escapeHtml(t.merchant);
+        const catIdEsc = finUI.escapeHtml(t.category_id || '');
+
+        // Clickable label — clicking turns into a select dropdown
+        return `<td class="cat-cell" data-merchant="${merchantEsc}" data-cat-id="${catIdEsc}" onclick="finDrilldown.openCategorySelect(this, event)">
+            <span class="cat-label" title="Click to override category for all ${merchantEsc} transactions">${catLabel}${overrideBadge}</span>
+        </td>`;
     }
 
-    async function saveNote(fingerprint) {
-        const textarea = document.getElementById('note-' + fingerprint);
-        if (!textarea) return;
-        const note = textarea.value.trim();
+    function openCategorySelect(tdEl, evt) {
+        evt.stopPropagation();
+
+        // If already open, do nothing
+        if (tdEl.querySelector('select.cat-override-select')) return;
+
+        const merchant = tdEl.dataset.merchant;
+        const currentCatId = tdEl.dataset.catId;
+        const categories = (currentData && currentData.categories) || [];
+
+        let selectHtml = `<select class="cat-override-select" data-merchant="${finUI.escapeHtml(merchant)}"
+            onchange="finDrilldown.saveCategoryOverride(this)"
+            onblur="finDrilldown.closeCategorySelect(this.closest('td'))"
+            onclick="event.stopPropagation()">`;
+        selectHtml += `<option value="auto"${!currentCatId ? ' selected' : ''}>Auto (no override)</option>`;
+        categories.forEach(cat => {
+            const sel = cat.id === currentCatId ? ' selected' : '';
+            selectHtml += `<option value="${finUI.escapeHtml(cat.id)}"${sel}>${finUI.escapeHtml(cat.icon || '')} ${finUI.escapeHtml(cat.name)}</option>`;
+        });
+        selectHtml += '</select>';
+
+        // Hide label, show select
+        const labelEl = tdEl.querySelector('.cat-label');
+        if (labelEl) labelEl.style.display = 'none';
+        tdEl.insertAdjacentHTML('beforeend', selectHtml);
+        const selectEl = tdEl.querySelector('select.cat-override-select');
+        if (selectEl) selectEl.focus();
+    }
+
+    function closeCategorySelect(tdEl) {
+        if (!tdEl) return;
+        const selectEl = tdEl.querySelector('select.cat-override-select');
+        const labelEl = tdEl.querySelector('.cat-label');
+        // Small delay so change event fires first
+        setTimeout(() => {
+            if (selectEl && tdEl.contains(selectEl)) selectEl.remove();
+            if (labelEl) labelEl.style.display = '';
+        }, 150);
+    }
+
+    async function saveCategoryOverride(selectEl) {
+        const merchant = selectEl.dataset.merchant;
+        const categoryId = selectEl.value;
+        if (!merchant) return;
+
+        selectEl.disabled = true;
+
         try {
-            if (note) {
-                await finApi.postJSON('/api/transaction/' + encodeURIComponent(fingerprint) + '/note', { note });
+            const resp = await finApi.postJSON('/api/category-override', {
+                merchant: merchant,
+                category_id: categoryId,
+            });
+
+            if (resp.ok) {
+                const td = selectEl.closest('td');
+                // Update data attr and label
+                if (td) {
+                    const newCatId = categoryId === 'auto' ? '' : categoryId;
+                    td.dataset.catId = newCatId;
+
+                    const categories = (currentData && currentData.categories) || [];
+                    let newLabel = '<span class="muted">—</span>';
+                    let isOverride = categoryId !== 'auto';
+                    if (categoryId !== 'auto') {
+                        const cat = categories.find(c => c.id === categoryId);
+                        if (cat) newLabel = `${finUI.escapeHtml(cat.icon || '')} ${finUI.escapeHtml(cat.name)}`;
+                    }
+                    const overrideBadge = isOverride ? ' <span class="cat-override-badge" title="Category manually set">*</span>' : '';
+                    const labelEl = td.querySelector('.cat-label');
+                    if (labelEl) {
+                        labelEl.innerHTML = newLabel + overrideBadge;
+                        labelEl.style.display = '';
+                    }
+                    selectEl.remove();
+                }
+
+                // Show undo toast for 4 seconds
+                const prevCatId = td ? td.dataset.catId : '';
+                finUI.toastWithAction(
+                    `Category override applied to all "${merchant}" transactions`,
+                    'Undo',
+                    async () => {
+                        await finApi.postJSON('/api/category-override', { merchant, category_id: prevCatId || 'auto' });
+                        // Refresh drilldown data
+                        if (currentParams) await open(currentParams.scope);
+                    },
+                    4000
+                );
             } else {
-                await finApi.delete('/api/transaction/' + encodeURIComponent(fingerprint) + '/note');
-            }
-            // Update dot indicator
-            const row = document.querySelector(`tr[data-fp="${fingerprint}"]`);
-            if (row) {
-                if (note) {
-                    row.classList.add('has-note');
-                    if (!row.querySelector('.annotation-dot')) {
-                        const merchantTd = row.querySelectorAll('td')[1];
-                        merchantTd.insertAdjacentHTML('afterbegin', '<span class="annotation-dot" title="Has notes/tags"></span>');
-                    }
-                } else {
-                    row.classList.remove('has-note');
-                    const hasTags = row.classList.contains('has-tags');
-                    if (!hasTags) {
-                        const dot = row.querySelector('.annotation-dot');
-                        if (dot) dot.remove();
-                    }
-                }
+                const data = await resp.json();
+                finUI.toast(`Error: ${data.error || 'Failed to save category'}`);
+                selectEl.disabled = false;
             }
         } catch (err) {
-            // Silently handle read-only mode
-        }
-    }
-
-    async function addTag(fingerprint) {
-        const input = document.getElementById('tag-input-' + fingerprint);
-        if (!input) return;
-        const tag = input.value.trim().toLowerCase();
-        if (!tag) return;
-
-        try {
-            const resp = await finApi.postJSON('/api/transaction/' + encodeURIComponent(fingerprint) + '/tag', { tag });
-            if (!resp.ok) {
-                const err = await resp.json();
-                finUI.toast(err.error || 'Invalid tag');
-                return;
-            }
-            input.value = '';
-
-            // Add tag chip to UI
-            const tagsList = document.getElementById('tags-' + fingerprint);
-            const chip = document.createElement('span');
-            chip.className = 'txn-tag';
-            chip.innerHTML = `${finUI.escapeHtml(tag)}<button class="tag-remove" onclick="event.stopPropagation(); finDrilldown.removeTag('${finUI.escapeHtml(fingerprint)}', '${finUI.escapeHtml(tag)}')">&times;</button>`;
-            tagsList.appendChild(chip);
-
-            // Update row indicator
-            const row = document.querySelector(`tr[data-fp="${fingerprint}"]`);
-            if (row) {
-                row.classList.add('has-tags');
-                if (!row.querySelector('.annotation-dot')) {
-                    const merchantTd = row.querySelectorAll('td')[1];
-                    merchantTd.insertAdjacentHTML('afterbegin', '<span class="annotation-dot" title="Has notes/tags"></span>');
-                }
-            }
-        } catch (err) {
-            // Read-only mode
-        }
-    }
-
-    async function removeTag(fingerprint, tag) {
-        try {
-            await finApi.delete('/api/transaction/' + encodeURIComponent(fingerprint) + '/tag/' + encodeURIComponent(tag));
-
-            // Remove chip from UI
-            const tagsList = document.getElementById('tags-' + fingerprint);
-            if (tagsList) {
-                tagsList.querySelectorAll('.txn-tag').forEach(chip => {
-                    if (chip.textContent.replace('\u00d7', '').trim() === tag) chip.remove();
-                });
-            }
-
-            // Update indicator if no tags left
-            const remaining = tagsList ? tagsList.querySelectorAll('.txn-tag').length : 0;
-            if (remaining === 0) {
-                const row = document.querySelector(`tr[data-fp="${fingerprint}"]`);
-                if (row) {
-                    row.classList.remove('has-tags');
-                    if (!row.classList.contains('has-note')) {
-                        const dot = row.querySelector('.annotation-dot');
-                        if (dot) dot.remove();
-                    }
-                }
-            }
-        } catch (err) {
-            // Read-only mode
+            finUI.toast(`Error: ${err.message}`);
+            selectEl.disabled = false;
         }
     }
 
@@ -359,7 +324,7 @@ const finDrilldown = (function() {
             return true;
         });
 
-        _renderTable(filtered, currentData.resolution_context);
+        _renderTable(filtered, currentData.resolution_context, currentData.categories);
 
         // Update count
         const countEl = document.querySelector('.drilldown-count');
@@ -492,9 +457,8 @@ const finDrilldown = (function() {
         toggleFilters,
         exportCSV,
         autoSaveClassification,
-        toggleAnnotation,
-        saveNote,
-        addTag,
-        removeTag,
+        openCategorySelect,
+        closeCategorySelect,
+        saveCategoryOverride,
     };
 })();

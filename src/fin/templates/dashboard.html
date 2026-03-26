@@ -562,76 +562,71 @@
     {% endif %}
     {% else %}
     <div class="empty-state">
-        <p>No suspicious charges detected. Good news!</p>
+        <p>No suspicious charges detected.</p>
+    </div>
+    {% endif %}
+    {% if duplicates %}
+    <div style="margin-top: 12px; border-top: 1px solid var(--border-color); padding-top: 12px;">
+        <div style="font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.04em;">Possible Duplicate Subscriptions</div>
+        <div class="alert-list">
+            {% for dup in duplicates if dup.severity == 'high' %}
+            <div class="alert-item {{ dup.severity }}" data-search="{{ dup.items|map(attribute=0)|join(' ')|lower }}">
+                <span class="alert-icon">&#128308;</span>
+                <div class="alert-content">
+                    <div class="alert-title">
+                        {{ dup.detail }}
+                        <span class="alert-amount">${{ "%.2f"|format(dup.total_monthly_cents / 100) }}/mo</span>
+                    </div>
+                    <div class="alert-detail">
+                        {% for item in dup.items %}
+                        {{ item[0] }} (${{ "%.2f"|format(item[1] / 100) }}/mo, {{ item[2] }}){% if not loop.last %}, {% endif %}
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+            {% for dup in duplicates if dup.severity != 'high' %}
+            <div class="alert-item {{ dup.severity }}" data-search="{{ dup.items|map(attribute=0)|join(' ')|lower }}">
+                <span class="alert-icon">&#128993;</span>
+                <div class="alert-content">
+                    <div class="alert-title">
+                        {{ dup.detail }}
+                        <span class="alert-amount">${{ "%.2f"|format(dup.total_monthly_cents / 100) }}/mo</span>
+                    </div>
+                    <div class="alert-detail">
+                        {% for item in dup.items %}
+                        {{ item[0] }} (${{ "%.2f"|format(item[1] / 100) }}/mo, {{ item[2] }}){% if not loop.last %}, {% endif %}
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        <p style="margin-top: 8px; font-size: 12px; color: var(--text-muted);">
+            <a href="/commitments" style="color: var(--accent-blue);">View &amp; dismiss on Commitments page</a>
+        </p>
     </div>
     {% endif %}
     </div>
 </div>
-
-<!-- Duplicate Subscriptions Card -->
-{% if duplicates %}
-<div class="card" id="duplicates-card">
-    <div class="card-header">
-        <h2>
-            <span class="toggle-icon">&#9660;</span>
-            Possible Duplicate Subscriptions ({{ duplicates|length }}) {{ account_filter_badge() }}
-        </h2>
-        <div class="card-actions">
-            <a href="/export/duplicates" class="btn btn-sm">Export CSV</a>
-        </div>
-    </div>
-
-    <div class="card-body">
-    <div class="alert-list">
-        {% for dup in duplicates %}
-        <div class="alert-item {{ dup.severity }}" data-search="{{ dup.items|map(attribute=0)|join(' ')|lower }}">
-            <span class="alert-icon">
-                {% if dup.severity == 'high' %}&#128308;{% else %}&#128993;{% endif %}
-            </span>
-            <div class="alert-content">
-                <div class="alert-title">
-                    {{ dup.detail }}
-                    <span class="alert-amount">${{ "%.2f"|format(dup.total_monthly_cents / 100) }}/mo</span>
-                </div>
-                <div class="alert-detail">
-                    {% for item in dup.items %}
-                    {{ item[0] }} (${{ "%.2f"|format(item[1] / 100) }}/mo, {{ item[2] }}){% if not loop.last %}, {% endif %}
-                    {% endfor %}
-                </div>
-            </div>
-        </div>
-        {% endfor %}
-    </div>
-    </div>
-</div>
-{% endif %}
 
 <!-- Subscriptions & Bills Card -->
 <div class="card" id="subscriptions-card">
     <div class="card-header">
         <h2>
             <span class="toggle-icon">&#9660;</span>
-            Subscriptions ({{ subscriptions|length }}) & Bills ({{ bills|length }}) {{ account_filter_badge() }}
+            Recurring Expenses ({{ subscriptions|length + bills|length }}) {{ account_filter_badge() }}
         </h2>
         <div class="card-actions">
-            <a href="/subs" class="btn btn-sm">View All</a>
             <a href="/export/subscriptions" class="btn btn-sm">Export CSV</a>
         </div>
     </div>
 
     <div class="card-body">
-    <div class="filter-bar">
-        <button class="filter-btn active" data-filter="all">All</button>
-        <button class="filter-btn" data-filter="subscriptions">Subscriptions</button>
-        <button class="filter-btn" data-filter="bills">Bills</button>
-        <button class="filter-btn" data-filter="duplicates">Duplicates</button>
-    </div>
-
     {% if subscriptions or bills %}
     <table data-sortable>
         <thead>
             <tr>
-                <th>Type</th>
                 <th>Merchant</th>
                 <th>Charge</th>
                 <th>Last Seen</th>
@@ -648,7 +643,6 @@
             {% set last_seen = sub[4] %}
             {% set cadence_suffix = '/yr' if cadence == 'annual' else '/qtr' if cadence == 'quarterly' else '/wk' if cadence == 'weekly' else '/mo' %}
             <tr data-type="subscriptions" data-is-dup="{{ 'yes' if sub[5] else 'no' }}" data-merchant="{{ sub[0] }}" class="clickable-row" onclick="drillDashboardPayee('{{ sub[0] }}', this)" tabindex="0" role="row" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();drillDashboardPayee('{{ sub[0] }}', this)}">
-                <td><span class="type-badge subscription clickable" onclick="event.stopPropagation(); toggleType('{{ sub[0] }}', 'subscription')" title="Click to change to Bill" tabindex="0" role="button" aria-label="Change {{ sub[0] }} to bill" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();toggleType('{{ sub[0] }}', 'subscription')}">&#128260; Sub</span></td>
                 <td>
                     {% if display_name %}{{ display_name }}{% else %}{{ sub[0] }}{% endif %}
                     {% if display_name and display_name != sub[0] %}<br><small style="color: var(--text-muted);">{{ sub[0] }}</small>{% endif %}
@@ -657,7 +651,7 @@
                 <td>{{ last_seen }}</td>
                 <td class="status-cell">
                     {% if sub[5] %}
-                    <span class="status-badge warning clickable" onclick="event.stopPropagation(); dismissDuplicate('{{ sub[0] }}')" title="Possible duplicate subscription. Click to dismiss this warning." tabindex="0" role="button" aria-label="Dismiss duplicate warning for {{ sub[0] }}" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();dismissDuplicate('{{ sub[0] }}')}">⚠️ Dup?</span>
+                    <span class="status-badge warning">⚠️ Dup?</span>
                     {% elif is_known %}
                     <span class="status-badge success">✓ Known</span>
                     {% else %}
@@ -670,7 +664,7 @@
             </tr>
             <!-- Drill-down row (hidden by default) -->
             <tr class="drilldown-row" id="drilldown-sub-{{ loop.index }}" style="display: none;">
-                <td colspan="6" class="drilldown-cell">
+                <td colspan="5" class="drilldown-cell">
                     <div class="drilldown-loading">Loading transactions...</div>
                     <div class="drilldown-content"></div>
                 </td>
@@ -678,7 +672,6 @@
             {% endfor %}
             {% for bill in bills %}
             <tr data-type="bills" data-merchant="{{ bill[0] }}" class="clickable-row" onclick="drillDashboardPayee('{{ bill[0] }}', this)" tabindex="0" role="row" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();drillDashboardPayee('{{ bill[0] }}', this)}">
-                <td><span class="type-badge bill clickable" onclick="event.stopPropagation(); toggleType('{{ bill[0] }}', 'bill')" title="Click to change to Subscription" tabindex="0" role="button" aria-label="Change {{ bill[0] }} to subscription" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();toggleType('{{ bill[0] }}', 'bill')}">&#9889; Bill</span></td>
                 <td>{{ bill[0] }}</td>
                 <td data-value="{{ bill[1] }}">${{ "%.2f"|format(bill[1] / 100) }}/mo</td>
                 <td>{{ bill[4] }}</td>
@@ -691,7 +684,7 @@
             </tr>
             <!-- Drill-down row (hidden by default) -->
             <tr class="drilldown-row" id="drilldown-bill-{{ loop.index }}" style="display: none;">
-                <td colspan="6" class="drilldown-cell">
+                <td colspan="5" class="drilldown-cell">
                     <div class="drilldown-loading">Loading transactions...</div>
                     <div class="drilldown-content"></div>
                 </td>
@@ -701,7 +694,7 @@
     </table>
     {% else %}
     <div class="empty-state">
-        <p>No subscriptions or bills detected yet.</p>
+        <p>No recurring expenses detected yet.</p>
         <p style="margin-top: 8px;">These are detected after 3+ recurring charges.</p>
     </div>
     {% endif %}
@@ -1327,20 +1320,6 @@
             }
         }
 
-        // Filter Duplicate Subscriptions
-        const duplicatesCard = document.getElementById('duplicates-card');
-        if (duplicatesCard) {
-            const dupItems = duplicatesCard.querySelectorAll('.alert-item');
-            let visibleCount = 0;
-            dupItems.forEach(item => {
-                const searchData = item.getAttribute('data-search') || '';
-                const matches = searchData.includes(searchLower);
-                item.style.display = matches ? '' : 'none';
-                if (matches) visibleCount++;
-            });
-            duplicatesCard.style.display = visibleCount > 0 ? '' : 'none';
-        }
-
         // Filter Subscriptions & Bills
         const subsCard = document.getElementById('subscriptions-card');
         if (subsCard) {
@@ -1374,7 +1353,7 @@
         });
 
         // Show all cards
-        ['spending-card', 'alerts-card', 'duplicates-card', 'subscriptions-card'].forEach(id => {
+        ['spending-card', 'alerts-card', 'subscriptions-card'].forEach(id => {
             const card = document.getElementById(id);
             if (card) card.style.display = '';
         });

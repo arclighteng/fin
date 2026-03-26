@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 
-{% block title %}Audit - Fin{% endblock %}
+{% block title %}Review - Fin{% endblock %}
 
 {% block content %}
-<h1>Financial Audit</h1>
+<h1>Review</h1>
 
 <p style="color: var(--text-muted); margin-bottom: 12px;">
     <a href="/dashboard" style="color: var(--accent-blue);">&#8592; Back to Dashboard</a>
-    &nbsp;|&nbsp; Coverage report for current month
+    &nbsp;|&nbsp; Categorization triage for current month
 </p>
 
 <!-- Account Filter -->
@@ -27,7 +27,7 @@
         {% endfor %}
     </div>
     {% if selected_accounts or show_no_data %}
-    <a href="/audit" class="btn btn-sm" style="margin-left: 8px;">All Accounts</a>
+    <a href="/review" class="btn btn-sm" style="margin-left: 8px;">All Accounts</a>
     {% endif %}
 </div>
 {% endif %}
@@ -35,119 +35,60 @@
 {% if show_no_data %}
 <div class="card">
     <div class="card-body">
-        <div class="empty-state"><p>Select accounts to view audit data.</p></div>
+        <div class="empty-state"><p>Select accounts to view review data.</p></div>
     </div>
 </div>
 {% else %}
 
-<!-- Coverage Summary -->
-<div class="audit-stats">
-    <div class="audit-stat">
-        <div class="audit-stat-value">{{ coverage.total_txns }}</div>
-        <div class="audit-stat-label">Transactions</div>
-    </div>
-    <div class="audit-stat">
-        <div class="audit-stat-value {% if coverage.cat_pct >= 90 %}stat-good{% elif coverage.cat_pct >= 70 %}stat-warn{% else %}stat-bad{% endif %}">{{ coverage.cat_pct }}%</div>
-        <div class="audit-stat-label">Categorized</div>
-    </div>
-    <div class="audit-stat">
-        <div class="audit-stat-value">{{ coverage.tracked_merchants }}</div>
-        <div class="audit-stat-label">Tracked Merchants</div>
-    </div>
-    <div class="audit-stat">
-        <div class="audit-stat-value {% if coverage.low_conf == 0 %}stat-good{% else %}stat-warn{% endif %}">{{ coverage.low_conf }}</div>
-        <div class="audit-stat-label">Low Confidence</div>
-    </div>
-</div>
+{% set needs_review_count = (ghosts | length) + (low_confidence | length) %}
 
-<!-- Type Breakdown -->
-{% if coverage.by_type %}
-<div class="card">
-    <div class="card-header"><h2>Transaction Types</h2></div>
-    <div class="card-body">
-        <div class="type-breakdown">
-            {% for type_name, count in coverage.by_type.items() %}
-            <div class="type-row">
-                <span class="type-name">{{ type_name }}</span>
-                <span class="type-count">{{ count }}</span>
-            </div>
-            {% endfor %}
-        </div>
-    </div>
+<!-- Needs Review Count Badge -->
+{% if needs_review_count > 0 %}
+<div class="review-count-banner">
+    <span class="review-count-num">{{ needs_review_count }}</span>
+    transaction{{ 's' if needs_review_count != 1 else '' }} need{{ '' if needs_review_count != 1 else 's' }} review
+</div>
+{% else %}
+<div class="review-count-banner review-count-clear">
+    All caught up — no transactions need review
 </div>
 {% endif %}
 
-<!-- Top Merchants Table -->
+<!-- Ghost Transactions (Uncategorized) — triage queue, top priority -->
+{% if ghosts %}
 <div class="card">
     <div class="card-header">
-        <h2>Top Merchants by Spend ({{ top_merchants|length }})</h2>
+        <h2>Uncategorized Expenses ({{ ghosts|length }})</h2>
     </div>
     <div class="card-body">
-    {% if top_merchants %}
     <div class="table-wrap">
         <table class="audit-table">
             <thead>
                 <tr>
+                    <th>Date</th>
                     <th>Merchant</th>
-                    <th class="num">Charges</th>
-                    <th class="num">Total</th>
-                    <th>Last Seen</th>
-                    <th>Type</th>
+                    <th class="num">Amount</th>
+                    <th>Description</th>
+                    <th>Category</th>
                 </tr>
             </thead>
             <tbody>
-                {% for m in top_merchants %}
-                <tr style="cursor: pointer;" onclick="finDrilldown.open('merchant:{{ m.merchant | lower }}')" tabindex="0" role="row" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();finDrilldown.open('merchant:{{ m.merchant | lower }}')}">
-                    <td>{{ m.merchant }}</td>
-                    <td class="num">{{ m.count }}</td>
-                    <td class="num">${{ "%.2f"|format(m.total_cents / 100) }}</td>
-                    <td>{{ m.last_seen }}</td>
+                {% for txn in ghosts %}
+                <tr id="ghost-{{ loop.index }}">
+                    <td>{{ txn.posted_at }}</td>
+                    <td>{{ txn.merchant_norm }}</td>
+                    <td class="num">${{ "%.2f"|format(txn.amount_cents|abs / 100) }}</td>
+                    <td class="desc-cell">{{ txn.raw_description }}</td>
                     <td>
-                        {% if m.status == 'tracked' %}
-                        <span class="status-badge status-tracked">Subscription / Bill</span>
-                        {% elif m.status == 'recurring' %}
-                        <span class="status-badge status-recurring">Recurring</span>
-                        {% else %}
-                        <span class="status-badge status-untracked">One-time</span>
-                        {% endif %}
+                        <select class="cat-select" onchange="setCategory('{{ txn.merchant_norm }}', this.value, this)">
+                            <option value="">--</option>
+                            {% for cid, cat in categories.items() %}
+                            {% if cid not in ('other', 'income', 'one_time_deposit', 'transfer') %}
+                            <option value="{{ cid }}">{{ cat.name }}</option>
+                            {% endif %}
+                            {% endfor %}
+                        </select>
                     </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-    {% else %}
-    <div class="empty-state"><p>No merchant data available.</p></div>
-    {% endif %}
-    </div>
-</div>
-
-<!-- Expected Charges Not Yet Posted -->
-{% if not_yet_posted %}
-<div class="card">
-    <div class="card-header">
-        <h2>Not Yet Posted ({{ not_yet_posted|length }})</h2>
-    </div>
-    <div class="card-body">
-    <div class="table-wrap">
-        <table class="audit-table">
-            <thead>
-                <tr>
-                    <th>Merchant</th>
-                    <th>Cadence</th>
-                    <th class="num">Typical Amount</th>
-                    <th>Last Seen</th>
-                    <th>Expected By</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for item in not_yet_posted %}
-                <tr style="cursor: pointer;" onclick="finDrilldown.open('merchant:{{ item.merchant | lower }}')" tabindex="0" role="row" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();finDrilldown.open('merchant:{{ item.merchant | lower }}')}">
-                    <td>{{ item.merchant }}</td>
-                    <td>{{ item.cadence }}</td>
-                    <td class="num">${{ "%.2f"|format(item.median_amount / 100) }}</td>
-                    <td>{{ item.last_seen }}</td>
-                    <td>{{ item.expected_date }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -198,49 +139,78 @@
 </div>
 {% endif %}
 
-<!-- Ghost Transactions -->
-{% if ghosts %}
+{% if not ghosts and not low_confidence %}
+<div class="card">
+    <div class="card-body">
+        <div class="empty-state"><p>No transactions need review this month.</p></div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Top Merchants Table -->
 <div class="card">
     <div class="card-header">
-        <h2>Uncategorized Expenses ({{ ghosts|length }})</h2>
+        <h2>Top Merchants by Spend ({{ top_merchants|length }})</h2>
     </div>
     <div class="card-body">
+    {% if top_merchants %}
     <div class="table-wrap">
         <table class="audit-table">
             <thead>
                 <tr>
-                    <th>Date</th>
                     <th>Merchant</th>
-                    <th class="num">Amount</th>
-                    <th>Description</th>
-                    <th>Category</th>
+                    <th class="num">Charges</th>
+                    <th class="num">Total</th>
+                    <th>Last Seen</th>
+                    <th>Type</th>
                 </tr>
             </thead>
             <tbody>
-                {% for txn in ghosts %}
-                <tr id="ghost-{{ loop.index }}">
-                    <td>{{ txn.posted_at }}</td>
-                    <td>{{ txn.merchant_norm }}</td>
-                    <td class="num">${{ "%.2f"|format(txn.amount_cents|abs / 100) }}</td>
-                    <td class="desc-cell">{{ txn.raw_description }}</td>
+                {% for m in top_merchants %}
+                <tr style="cursor: pointer;" onclick="finDrilldown.open('merchant:{{ m.merchant | lower }}')" tabindex="0" role="row" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();finDrilldown.open('merchant:{{ m.merchant | lower }}')}">
+                    <td>{{ m.merchant }}</td>
+                    <td class="num">{{ m.count }}</td>
+                    <td class="num">${{ "%.2f"|format(m.total_cents / 100) }}</td>
+                    <td>{{ m.last_seen }}</td>
                     <td>
-                        <select class="cat-select" onchange="setCategory('{{ txn.merchant_norm }}', this.value, this)">
-                            <option value="">--</option>
-                            {% for cid, cat in categories.items() %}
-                            {% if cid not in ('other', 'income', 'one_time_deposit', 'transfer') %}
-                            <option value="{{ cid }}">{{ cat.name }}</option>
-                            {% endif %}
-                            {% endfor %}
-                        </select>
+                        {% if m.status == 'tracked' %}
+                        <span class="status-badge status-tracked">Subscription / Bill</span>
+                        {% elif m.status == 'recurring' %}
+                        <span class="status-badge status-recurring">Recurring</span>
+                        {% else %}
+                        <span class="status-badge status-untracked">One-time</span>
+                        {% endif %}
                     </td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
+    {% else %}
+    <div class="empty-state"><p>No merchant data available.</p></div>
+    {% endif %}
     </div>
 </div>
-{% endif %}
+
+<!-- Coverage Summary (de-emphasized, below action queues) -->
+<div class="audit-stats">
+    <div class="audit-stat">
+        <div class="audit-stat-value">{{ coverage.total_txns }}</div>
+        <div class="audit-stat-label">Transactions</div>
+    </div>
+    <div class="audit-stat">
+        <div class="audit-stat-value {% if coverage.cat_pct >= 90 %}stat-good{% elif coverage.cat_pct >= 70 %}stat-warn{% else %}stat-bad{% endif %}">{{ coverage.cat_pct }}%</div>
+        <div class="audit-stat-label">Categorized</div>
+    </div>
+    <div class="audit-stat">
+        <div class="audit-stat-value">{{ coverage.tracked_merchants }}</div>
+        <div class="audit-stat-label">Tracked Merchants</div>
+    </div>
+    <div class="audit-stat">
+        <div class="audit-stat-value {% if coverage.low_conf == 0 %}stat-good{% else %}stat-warn{% endif %}">{{ coverage.low_conf }}</div>
+        <div class="audit-stat-label">Low Confidence</div>
+    </div>
+</div>
 
 {% endif %}
 
@@ -276,7 +246,29 @@ async function setCategory(merchant, categoryId, selectEl) {
 </script>
 
 <style>
-/* Audit Stats Row */
+/* Review Count Banner */
+.review-count-banner {
+    background: var(--accent-red-dim, #fed7d7);
+    color: var(--accent-red);
+    border-radius: 10px;
+    padding: 14px 20px;
+    margin-bottom: 20px;
+    font-size: 15px;
+    font-weight: 500;
+}
+
+.review-count-banner.review-count-clear {
+    background: var(--accent-green-dim, #c6f6d5);
+    color: var(--accent-green);
+}
+
+.review-count-num {
+    font-size: 22px;
+    font-weight: 700;
+    margin-right: 6px;
+}
+
+/* Coverage Stats Row */
 .audit-stats {
     display: flex;
     gap: 16px;
@@ -308,32 +300,6 @@ async function setCategory(merchant, categoryId, selectEl) {
 .stat-good { color: var(--accent-green); }
 .stat-warn { color: var(--accent-yellow); }
 .stat-bad { color: var(--accent-red); }
-
-/* Type Breakdown */
-.type-breakdown {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-
-.type-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 12px;
-    background: var(--bg-primary, var(--bg));
-    border-radius: 6px;
-    font-size: 14px;
-}
-
-.type-name {
-    font-weight: 500;
-}
-
-.type-count {
-    color: var(--text-muted);
-    font-size: 13px;
-}
 
 /* Audit Table */
 .table-wrap {
@@ -393,19 +359,9 @@ async function setCategory(merchant, categoryId, selectEl) {
     color: var(--accent-blue);
 }
 
-.status-known {
-    background: rgba(183, 121, 31, 0.1);
-    color: var(--accent-yellow);
-}
-
 .status-untracked {
     background: rgba(0, 0, 0, 0.05);
     color: var(--text-muted);
-}
-
-.status-upcoming {
-    background: rgba(183, 121, 31, 0.1);
-    color: var(--accent-yellow);
 }
 
 /* Confidence Badge */
@@ -455,7 +411,7 @@ async function setCategory(merchant, categoryId, selectEl) {
     color: var(--text-secondary);
 }
 
-/* Card styles matching subs.html */
+/* Card styles */
 .card {
     background: var(--card-bg, var(--bg-secondary));
     border-radius: 12px;

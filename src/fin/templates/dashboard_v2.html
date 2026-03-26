@@ -390,114 +390,6 @@
     vertical-align: middle;
 }
 
-/* ==================== CARD 2: COMMITMENTS ==================== */
-.commit-total {
-    font-size: 1.1rem;
-    font-weight: 700;
-    color: var(--text-primary);
-}
-
-.commit-pct-text {
-    font-size: 13px;
-    color: var(--text-secondary);
-    margin-bottom: 8px;
-}
-
-.commit-bar-track {
-    height: 8px;
-    background: var(--bg-tertiary);
-    border-radius: 4px;
-    margin-bottom: 20px;
-    overflow: hidden;
-}
-
-.commit-bar-fill {
-    height: 100%;
-    border-radius: 4px;
-    background: var(--accent-green, #4aba6f);
-}
-
-.commit-bar-fill.yellow {
-    background: var(--accent-yellow, #ffc933);
-}
-
-.commit-bar-fill.red {
-    background: var(--accent-red, #ea4335);
-}
-
-.commit-list {
-    list-style: none;
-}
-
-.commit-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    padding: 8px 0;
-    min-height: 44px;
-    border-bottom: 1px solid var(--border);
-    cursor: pointer;
-    transition: background 0.15s;
-}
-
-.commit-item:hover {
-    background: var(--bg-hover);
-    margin: 0 -8px;
-    padding: 8px;
-    border-radius: 6px;
-    border-color: transparent;
-}
-
-.commit-item:last-child {
-    border-bottom: none;
-}
-
-.commit-name {
-    font-size: 14px;
-    color: var(--text-primary);
-}
-
-.commit-amount {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--text-primary);
-    white-space: nowrap;
-}
-
-.commit-note {
-    font-size: 12px;
-    color: var(--text-muted);
-    margin-top: 2px;
-}
-
-.commit-note.price-change {
-    color: var(--accent-yellow, #ffc933);
-}
-
-.commit-footer {
-    display: flex;
-    justify-content: space-between;
-    margin-top: 14px;
-    padding-top: 10px;
-    border-top: 1px solid var(--border);
-    font-size: 12px;
-    color: var(--text-muted);
-}
-
-.commit-more {
-    font-size: 12px;
-    color: var(--text-muted);
-    padding: 8px 0;
-    min-height: 44px;
-    display: flex;
-    align-items: center;
-    cursor: pointer;
-}
-
-.commit-more:hover {
-    color: var(--accent-blue, #4a90d9);
-}
-
 /* ==================== CARD 3: SPENDING ==================== */
 .spend-total {
     font-size: 1.1rem;
@@ -1071,7 +963,7 @@
     {% if integrity_data and integrity_data.integrity_score < 0.8 %}
     <div class="integrity-banner-v3">
         <span>Some transactions need classification. The numbers below may be incomplete.</span>
-        <a href="/audit">Review items &rarr;</a>
+        <a href="/review">Review items &rarr;</a>
     </div>
     {% endif %}
 
@@ -1185,71 +1077,6 @@
                 Expenses ${{ "%.0f"|format((current_period.recurring_cents + current_period.discretionary_cents) / 100) }},
                 Net {{ 'kept' if current_period.net_cents >= 0 else 'over' }} ${{ "%.0f"|format((current_period.net_cents / 100) | abs) }}.
             </p>
-        </div>
-
-        <!-- ==================== CARD 2: COMMITMENTS ==================== -->
-        <div class="card-v3">
-            <div class="card-title-v3">
-                Monthly Commitments
-                <span class="commit-total">${{ "%.0f"|format(current_period.recurring_cents / 100) }} this month</span>
-            </div>
-
-            {% set income_amount = current_period.income_cents / 100 %}
-            {% set commit_pct = (current_period.recurring_cents / current_period.income_cents * 100) | int if current_period.income_cents > 0 else 0 %}
-            {% if commit_pct > 50 %}
-            <div class="commit-pct-text">${{ commit_pct }} of every $100 you earn is committed</div>
-            {% else %}
-            <div class="commit-pct-text">That's {{ commit_pct }}% of your income</div>
-            {% endif %}
-            <div class="commit-bar-track">
-                {% set bar_color_class = 'red' if commit_pct > 70 else ('yellow' if commit_pct > 50 else '') %}
-                <div class="commit-bar-fill {{ bar_color_class }}" style="width: {{ commit_pct }}%"></div>
-            </div>
-
-            {% set all_recurring = (subscriptions + bills) | sort(attribute='1', reverse=True) %}
-            <ul class="commit-list">
-                {% for item in all_recurring[:8] %}
-                    {% set display_name = item[8] if item|length > 8 and item[8] else item[0] %}
-                    {% set merchant = item[0] %}
-                    {% set amount = item[1] %}
-                    {% set pc = price_changes_by_merchant.get(merchant) %}
-                    <li class="commit-item" onclick="finDrilldown.open('merchant:{{ merchant | lower }}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}" role="button" tabindex="0" title="Click for details">
-                        <div>
-                            <div class="commit-name">{{ display_name }}</div>
-                            {% if pc %}
-                                <div class="commit-note price-change">was ${{ "%.2f"|format(pc['old_amount'] / 100) }}</div>
-                            {% elif item|length > 2 and item[2] %}
-                                {% set cadence_labels = {'monthly': 'Monthly', 'quarterly': 'Quarterly', 'yearly': 'Yearly', 'annual': 'Annual', 'biweekly': 'Every 2 weeks', 'weekly': 'Weekly', 'semi-monthly': 'Twice a month', 'recurring': 'Recurring'} %}
-                                <div class="commit-note">{{ cadence_labels.get(item[2]|lower, item[2]|capitalize) }}</div>
-                            {% endif %}
-                        </div>
-                        <span class="commit-amount">${{ "%.2f"|format(amount / 100) }}</span>
-                    </li>
-                {% endfor %}
-                {% if all_recurring|length > 8 %}
-                    <li class="commit-more" onclick="finDrilldown.open('recurring')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}" role="button" tabindex="0">View all recurring this month</li>
-                {% endif %}
-            </ul>
-
-            {% set subs_total = subscriptions | sum(attribute='1') %}
-            {% set bills_total = bills | sum(attribute='1') %}
-            {% if subscriptions and bills %}
-            <div class="commit-footer">
-                <span>${{ "%.0f"|format(subs_total / 100) }}/mo subscriptions</span>
-                <span>${{ "%.0f"|format(bills_total / 100) }}/mo bills</span>
-            </div>
-            {% endif %}
-            {% if commitments_nudge is defined and commitments_nudge %}
-            <div class="commit-nudge">
-                <a href="/commitments">
-                    {%- if commitments_confirmed == 0 -%}
-                    Set your income & commitments →
-                    {%- else -%}
-                    {{ commitments_suggestions }} suggestion{{ 's' if commitments_suggestions != 1 }} to review →
-                    {%- endif -%}
-                </a>
-            </div>
-            {% endif %}
         </div>
 
         <!-- ==================== CARD 3: SPENDING BREAKDOWN ==================== -->
@@ -1408,6 +1235,10 @@
                     <div class="hu-actions">
                         <button class="hu-btn primary" onclick="event.stopPropagation(); dismissAlert('{{ item.key }}', 'not_suspicious', {{ loop.index }})">Looks fine</button>
                         <button class="hu-btn" onclick="event.stopPropagation(); dismissAlert('{{ item.key }}', 'confirmed', {{ loop.index }})">Flag it</button>
+                    </div>
+                    {% elif item.type == 'duplicate_sub' %}
+                    <div class="hu-actions">
+                        <a href="/commitments" class="hu-btn primary" style="text-decoration:none;" onclick="event.stopPropagation()">Review &amp; Dismiss</a>
                     </div>
                     {% endif %}
                 </div>

@@ -2201,126 +2201,39 @@
             margin-left: 4px;
         }
 
-        /* Transaction annotation styles (notes & tags) */
-        .txn-row { cursor: pointer; }
+        /* Transaction row styles */
         .txn-row:hover { background: var(--bg-tertiary); }
-        .txn-row.expanded { background: var(--bg-tertiary); }
 
-        .annotation-dot {
+        /* Category override inline select */
+        .cat-cell {
+            cursor: pointer;
+        }
+
+        .cat-label {
             display: inline-block;
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background: var(--accent-blue);
-            margin-right: 6px;
-            vertical-align: middle;
         }
 
-        .annotation-row td {
-            padding: 0 !important;
+        .cat-override-badge {
+            font-size: 10px;
+            color: var(--accent-blue);
+            font-weight: 600;
+            vertical-align: super;
+            margin-left: 2px;
+        }
+
+        .cat-override-select {
+            padding: 2px 6px;
+            border: 1px solid var(--accent-blue);
+            border-radius: 6px;
             background: var(--bg-primary);
-        }
-
-        .annotation-panel {
-            display: flex;
-            gap: 16px;
-            padding: 8px 12px;
-            border-bottom: 1px solid var(--border-color);
-        }
-
-        .annotation-note {
-            flex: 1;
-        }
-
-        .note-input {
-            width: 100%;
-            min-height: 40px;
-            padding: 6px 8px;
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
-            background: var(--bg-secondary);
             color: var(--text-primary);
             font-size: 0.8rem;
-            font-family: inherit;
-            resize: vertical;
+            max-width: 160px;
         }
 
-        .note-input:focus {
+        .cat-override-select:focus {
             outline: none;
             border-color: var(--accent-blue);
-        }
-
-        .annotation-tags {
-            flex: 1;
-        }
-
-        .tags-list {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 4px;
-            margin-bottom: 6px;
-        }
-
-        .txn-tag {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            padding: 2px 8px;
-            background: var(--bg-tertiary);
-            border-radius: 12px;
-            font-size: 0.75rem;
-            color: var(--text-secondary);
-        }
-
-        .tag-remove {
-            background: none;
-            border: none;
-            color: var(--text-muted);
-            cursor: pointer;
-            font-size: 0.85rem;
-            padding: 0 2px;
-            line-height: 1;
-        }
-
-        .tag-remove:hover { color: var(--accent-red); }
-
-        .tag-add {
-            display: flex;
-            gap: 4px;
-        }
-
-        .tag-input {
-            flex: 1;
-            padding: 4px 8px;
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
-            background: var(--bg-secondary);
-            color: var(--text-primary);
-            font-size: 0.8rem;
-        }
-
-        .tag-input:focus {
-            outline: none;
-            border-color: var(--accent-blue);
-        }
-
-        .btn-tag-add {
-            padding: 4px 10px;
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
-            background: var(--bg-secondary);
-            color: var(--text-primary);
-            cursor: pointer;
-            font-size: 0.85rem;
-        }
-
-        .btn-tag-add:hover { background: var(--bg-tertiary); }
-
-        @media (max-width: 768px) {
-            .annotation-panel {
-                flex-direction: column;
-                gap: 8px;
-            }
         }
 
         /* Modal styles */
@@ -3030,12 +2943,11 @@
         <a href="/" class="nav-brand">Fin <span class="nav-version">Beta {{ app_version }}</span></a>
         <div class="nav-links">
             <a href="/dashboard" {% if request.url.path == '/dashboard' %}class="active"{% endif %}>Dashboard</a>
-            <a href="/commitments" {% if request.url.path == '/commitments' %}class="active"{% endif %}>Income & Expenses</a>
-            <a href="/subs" {% if request.url.path == '/subs' %}class="active"{% endif %}>Recurring</a>
+            <a href="/commitments" {% if request.url.path == '/commitments' %}class="active"{% endif %}>Commitments</a>
+            <a href="/review" {% if request.url.path == '/review' %}class="active"{% endif %}>Review</a>
             <a href="/budget" {% if request.url.path == '/budget' %}class="active"{% endif %}>Budget</a>
             <a href="/insights" {% if request.url.path == '/insights' %}class="active"{% endif %}>Insights</a>
-            <a href="/audit" {% if request.url.path == '/audit' %}class="active"{% endif %}>Audit</a>
-            <a href="/sync-log" {% if request.url.path == '/sync-log' %}class="active"{% endif %}>Sync Log</a>
+            <a href="/connect" {% if request.url.path == '/connect' %}class="active"{% endif %}>Connect</a>
         </div>
         <div class="sync-container">
             <span id="syncStatus" class="sync-status"></span>
@@ -3521,25 +3433,7 @@
             }
         }
 
-        // Toggle subscription/bill type
-        async function toggleType(merchant, currentType) {
-            const newType = currentType === 'subscription' ? 'bill' : 'subscription';
 
-            try {
-                const response = await finApi.postJSON('/api/type-override', { merchant: merchant, override_type: newType });
-
-                if (response.ok) {
-                    showToast(`Changed to ${newType === 'subscription' ? 'Subscription' : 'Bill'}`);
-                    // Reload page to reflect the change
-                    setTimeout(() => window.location.reload(), 500);
-                } else {
-                    const data = await response.json();
-                    showToast('Error: ' + (data.error || 'Failed to update'));
-                }
-            } catch (err) {
-                showToast('Error: ' + err.message);
-            }
-        }
 
         // Category change modal
         let categoryModalMerchant = null;
