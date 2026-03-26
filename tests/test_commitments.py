@@ -6,7 +6,9 @@ Tests:
 - All required columns exist with correct types
 - Basic insert/query operations work
 """
+import calendar as cal_mod
 import sqlite3
+from datetime import date, timedelta
 
 import pytest
 
@@ -373,9 +375,6 @@ def test_delete_commitment(db):
 
 
 
-import calendar as cal_mod
-from datetime import date, timedelta
-
 
 def _insert_txn(conn, merchant, amount_cents, posted_at):
     """Helper to insert a test transaction."""
@@ -697,10 +696,8 @@ from fin.web import app
 
 @pytest.fixture
 def client(populated_db, temp_db_path):
-    """Test client backed by the populated test DB, auth and CSRF disabled."""
-    import os
+    """Test client backed by the populated test DB."""
     import fin.web as web_module
-    import fin.security as sec_module
 
     web_module._config = None
     web_module._db_initialized = False
@@ -711,16 +708,9 @@ def client(populated_db, temp_db_path):
         log_level = "INFO"
         log_format = "simple"
 
-    with patch.dict(os.environ, {"FIN_AUTH_DISABLED": "1"}):
-        # Reset cached token so get_api_token() re-reads the env var
-        orig_token = sec_module._session_token
-        sec_module._session_token = None
-        try:
-            with patch.object(web_module, "_get_config", return_value=MockConfig()):
-                with TestClient(app, raise_server_exceptions=True) as c:
-                    yield c
-        finally:
-            sec_module._session_token = orig_token
+    with patch.object(web_module, "_get_config", return_value=MockConfig()):
+        with TestClient(app, raise_server_exceptions=True) as c:
+            yield c
 
 
 def test_api_list_commitments_empty(client):

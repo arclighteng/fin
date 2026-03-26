@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Dashboard - Kept{% endblock %}
+{% block title %}Dashboard - Fin{% endblock %}
 
 {% block content %}
 <style>
@@ -293,14 +293,14 @@
     padding-left: 82px;
 }
 
-.cf-kept {
+.cf-savings {
     font-size: 2.8rem;
     font-weight: 700;
     color: var(--accent-green, #4aba6f);
     line-height: 1.2;
 }
 
-.cf-kept.negative {
+.cf-savings.negative {
     color: var(--accent-yellow, #d29922);
 }
 
@@ -831,7 +831,7 @@
         margin-bottom: 12px;
     }
 
-    .cf-kept {
+    .cf-savings {
         font-size: 2.2rem;
     }
 
@@ -1110,9 +1110,9 @@
             <div class="cf-gap">
                 {% set net_amount = (current_period.net_cents / 100) | abs %}
                 {% if current_period.net_cents >= 0 %}
-                    <span class="cf-kept">Kept ${{ "%.0f"|format(net_amount) }}</span>
+                    <span class="cf-savings">Kept ${{ "%.0f"|format(net_amount) }}</span>
                 {% else %}
-                    <span class="cf-kept negative">Over ${{ "%.0f"|format(net_amount) }}</span>
+                    <span class="cf-savings negative">Over ${{ "%.0f"|format(net_amount) }}</span>
                 {% endif %}
                 {% if savings_rate_pct %}
                     <span class="cf-rate">{{ "%.0f"|format(savings_rate_pct) }}% of income</span>
@@ -1575,11 +1575,7 @@ document.addEventListener('keydown', function(e) {
 // Alert dismissal
 async function dismissAlert(key, action, index) {
     try {
-        const response = await fetch('/api/alert-action', {
-            method: 'POST',
-            headers: getAuthHeaders(),
-            body: JSON.stringify({ alert_key: key, action: action })
-        });
+        const response = await finApi.postJSON('/api/alert-action', { alert_key: key, action: action });
         if (response.ok) {
             const el = document.getElementById('huItem' + index);
             if (el) {

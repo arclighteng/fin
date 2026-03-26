@@ -30,7 +30,7 @@ def test_db_path():
 
 @pytest.fixture
 def client(test_db_path):
-    """Create test client with initialized database and auth disabled."""
+    """Create test client with initialized database."""
     import fin.web as web_module
     web_module._config = None
     web_module._db_initialized = False
@@ -41,11 +41,9 @@ def client(test_db_path):
         log_level = "INFO"
         log_format = "simple"
 
-    # Disable auth for tests
-    with patch.dict(os.environ, {"FIN_AUTH_DISABLED": "1"}):
-        with patch.object(web_module, "_get_config", return_value=MockConfig()):
-            with TestClient(app) as client:
-                yield client
+    with patch.object(web_module, "_get_config", return_value=MockConfig()):
+        with TestClient(app) as client:
+            yield client
 
 
 class TestTxnTypeOverrideAPI:

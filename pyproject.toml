@@ -19,7 +19,6 @@ dependencies = [
   "keyring>=25.0.0",
   "tzdata>=2024.1",  # Required on Windows for zoneinfo timezone support
   "slowapi>=0.1.9",  # Rate limiting (Item 4)
-  "itsdangerous>=2.1.0",  # TimestampSigner for session token expiry (Item 9)
   "python-multipart>=0.0.9",  # Required by FastAPI for file uploads
 ]
 

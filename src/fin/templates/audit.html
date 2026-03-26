@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Audit - Kept{% endblock %}
+{% block title %}Audit - Fin{% endblock %}
 
 {% block content %}
 <h1>Financial Audit</h1>
@@ -262,13 +262,7 @@ async function setCategory(merchant, categoryId, selectEl) {
     if (!categoryId) return;
     const row = selectEl.closest('tr');
     try {
-        const headers = getAuthHeaders();
-        headers['Content-Type'] = 'application/json';
-        const resp = await fetch('/api/category-override', {
-            method: 'POST',
-            headers: headers,
-            body: JSON.stringify({merchant: merchant, category_id: categoryId}),
-        });
+        const resp = await finApi.postJSON('/api/category-override', {merchant: merchant, category_id: categoryId});
         if (!resp.ok) throw new Error(await resp.text());
         selectEl.disabled = true;
         row.style.opacity = '0.5';

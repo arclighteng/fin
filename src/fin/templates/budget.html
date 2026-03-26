@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Budget - Kept{% endblock %}
+{% block title %}Budget - Fin{% endblock %}
 
 {% block content %}
 <style>
@@ -413,7 +413,7 @@
         {% endif %}
 
         <!-- Add/Edit Target Form -->
-        <div class="add-target-form" data-requires-auth="true">
+        <div class="add-target-form">
             <select id="budgetCategorySelect">
                 <option value="">Select category...</option>
                 {% for cat in all_categories %}
@@ -453,8 +453,6 @@ async function setBudgetTarget() {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + API_TOKEN,
-                'X-CSRF-Token': CSRF_TOKEN,
             },
             body: JSON.stringify({
                 category_id: categoryId,
@@ -476,10 +474,6 @@ async function actuallyDeleteBudgetTarget(categoryId) {
     try {
         const resp = await fetch('/api/budget/target/' + encodeURIComponent(categoryId), {
             method: 'DELETE',
-            headers: {
-                'Authorization': 'Bearer ' + API_TOKEN,
-                'X-CSRF-Token': CSRF_TOKEN,
-            },
         });
         if (!resp.ok) {
             showBudgetFormError('Failed to remove target.');

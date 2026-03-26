@@ -2480,58 +2480,10 @@ def export_backup(
         console.print(f"  [cyan]age -d -i your_key.txt -o fin.db {output_path}[/cyan]")
 
 
-_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
-
-
-def _build_browser_open_url(scheme: str, port: int, token: str | None, auth_disabled: bool) -> str:
-    """
-    Return the URL the browser should open on startup.
-
-    When auth is enabled and a token is available, returns the /auto-login URL
-    so the browser lands pre-authenticated. Otherwise returns /dashboard directly.
-    """
-    if token and not auth_disabled:
-        return f"{scheme}://127.0.0.1:{port}/auto-login?t={token}"
+def _build_browser_open_url(scheme: str, port: int) -> str:
+    """Return the URL the browser should open on startup."""
     return f"{scheme}://127.0.0.1:{port}/dashboard"
 
-
-def startup_security_check(host: str, auth_disabled: bool) -> None:
-    """
-    Hard-block dangerous startup combinations.
-
-    Rules:
-    - auth_disabled=True AND non-loopback host → sys.exit(1). No override.
-    - auth_disabled=True AND loopback host → yellow WARNING to stderr (continue).
-
-    Call this before any server startup logic.
-    """
-    import sys
-
-    is_loopback = host in _LOOPBACK_HOSTS
-
-    if auth_disabled and not is_loopback:
-        import sys as _sys
-        _sys.stderr.write(
-            "\nERROR: Refusing to start.\n"
-            "FIN_AUTH_DISABLED=1 is set AND the server is binding to a non-loopback "
-            f"address ({host}).\n"
-            "This combination would expose your financial data to the network with no "
-            "authentication.\n\n"
-            "To fix, choose one of:\n"
-            "  1. Remove FIN_AUTH_DISABLED=1 (recommended)\n"
-            "  2. Bind to loopback only: --host 127.0.0.1\n\n"
-            "There is no override for this check.\n\n"
-        )
-        sys.exit(1)
-
-    if auth_disabled and is_loopback:
-        import sys as _sys
-        _sys.stderr.write(
-            "\nWARNING: FIN_AUTH_DISABLED=1 is set.\n"
-            "Authentication is disabled. Anyone with access to this machine can read and "
-            "modify your financial data via the web UI.\n"
-            "This is only permitted because the server is binding to loopback only.\n\n"
-        )
 
 
 def _check_fde(db_path) -> tuple:
@@ -2596,34 +2548,18 @@ def web(
     Use --host 0.0.0.0 to allow LAN access.
     Use --no-tls to disable HTTPS (loopback only).
 
-    API Authentication:
-    - All /api/* endpoints require bearer token or session cookie auth
-    - Set FIN_API_TOKEN env var for a fixed token, or use the auto-generated one
-    - Set FIN_AUTH_DISABLED=1 to disable auth (loopback only — hard-blocked on LAN)
+    No authentication required — fin is open-source and auth-free.
     """
     import sys
     import uvicorn
     from pathlib import Path
     from .tls import ensure_cert
 
-    auth_disabled = os.getenv("FIN_AUTH_DISABLED", "").lower() in ("1", "true", "yes")
-    is_loopback = host in _LOOPBACK_HOSTS
-
-    # --- Item 3: Hard-block auth-disabled + non-loopback ---
-    startup_security_check(host, auth_disabled)
-
     cfg = load_config()
     db_path = Path(cfg.db_path)
 
     from .config import ensure_data_dir
     ensure_data_dir(str(db_path))
-
-    # Establish persistent auth token so sessions survive restarts.
-    # Skip if the user already set FIN_API_TOKEN or disabled auth entirely.
-    if not auth_disabled and not os.environ.get("FIN_API_TOKEN"):
-        from .security import get_or_create_persistent_token
-        _persistent_token = get_or_create_persistent_token(db_path.parent)
-        os.environ["FIN_API_TOKEN"] = _persistent_token
 
     # Check if this looks like demo or real data
     if "demo" in str(db_path).lower():
@@ -2692,7 +2628,7 @@ def web(
             else:
                 sys.stderr.write(
                     "\nWARNING: TLS unavailable (openssl not found). Running over HTTP.\n"
-                    "Your session token and financial data are transmitted unencrypted.\n"
+                    "Your financial data is transmitted unencrypted.\n"
                     "This is only permitted because the server is binding to loopback.\n\n"
                 )
     else:
@@ -2707,25 +2643,15 @@ def web(
         else:
             sys.stderr.write(
                 "\nWARNING: Running over HTTP (--no-tls). "
-                "Your session token and financial data are unencrypted.\n\n"
+                "Your financial data is unencrypted.\n\n"
             )
 
     display_host = host if is_loopback else "127.0.0.1"
 
-    # Surface the token to the terminal only for --no-browser (headless/SSH users).
-    if no_browser and not auth_disabled:
-        from .security import get_auth_info
-        _auth_info = get_auth_info()
-        if _auth_info.get("auth_enabled"):
-            console.print(f"[dim]API Token:[/dim] {_auth_info['full_token']} [dim](persistent — stored in {db_path.parent / 'auth_token'})[/dim]")
-            console.print("[dim]Use this token: set it as the fin_session cookie or Authorization: Bearer header.[/dim]")
-
     console.print(f"[dim]Dashboard:[/dim] {scheme}://{display_host}:{port}/dashboard")
     console.print()
 
-    _browser_open_url = _build_browser_open_url(
-        scheme, port, os.environ.get("FIN_API_TOKEN"), auth_disabled
-    )
+    _browser_open_url = _build_browser_open_url(scheme, port)
 
     if not no_browser:
         import threading
@@ -2766,8 +2692,8 @@ def web(
         browser_thread.start()
 
     # Anonymous startup ping: install_id (random UUID), version, OS, license status.
-    # No financial data transmitted. Controlled by KEPT_PING_URL env var.
-    _ping_url = os.getenv("KEPT_PING_URL", "").strip()
+    # No financial data transmitted. Controlled by FIN_TELEMETRY_URL env var.
+    _ping_url = os.getenv("FIN_TELEMETRY_URL", "").strip()
     if _ping_url:
         import threading
         import uuid

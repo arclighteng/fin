@@ -2,11 +2,14 @@
 import csv
 import html
 import io
-import secrets
+import logging
+import os
 import sqlite3
+import time
 from decimal import Decimal
 from contextlib import contextmanager
 from datetime import date, timedelta
+from importlib.metadata import version as pkg_version, PackageNotFoundError
 from pathlib import Path
 from typing import Generator
 
@@ -59,7 +62,6 @@ from .projections import (
 )
 from .cache import get_cache_stats, invalidate_pattern_cache, invalidate_report_cache
 from .reporting_models import SpendingBucket, TransactionType
-from .security import verify_auth_token, get_signed_session_token
 from .close_books import (
     close_period,
     get_closed_period,
@@ -203,11 +205,9 @@ def parse_account_filter(accounts: str | None) -> tuple[list[str] | None, bool]:
 app = FastAPI()
 
 # ---------------------------------------------------------------------------
-# Rate limiting (Item 4)
+# Rate limiting
 # ---------------------------------------------------------------------------
-import os as _os
-_rate_limit_auth = _os.getenv("FIN_RATE_LIMIT_AUTH", "10/minute")
-_rate_limit_api = _os.getenv("FIN_RATE_LIMIT_API", "200/minute")
+_rate_limit_api = os.getenv("FIN_RATE_LIMIT_API", "200/minute")
 
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
@@ -230,23 +230,9 @@ app.add_exception_handler(RequestValidationError, _validation_exception_handler)
 templates_dir = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(templates_dir))
 
-# CSRF token and auth-disabled flag for template conditionals
-from .security import get_api_token, get_csrf_token
-
-# Ensure the session token is generated on startup so it's available for all requests
-_startup_token = get_api_token()
-
-# Register CSRF token getter as callable global
-# NOTE: api_token is intentionally NOT injected into templates (Item 1 — HttpOnly cookie).
-# The read-only mode check uses whether auth is disabled, not the raw token value.
-templates.env.globals["csrf_token"] = get_csrf_token
-# Provide a callable that tells the template if auth is active (for UI state only)
-templates.env.globals["auth_enabled"] = lambda: get_api_token() is not None
-
 # Inject package version
-from importlib.metadata import version as _pkg_version, PackageNotFoundError
 try:
-    templates.env.globals["app_version"] = _pkg_version("finproj")
+    templates.env.globals["app_version"] = pkg_version("finproj")
 except PackageNotFoundError:
     templates.env.globals["app_version"] = "dev"
 
@@ -261,37 +247,23 @@ async def health():
     return {"status": "ok"}
 
 
-
-
 # ---------------------------------------------------------------------------
-# Observability: request logging with auth failure tracking
+# Observability: request logging
 # ---------------------------------------------------------------------------
-import time as _time
-import logging as _logging
-from collections import defaultdict as _defaultdict
-
-_access_log = _logging.getLogger("fin.access")
-_auth_failures: dict[str, int] = _defaultdict(int)
+_access_log = logging.getLogger("fin.access")
 
 
 @app.middleware("http")
 async def log_requests(request, call_next):
-    start = _time.monotonic()
+    start = time.monotonic()
     response = await call_next(request)
-    elapsed_ms = (_time.monotonic() - start) * 1000
+    elapsed_ms = (time.monotonic() - start) * 1000
     client_ip = request.client.host if request.client else "-"
     method = request.method
     path = request.url.path
     status = response.status_code
 
-    if status in (401, 403):
-        _auth_failures[client_ip] += 1
-        total = _auth_failures[client_ip]
-        _access_log.warning(
-            "%s | %s %s | %d | %.0fms | auth failure #%d from %s",
-            client_ip, method, path, status, elapsed_ms, total, client_ip,
-        )
-    elif path.startswith("/static/"):
+    if path.startswith("/static/"):
         pass  # skip static file noise
     else:
         _access_log.info(
@@ -322,94 +294,6 @@ async def add_security_headers(request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     return response
 
-
-# ---------------------------------------------------------------------------
-# Security: Auth required on ALL /api/* endpoints (Item 2)
-# ---------------------------------------------------------------------------
-@app.middleware("http")
-async def require_api_auth(request: Request, call_next):
-    """
-    Require authentication on every /api/* path.
-
-    Explicit public exceptions (no auth required):
-    - /auth/session  (the login endpoint itself)
-    - /static/*      (served by StaticFiles — never reaches here, but guard anyway)
-
-    Auth is checked by inspecting the Authorization header or fin_session cookie,
-    matching the logic in verify_auth_token. We replicate it here in middleware form
-    so we don't have to add Depends(verify_auth_token) to every single GET route.
-    """
-    path = request.url.path
-    if not path.startswith("/api/"):
-        return await call_next(request)
-
-    from .security import get_api_token as _get_token, _verify_token_value
-    from fastapi import HTTPException as _HTTPException
-    from starlette.responses import JSONResponse as _JSONResp
-
-    required = _get_token()
-    if required is None:
-        # Auth disabled — permitted only on loopback (startup_security_check enforces this)
-        return await call_next(request)
-
-    # Check Authorization: Bearer header
-    authorization = request.headers.get("authorization", "")
-    if authorization:
-        parts = authorization.split(" ", 1)
-        if len(parts) == 2 and parts[0].lower() == "bearer":
-            try:
-                _verify_token_value(parts[1])
-                return await call_next(request)
-            except _HTTPException as exc:
-                return _JSONResp(status_code=exc.status_code, content={"detail": exc.detail})
-        return _JSONResp(
-            status_code=401,
-            content={"detail": "Invalid Authorization header format."},
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    # Check fin_session cookie
-    fin_session = request.cookies.get("fin_session")
-    if fin_session:
-        try:
-            _verify_token_value(fin_session)
-            return await call_next(request)
-        except _HTTPException as exc:
-            return _JSONResp(status_code=exc.status_code, content={"detail": exc.detail})
-
-    # No credentials provided
-    return _JSONResp(
-        status_code=401,
-        content={"detail": "Authentication required for API access."},
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-
-
-# ---------------------------------------------------------------------------
-# Security: CSRF protection for mutation endpoints
-# ---------------------------------------------------------------------------
-_CSRF_BYPASS_PATHS = frozenset({"/auth/session"})
-
-
-@app.middleware("http")
-async def verify_csrf(request, call_next):
-    if request.method in ("POST", "PUT", "DELETE", "PATCH"):
-        # Skip CSRF check for bootstrapping endpoints (no session exists yet)
-        if request.url.path in _CSRF_BYPASS_PATHS:
-            return await call_next(request)
-        csrf_header = request.headers.get("x-csrf-token", "")
-        expected = get_csrf_token()
-        if not csrf_header or not secrets.compare_digest(csrf_header, expected):
-            # Allow only if auth is fully disabled (loopback-only — startup_security_check
-            # already hard-blocked the auth_disabled + non-loopback combination)
-            if not get_api_token():
-                return await call_next(request)
-            from starlette.responses import JSONResponse as _JSONResp
-            return _JSONResp(
-                status_code=403,
-                content={"detail": "CSRF token missing or invalid"},
-            )
-    return await call_next(request)
 
 
 
@@ -514,105 +398,8 @@ def _period_type_from_str(s: str) -> TimePeriod:
 
 
 # ---------------------------------------------------------------------------
-# Auth session model
-# ---------------------------------------------------------------------------
-class SessionRequest(BaseModel):
-    token: str
-
-
-# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
-
-
-@app.post("/auth/session")
-@limiter.limit(_rate_limit_auth)
-def create_session(req: SessionRequest, request: Request, response: Response):
-    """
-    Establish a browser session by validating the API token and setting an HttpOnly cookie.
-
-    This endpoint is intentionally public (no auth dependency) — it IS the login endpoint.
-    Rate-limited to prevent brute-force.
-    """
-    import os as _os
-    from .security import _verify_token_value, get_api_token as _get_token
-    from fastapi import HTTPException as _HTTPException
-
-    required = _get_token()
-    if required is None:
-        # Auth disabled — issue a session cookie with a sentinel value so the
-        # browser auth prompt can be suppressed.
-        resp = JSONResponse(content={"status": "ok"})
-        resp.set_cookie(
-            key="fin_session",
-            value="auth_disabled",
-            httponly=True,
-            secure=False,  # No TLS when auth disabled (loopback only by startup check)
-            samesite="strict",
-            max_age=3600 * 8,
-            path="/",
-        )
-        return resp
-
-    try:
-        _verify_token_value(req.token)
-    except _HTTPException:
-        raise _HTTPException(status_code=401, detail="Invalid token")
-
-    # Determine if we're running over TLS (controls cookie Secure flag)
-    is_https = request.url.scheme == "https"
-
-    resp = JSONResponse(content={"status": "ok"})
-    resp.set_cookie(
-        key="fin_session",
-        value=req.token,
-        httponly=True,
-        secure=is_https,
-        samesite="strict",
-        max_age=3600 * 8,  # 8 hours
-        path="/",
-    )
-    return resp
-
-
-@app.get("/auto-login")
-def auto_login(request: Request, t: str | None = None):
-    """
-    Browser auto-login: validate token from query param, set session cookie, redirect.
-
-    Called by webbrowser.open() at startup. Intentionally public — it IS the auth
-    endpoint for the browser. Listed in _LICENSE_BYPASS_PATHS so the license gate
-    does not redirect before the cookie can be set.
-
-    On success: sets fin_session cookie (1-year) + 302 /dashboard.
-    On any failure (missing/invalid token, auth disabled): 302 /dashboard without cookie.
-    """
-    from .security import get_api_token as _get_token, _verify_token_value
-    from fastapi import HTTPException as _HTTPEx
-
-    if _get_token() is None:
-        return RedirectResponse(url="/dashboard", status_code=302)
-
-    if not t:
-        return RedirectResponse(url="/dashboard", status_code=302)
-
-    try:
-        _verify_token_value(t)
-    except _HTTPEx:
-        return RedirectResponse(url="/dashboard", status_code=302)
-
-    is_https = request.url.scheme == "https"
-    resp = RedirectResponse(url="/dashboard", status_code=302)
-    resp.set_cookie(
-        key="fin_session",
-        value=t,
-        httponly=True,
-        secure=is_https,
-        samesite="strict",
-        max_age=365 * 24 * 3600,  # 1 year — token is permanent, cookie matches
-        path="/",
-    )
-    return resp
 
 
 @app.get("/")
@@ -1467,7 +1254,6 @@ def explain_number(
 def alert_action(
     req: AlertActionRequest,
     conn: sqlite3.Connection = Depends(get_db),
-    _auth: bool = Depends(verify_auth_token),
 ):
     """Record an action on an alert and learn from it."""
     valid_actions = {"ack", "not_suspicious", "confirmed", "canceled"}
@@ -1503,7 +1289,6 @@ def alert_action(
 def income_source(
     req: IncomeSourceRequest,
     conn: sqlite3.Connection = Depends(get_db),
-    _auth: bool = Depends(verify_auth_token),
 ):
     """Mark a merchant as income or not-income."""
     dbmod.mark_income_source(conn, req.merchant, req.is_income)
@@ -1522,7 +1307,6 @@ def get_income_sources(conn: sqlite3.Connection = Depends(get_db)):
 def set_type_override(
     req: TypeOverrideRequest,
     conn: sqlite3.Connection = Depends(get_db),
-    _auth: bool = Depends(verify_auth_token),
 ):
     """Set manual type override for a recurring charge (subscription vs bill vs ignore)."""
     valid_types = {"subscription", "bill", "ignore", "auto"}
@@ -1545,7 +1329,6 @@ def set_type_override(
 def set_category_override(
     req: CategoryOverrideRequest,
     conn: sqlite3.Connection = Depends(get_db),
-    _auth: bool = Depends(verify_auth_token),
 ):
     """Set manual category override for a merchant."""
     # Validate category_id (allow "auto" to reset)
@@ -1568,7 +1351,6 @@ def set_category_override(
 def dismiss_duplicate(
     req: DuplicateDismissRequest,
     conn: sqlite3.Connection = Depends(get_db),
-    _auth: bool = Depends(verify_auth_token),
 ):
     """Dismiss or restore duplicate warning for a merchant."""
     if req.dismiss:
@@ -1586,7 +1368,6 @@ def dismiss_duplicate(
 def set_txn_type_override(
     req: TxnTypeOverrideRequest,
     conn: sqlite3.Connection = Depends(get_db),
-    _auth: bool = Depends(verify_auth_token),
 ):
     """
     Set transaction type override.
@@ -1641,7 +1422,6 @@ def set_txn_type_override(
 def set_bulk_txn_type_override(
     req: BulkTxnTypeOverrideRequest,
     conn: sqlite3.Connection = Depends(get_db),
-    _auth: bool = Depends(verify_auth_token),
 ):
     """
     Set transaction type overrides for multiple transactions.
@@ -1693,7 +1473,6 @@ def remove_txn_type_override_endpoint(
     fingerprint: str | None = None,
     merchant_pattern: str | None = None,
     conn: sqlite3.Connection = Depends(get_db),
-    _auth: bool = Depends(verify_auth_token),
 ):
     """Remove a transaction type override."""
     if not fingerprint and not merchant_pattern:
@@ -2529,7 +2308,7 @@ def export_summary(
 # ---------------------------------------------------------------------------
 @app.post("/api/sync")
 @limiter.limit("10/minute")
-def api_sync(request: Request, _auth: bool = Depends(verify_auth_token)):
+def api_sync(request: Request):
     """
     Sync all available data from SimpleFIN.
 
@@ -2698,7 +2477,6 @@ def get_sync_history(
 def api_reconcile(
     req: ReconcileRequest,
     conn: sqlite3.Connection = Depends(get_db),
-    _auth: bool = Depends(verify_auth_token),
 ):
     """
     Reconcile an account against a statement balance.
@@ -2759,7 +2537,6 @@ def api_reconcile(
 def api_resolve_reconciliation(
     req: ResolveReconciliationRequest,
     conn: sqlite3.Connection = Depends(get_db),
-    _auth: bool = Depends(verify_auth_token),
 ):
     """Mark a reconciliation discrepancy as resolved."""
     try:
@@ -2979,7 +2756,7 @@ def api_cache_stats():
 
 
 @app.post("/api/cache/clear")
-def api_cache_clear(_auth: bool = Depends(verify_auth_token)):
+def api_cache_clear():
     """Clear all caches (use after data changes)."""
     invalidate_pattern_cache()
     invalidate_report_cache()
@@ -3033,7 +2810,6 @@ def api_set_note(
     fingerprint: str,
     req: TransactionNoteRequest,
     conn: sqlite3.Connection = Depends(get_db),
-    _auth: bool = Depends(verify_auth_token),
 ):
     """Set or update a note on a transaction."""
     note = req.note.strip()
@@ -3048,7 +2824,6 @@ def api_set_note(
 def api_delete_note(
     fingerprint: str,
     conn: sqlite3.Connection = Depends(get_db),
-    _auth: bool = Depends(verify_auth_token),
 ):
     """Remove a note from a transaction."""
     dbmod.delete_transaction_note(conn, fingerprint)
@@ -3060,7 +2835,6 @@ def api_add_tag(
     fingerprint: str,
     req: TransactionTagRequest,
     conn: sqlite3.Connection = Depends(get_db),
-    _auth: bool = Depends(verify_auth_token),
 ):
     """Add a tag to a transaction."""
     import re
@@ -3079,7 +2853,6 @@ def api_remove_tag(
     fingerprint: str,
     tag: str,
     conn: sqlite3.Connection = Depends(get_db),
-    _auth: bool = Depends(verify_auth_token),
 ):
     """Remove a tag from a transaction."""
     dbmod.remove_transaction_tag(conn, fingerprint, tag)
@@ -3112,7 +2885,6 @@ def api_budget_targets(conn: sqlite3.Connection = Depends(get_db)):
 def api_set_budget_target(
     req: BudgetTargetRequest,
     conn: sqlite3.Connection = Depends(get_db),
-    _auth: bool = Depends(verify_auth_token),
 ):
     """Set or update a budget target for a category."""
     if req.category_id not in CATEGORIES:
@@ -3133,7 +2905,6 @@ def api_set_budget_target(
 def api_delete_budget_target(
     category_id: str,
     conn: sqlite3.Connection = Depends(get_db),
-    _auth: bool = Depends(verify_auth_token),
 ):
     """Remove a budget target."""
     dbmod.delete_budget_target(conn, category_id)
@@ -3507,7 +3278,6 @@ def sync_log_page(
 def api_close_period(
     req: ClosePeriodRequest,
     conn: sqlite3.Connection = Depends(get_db),
-    _auth: bool = Depends(verify_auth_token),
 ):
     """
     Close a period, creating an official snapshot of totals.
@@ -3668,7 +3438,6 @@ def api_acknowledge_adjustment(
     adjustment_id: int,
     req: AcknowledgeAdjustmentRequest,
     conn: sqlite3.Connection = Depends(get_db),
-    _auth: bool = Depends(verify_auth_token),
 ):
     """Acknowledge a post-close adjustment (user accepts it)."""
     acknowledge_adjustment(conn, adjustment_id, notes=req.notes)
@@ -3679,7 +3448,6 @@ def api_acknowledge_adjustment(
 def api_statement_match(
     req: StatementMatchRequest,
     conn: sqlite3.Connection = Depends(get_db),
-    _auth: bool = Depends(verify_auth_token),
 ):
     """Save a user-confirmed statement-to-transaction match."""
     stmt_date = date.fromisoformat(req.statement_date) if req.statement_date else None
@@ -3731,7 +3499,6 @@ async def api_csv_preview(
 ):
     """
     Accept a CSV file upload, auto-detect bank format, return a preview.
-    Auth is enforced by the require_api_auth middleware (all /api/* routes).
     """
     from .csv_import import preview_csv
 
@@ -3769,7 +3536,6 @@ async def api_csv_confirm(
 ):
     """
     Accept a CSV file + confirmed column mapping, run the full import.
-    Auth is enforced by the require_api_auth middleware (all /api/* routes).
     """
     from .csv_import import import_csv_file
 
@@ -3813,7 +3579,6 @@ class SimpleFinTokenRequest(BaseModel):
 async def api_simplefin_token(req: SimpleFinTokenRequest):
     """
     Exchange a SimpleFIN setup token for an access URL and save to keyring.
-    Auth is enforced by the require_api_auth middleware (all /api/* routes).
     """
     from .simplefin_client import claim_access_url
     from . import credentials
@@ -4039,7 +3804,7 @@ _CADENCE_MULTS_LOCAL = {
     "quarterly": 1/3, "annual": 1/12,
 }
 
-_commitment_log = _logging.getLogger("fin.commitments")
+_commitment_log = logging.getLogger("fin.commitments")
 
 
 class CommitmentCreateRequest(BaseModel):

@@ -31,8 +31,8 @@ def _generate_with_cryptography(cert_path: Path, key_path: Path) -> bool:
 
         # Build certificate
         subject = issuer = x509.Name([
-            x509.NameAttribute(NameOID.COMMON_NAME, "kept-local"),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Kept"),
+            x509.NameAttribute(NameOID.COMMON_NAME, "fin-local"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Fin"),
             x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
         ])
 
@@ -100,7 +100,7 @@ def _generate_with_openssl(cert_path: Path, key_path: Path) -> bool:
                 "-out", str(cert_path),
                 "-days", "825",
                 "-nodes",
-                "-subj", "/CN=kept-local/O=Kept/C=US",
+                "-subj", "/CN=fin-local/O=Fin/C=US",
                 "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1",
             ],
             capture_output=True,
