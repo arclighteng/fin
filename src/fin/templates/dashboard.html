@@ -364,7 +364,7 @@
     <!-- Income Breakdown (hidden for expense-only accounts) -->
     {% if income_breakdown and not expense_only_view %}
     <div style="margin-top: 24px;">
-        <h3 style="font-size: 13px; color: var(--text-secondary); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.5px;">Income Sources (click row to see transactions)</h3>
+        <h3 style="font-size: 0.8125rem; color: var(--text-secondary); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.5px;">Income Sources (click row to see transactions)</h3>
         <div class="income-list">
             {% for merchant, amount in income_breakdown[:12] %}
             {% set is_confirmed = merchant in income_sources %}
@@ -396,7 +396,7 @@
             {% endfor %}
         </div>
         {% if income_breakdown|length > 12 %}
-        <p style="margin-top: 8px; color: var(--text-muted); font-size: 12px;">+ {{ income_breakdown|length - 12 }} more sources</p>
+        <p style="margin-top: 8px; color: var(--text-muted); font-size: 0.75rem;">+ {{ income_breakdown|length - 12 }} more sources</p>
         {% endif %}
     </div>
     {% endif %}
@@ -420,8 +420,8 @@
             <span class="card-summary">${{ "%.0f"|format(total_category_spending / 100) }} across {{ category_breakdown|length }} categories</span>
         </h2>
         <div class="card-actions">
-            <span class="collapse-hint" style="font-size: 12px; color: var(--text-muted);">Click header to expand</span>
-            <span class="expand-hint" style="font-size: 12px; color: var(--text-muted);">Click row to drill down</span>
+            <span class="collapse-hint" style="font-size: 0.75rem; color: var(--text-muted);">Click header to expand</span>
+            <span class="expand-hint" style="font-size: 0.75rem; color: var(--text-muted);">Click row to drill down</span>
         </div>
     </div>
 
@@ -567,7 +567,7 @@
     {% endif %}
     {% if duplicates %}
     <div style="margin-top: 12px; border-top: 1px solid var(--border-color); padding-top: 12px;">
-        <div style="font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.04em;">Possible Duplicate Subscriptions</div>
+        <div style="font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.04em;">Possible Duplicate Subscriptions</div>
         <div class="alert-list">
             {% for dup in duplicates if dup.severity == 'high' %}
             <div class="alert-item {{ dup.severity }}" data-search="{{ dup.items|map(attribute=0)|join(' ')|lower }}">
@@ -602,7 +602,7 @@
             </div>
             {% endfor %}
         </div>
-        <p style="margin-top: 8px; font-size: 12px; color: var(--text-muted);">
+        <p style="margin-top: 8px; font-size: 0.75rem; color: var(--text-muted);">
             <a href="/commitments" style="color: var(--accent-blue);">View &amp; dismiss on Commitments page</a>
         </p>
     </div>
@@ -1041,7 +1041,7 @@
                     html += '<td>' + txn.date + '</td>';
                     html += '<td style="color: var(--accent-green);">+$' + (txn.amount_cents / 100).toFixed(2) + '</td>';
                     html += '<td>' + txn.account + '</td>';
-                    html += '<td style="font-size: 11px; color: var(--text-secondary);">' + (txn.bank_description || txn.bank_merchant || '-') + '</td>';
+                    html += '<td style="font-size: 0.75rem; color: var(--text-secondary);">' + (txn.bank_description || txn.bank_merchant || '-') + '</td>';
                     html += '</tr>';
                 }
             }
