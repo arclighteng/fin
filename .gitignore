@@ -19,5 +19,10 @@ build/
 
 # Local files
 .claude/
+specs/
 BACKLOG.md
 buglist.txt
+
+# Marketing drafts
+docs/linkedin-pypi-launch.md
+docs/launch-marketing-plan.md

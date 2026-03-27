@@ -227,7 +227,7 @@ async def _validation_exception_handler(request: Request, exc: RequestValidation
 app.add_exception_handler(RequestValidationError, _validation_exception_handler)
 
 # Setup Jinja2 templates
-templates_dir = Path(__file__).parent / "templates"
+templates_dir = Path(os.environ.get("FIN_TEMPLATES_DIR", Path(__file__).parent / "templates"))
 templates = Jinja2Templates(directory=str(templates_dir))
 
 # Inject package version
@@ -237,7 +237,7 @@ except PackageNotFoundError:
     templates.env.globals["app_version"] = "dev"
 
 # Mount static files
-static_dir = Path(__file__).parent / "static"
+static_dir = Path(os.environ.get("FIN_STATIC_DIR", Path(__file__).parent / "static"))
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 

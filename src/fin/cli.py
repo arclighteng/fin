@@ -2744,7 +2744,8 @@ def web(
         )
         _ping_thread.start()
 
-    uvicorn.run("fin.web:app", host=host, port=port, reload=False, **ssl_kwargs)
+    from fin.web import app as web_app
+    uvicorn.run(web_app, host=host, port=port, reload=False, **ssl_kwargs)
 
 
 @app.command()
@@ -2876,7 +2877,8 @@ def demo(
         os.environ["FIN_DB_PATH"] = str(demo_db_path)
 
         import uvicorn
-        uvicorn.run("fin.web:app", host="127.0.0.1", port=port, reload=False)
+        from fin.web import app as web_app
+        uvicorn.run(web_app, host="127.0.0.1", port=port, reload=False)
     else:
         console.print()
         console.print(f"To view the demo, run:")
