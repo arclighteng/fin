@@ -2278,6 +2278,25 @@ def api_sync(request: Request):
     """
     cfg = load_config()
 
+    # Rate-limit syncs to stay under SimpleFIN's 24/day API cap (use 20 for headroom)
+    conn_check = dbmod.connect(cfg.db_path)
+    dbmod.init_db(conn_check)
+    try:
+        daily_syncs = conn_check.execute(
+            "SELECT COUNT(*) FROM runs WHERE ran_at >= datetime('now', '-24 hours')"
+        ).fetchone()[0]
+        if daily_syncs >= 20:
+            oldest_in_window = conn_check.execute(
+                "SELECT ran_at FROM runs WHERE ran_at >= datetime('now', '-24 hours') ORDER BY ran_at ASC LIMIT 1"
+            ).fetchone()
+            next_available = "~1 hour" if oldest_in_window else "soon"
+            return JSONResponse(
+                status_code=429,
+                content={"error": f"Sync limit reached ({daily_syncs} in the last 24h). Try again {next_available}."},
+            )
+    finally:
+        conn_check.close()
+
     if not cfg.simplefin_access_url:
         return JSONResponse(
             status_code=400,
