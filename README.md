@@ -1,67 +1,78 @@
 # fin
 
-A local-first personal finance tool. Syncs with your bank accounts via SimpleFIN or import CSV directly—analyzes spending patterns, detects subscriptions, and keeps your data local with encrypted backups.
+Local-first personal finance. Syncs with your bank via SimpleFIN or CSV import — analyzes spending, detects subscriptions, catches unusual charges. All data stays on your machine.
+
+**You are not the product.** No cloud. No tracking. No accounts.
+
+[![PyPI](https://img.shields.io/pypi/v/getfin)](https://pypi.org/project/getfin/)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ## Features
 
-**Security & Privacy**
-- **Local-Only Data**: All data stays on your machine in SQLite. No cloud sync, no tracking.
-- **System Keyring**: Credentials stored in OS secure storage (Keychain, Credential Manager, Secret Service)
-- **Encrypted Backups**: Age encryption for portable, audited backup files
+### Security & Privacy
+- **Local-only data** — SQLite on your machine. No cloud sync, no telemetry, no phone home.
+- **System keyring** — Credentials stored in OS secure storage (Keychain, Credential Manager, Secret Service).
+- **Encrypted backups** — Age encryption (ChaCha20-Poly1305) for portable, audited backup files.
 
-**Accuracy & Trust**
-- **Known Service Detection**: 150+ subscription services recognized instantly (Netflix, Spotify, etc.)
-- **Pattern Validation**: `fin audit-subs` verifies detection accuracy—no false positives
-- **Manual Override**: Correct any miscategorization; your choice persists
+### Analysis
+- **Smart categorization** — Automatic transaction categorization with manual override.
+- **Subscription detection** — 150+ known services recognized instantly, plus pattern detection for the rest.
+- **Alerts** — Duplicate charges, unusual amounts, price increases, bundle overlap.
+- **Spending breakdown** — Top categories with 3-month rolling averages and outlier badges.
+- **Cash flow tracking** — Income vs expenses, savings rate, mid-month pacing.
 
-**Analysis**
-- **Dashboard**: Visual overview of income, spending, alerts, and subscriptions
-- **Smart Categorization**: Automatic transaction categorization with manual override
-- **Subscription Detection**: Finds recurring charges and separates subscriptions from utility bills
-- **Alerts**: Detects duplicate charges, unusual amounts, price increases
-- **Bundle Detection**: Flags potential duplicate subscriptions (Disney+/Hulu/ESPN+ overlap)
-
-**Interface**
-- **Web Dashboard**: Full-featured UI at localhost
-- **CLI Tools**: Complete command-line interface for automation
-- **Mobile Responsive**: Works on phone, tablet, and desktop
-- **Dark Mode**: Easy on the eyes
+### Interface
+- **Web dashboard** — Full-featured UI at localhost with drilldown into every number.
+- **CLI tools** — Complete command-line interface for automation and scripting.
+- **Mobile responsive** — Works on phone, tablet, and desktop.
+- **Dark mode** — Easy on the eyes.
 
 ## Getting Started
 
-> **Two install paths are in progress.** A guided installer (no Python required, wizard-based setup) is under active development. The manual path below is current and stable.
-
-### Manual Install (Python required)
+### Install from PyPI
 
 ```bash
-# 1. Create virtual environment
-python -m venv .venv
-.venv\Scripts\activate  # Windows
-# source .venv/bin/activate  # Mac/Linux
-
-# 2. Install
-pip install -e .
-
-# 3. Start the web dashboard
+pip install getfin
 fin web
-# Browser opens automatically to http://127.0.0.1:8000/dashboard
-# If no data exists, demo data loads with a "Connect your bank" banner
+# Browser opens to https://127.0.0.1:8000/dashboard
 ```
 
-The database is stored automatically at:
+> **First run:** The dashboard uses a self-signed certificate for local HTTPS — your browser will show a security warning, which is normal. On first launch with no data, the dashboard shows an empty state with a banner to import a CSV or connect SimpleFIN. To explore with sample data first, run `fin demo` — this loads demo transactions with a dismissible banner so you can see every feature before connecting your bank.
+
+### Install from source
+
+```bash
+git clone https://github.com/arclighteng/fin.git
+cd fin && python -m venv .venv
+source .venv/bin/activate   # .venv\Scripts\activate on Windows
+pip install -e .
+fin web
+```
+
+### Docker
+
+```bash
+cp .env.example .env        # Edit with your SimpleFIN access URL
+docker compose build
+docker compose run --rm fin sync
+docker compose run --rm fin web
+```
+
+The database is stored at:
 - **Windows**: `%APPDATA%\fin\fin.db`
 - **macOS/Linux**: `~/.local/share/fin/fin.db`
 
 Override with `FIN_DB_PATH` if needed.
 
-### Connecting Your Bank
+## Connecting Your Bank
 
-From the dashboard, click **"Connect your bank"** to open the setup page. Two options:
+From the dashboard, click **"Connect your bank"** to open the setup page (`/connect`). Two options:
 
-**Import CSV** (easiest — no account required)
-1. Log into your bank and download a transaction export (CSV)
+**CSV import** (easiest — no account required)
+1. Download a transaction export from your bank (CSV)
 2. Drag and drop it onto the import page
-3. fin detects the format automatically for Chase, BofA, Amex, Wells Fargo, and Capital One; shows a preview before importing
+3. Automatic format detection for Chase, BofA, Amex, Wells Fargo, and Capital One
 
 **SimpleFIN** (automatic daily sync, ~$1.50/month)
 1. Go to [SimpleFIN Bridge](https://beta-bridge.simplefin.org/), subscribe, and link your bank
@@ -70,156 +81,52 @@ From the dashboard, click **"Connect your bank"** to open the setup page. Two op
 
 See [docs/SIMPLEFIN_SETUP.md](docs/SIMPLEFIN_SETUP.md) for detailed SimpleFIN instructions.
 
-### Docker
-
-```bash
-# 1. Configure
-cp .env.example .env
-# Edit .env with your SimpleFIN access URL
-
-# 2. Build & run
-docker compose build
-docker compose run --rm fin sync
-docker compose run --rm fin web
-```
-
-## Security
-
-Your financial data is sensitive. fin is designed with security as a priority.
-
-### Credential Storage
-
-**Recommended: System Keyring**
-
-```bash
-fin credentials set
-# Prompted for SimpleFIN Access URL, stored securely
-```
-
-Credentials are stored in:
-- **Windows**: Credential Manager
-- **macOS**: Keychain
-- **Linux**: Secret Service (GNOME Keyring, KWallet)
-
-Check status: `fin credentials status`
-
-**Alternative: Environment File**
-
-Create a `.env` file (gitignored):
-
-```bash
-SIMPLEFIN_ACCESS_URL=https://your-access-url-from-simplefin
-```
-
-Keyring takes priority over .env if both are configured.
-
-### Data Protection
-
-**Full-Disk Encryption (Recommended)**
-
-Enable your OS's built-in encryption:
-
-| OS | Solution |
-|----|----------|
-| Windows | BitLocker (Pro/Enterprise) or VeraCrypt |
-| macOS | FileVault |
-| Linux | LUKS |
-
-This protects your database at rest with zero configuration in fin.
-
-**Encrypted Backups**
-
-```bash
-# Create encrypted backup with passphrase
-fin export-backup -p
-
-# Or with age public key (for automated backups)
-fin export-backup -r age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p
-
-# Decrypt later
-age -d -o fin.db fin_backup_20260123.finbak
-```
-
-Requires `age`: `winget install FiloSottile.age` (Windows) / `brew install age` (macOS) / `apt install age` (Linux).
-
-### Why This Architecture?
-
-We chose OS-level encryption + encrypted exports over SQLCipher because:
-1. Zero configuration for users who already have FileVault/BitLocker enabled
-2. No additional dependencies or build complexity
-3. `age` is a modern, audited tool with better key management
-4. You control when encryption happens (backups) vs always-on overhead
-
 ## Web Dashboard
 
-The dashboard displays your financial overview in a 5-card responsive layout.
+Launch with `fin web`. The dashboard at `/dashboard` shows a 5-card layout:
 
-### Card 1: Cash Flow (Hero)
-Shows income vs expenses side-by-side with a big "Kept $X" or "Over $X" number, savings rate, and a 3-month rolling comparison. Mid-month pacing projection appears if you're still in the current month. Pending transactions show a warning if they exceed the typical threshold.
+| Card | What it shows |
+|------|---------------|
+| **Cash Flow** | Income vs expenses, savings rate, 3-month comparison, mid-month pacing |
+| **Commitments** | Detected subscriptions and bills, total as % of income, price change alerts |
+| **Spending Breakdown** | Top 7 categories with bars, 3-month averages, outlier badges |
+| **Heads Up** | Unusual charges with dismiss actions, spending trends, bill deviation alerts |
+| **Your Trend** | 6-month bar chart of net cash flow, clickable months |
 
-### Card 2: Monthly Commitments
-Lists detected subscriptions and utility bills (using pattern detection over 400 days). Click any item to see all transactions from that merchant. Shows total committed this month as a percentage of income with a color-coded bar (green under 50%, yellow 50-70%, red over 70%). Inline price change alerts flag recent increases. Footer breaks down subscription vs bill totals.
+Click any number, bar, category, or merchant to drill down to the full transaction list.
 
-### Card 3: Spending Breakdown
-Top 7 spending categories with horizontal bars and 3-month averages. Click any category to drill down to merchants and transactions. Outlier badges (+X%) highlight categories that exceed their 3-month average. Footer shows total vs 3-month comparison.
+### Other Pages
 
-### Card 4: Heads Up
-Shows unusual charges with dismiss actions ("Looks fine" / "Flag it"), multi-month spending trends, and bill deviation alerts. When empty, displays "Nothing unusual this month."
+| Route | Purpose |
+|-------|---------|
+| `/connect` | Import CSV files or connect via SimpleFIN |
+| `/commitments` | Subscriptions and bills — filter, export, toggle types |
+| `/insights` | 12-month savings and income trends |
+| `/review` | Transaction triage and categorization |
+| `/budget` | Spending targets by category vs actual |
+| `/watchlist` | Transaction watchlist |
+| `/anomalies` | Unusual charges (60-day window) |
+| `/sync-log` | Sync history |
 
-### Card 5: Your Trend
-6-month bar chart of net cash flow (kept vs over). Green bars for positive months, red for negative. Current month shown as dashed outline. Click any bar to navigate to that month. Footer shows 6-month average.
-
-### Navigation & Controls
-- **Month navigation**: Previous/next buttons with current month indicator dot
-- **Account filter**: Multi-select dropdown to focus on specific accounts
-- **Transaction search**: Live results dropdown—type a merchant name or amount to find transactions
-- **Keyboard accessible**: Tab navigation, Enter to select, Escape to close dropdowns
-
-### Drilldown System
-Click any number, bar, category, or merchant to open a modal with the full transaction list. Sortable columns, account filtering, and scopes including income, spend, recurring, discretionary, net, merchant, and category.
-
-## Other Pages
-
-**Connect** (`/connect`)
-Import CSV files or connect via SimpleFIN. Drag-and-drop CSV upload with automatic format detection for major banks.
-
-**Recurring Charges** (`/subs`)
-Dedicated page for subscriptions and utility bills. Filter by account, see payment history, toggle between subscription and bill types, and export to CSV.
-
-**Budget** (`/budget`)
-Set spending targets by category. Compare targets vs actual spending with visual indicators.
-
-**Audit** (`/audit`)
-Review and correct transaction categorization. Manages override history for future reference.
+### Navigation
+- **Month navigation**: Previous/next with current month indicator
+- **Account filter**: Multi-select to focus on specific accounts
+- **Transaction search**: Live results — type a merchant name or amount
+- **Keyboard accessible**: Tab navigation, Enter to select, Escape to close
 
 ## Subscription Detection
 
-fin uses a two-tier approach to find subscriptions:
+### Known Services (instant)
 
-### Known Services (Instant)
-
-150+ well-known services are recognized immediately, even with just one charge:
-- Streaming: Netflix, Hulu, Disney+, HBO Max, YouTube TV, Spotify
-- Software: Adobe, Microsoft 365, GitHub, ChatGPT, 1Password
-- Fitness: Peloton, Planet Fitness, Strava
-- And many more...
+150+ services recognized from a single charge:
+- **Streaming**: Netflix, Hulu, Disney+, Max, YouTube TV, Spotify, Apple Music
+- **Software**: Adobe, Microsoft 365, GitHub, ChatGPT, 1Password
+- **Fitness**: Peloton, Planet Fitness, Strava
+- **And more** — VPN, news, gaming, home security, cloud storage
 
 ### Pattern Detection (3+ charges)
 
-Unknown merchants are detected via:
-- Consistent amounts (low variance)
-- Regular intervals (weekly, monthly, annual)
-- Recurring payment indicators
-
-### Verifying Accuracy
-
-```bash
-# Audit what's being detected
-fin audit-subs
-
-# Show all detected (including pattern-based)
-fin audit-subs --all
-```
+Unknown merchants are detected via consistent amounts, regular intervals, and recurring payment indicators.
 
 ### Bundle Detection
 
@@ -229,42 +136,107 @@ fin bundle-check
 
 Flags vendor families where you might be paying twice (Disney+/Hulu/ESPN+, Apple services, etc.)
 
-## CLI Commands
+### Verifying Accuracy
 
-### Everyday Use
+```bash
+fin audit-subs          # Audit detected subscriptions
+fin audit-subs --all    # Include pattern-based detections
+```
+
+## Security
+
+Your financial data is sensitive. fin eliminates entire threat categories by design.
+
+### What we don't do
+- Cloud storage or remote API calls
+- User accounts, login tokens, or session cookies
+- Telemetry, analytics, or phone home — ever
+
+### What we delegate
+- **Credentials** → OS keyring (Keychain, Credential Manager, Secret Service)
+- **Backup encryption** → [age](https://github.com/FiloSottile/age) (ChaCha20-Poly1305)
+- **Disk encryption** → BitLocker / FileVault / LUKS
+- **TLS** → Python cryptography library
+
+We didn't build our own crypto — that's the point.
+
+### Credential Storage
+
+```bash
+fin credentials set       # Store SimpleFIN URL in system keyring
+fin credentials status    # Check credential source (keyring/env/none)
+fin credentials clear     # Remove from keyring
+```
+
+Credentials are stored in the OS keyring by default. Alternative: create a `.env` file (gitignored) with `SIMPLEFIN_ACCESS_URL`. Keyring takes priority if both are configured.
+
+### Encrypted Backups
+
+```bash
+# Passphrase-protected
+fin export-backup -p
+
+# Age public key (for automated backups)
+fin export-backup -r age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p
+
+# Decrypt
+age -d -o fin.db fin_backup_20260123.finbak
+```
+
+Requires `age`: `winget install FiloSottile.age` (Windows) / `brew install age` (macOS) / `apt install age` (Linux).
+
+### Why this architecture?
+
+OS-level encryption + encrypted exports instead of SQLCipher because:
+1. Zero config for users who already have FileVault/BitLocker enabled
+2. No additional dependencies or build complexity
+3. `age` is a modern, audited tool with better key management
+4. You control when encryption happens (backups) vs always-on overhead
+
+## CLI Reference
+
+### Sync
 
 | Command | Description |
 |---------|-------------|
-| `fin sync` | Pull latest transactions from bank |
+| `fin sync` | Pull latest transactions (30 days, default) |
+| `fin sync --quick` | Quick sync — 14 days (daily use) |
+| `fin sync --full` | Full sync — 120 days (catch up after absence) |
+| `fin sync --annual-bootstrap` | Annual sync — 400 days (find yearly subscriptions) |
+
+### Dashboard & Reports
+
+| Command | Description |
+|---------|-------------|
 | `fin web` | Start the web dashboard (browser opens automatically) |
 | `fin web --no-browser` | Start without auto-opening browser |
-| `fin status` | Financial status at a glance (CLI) |
-| `fin trend` | Monthly trend over time |
+| `fin dashboard-cli` | Full dashboard as CLI table with alerts |
+| `fin report` | Spending report (CLI table output) |
 
 ### Analysis & Audit
 
 | Command | Description |
 |---------|-------------|
-| `fin drill recurring` | All recurring expenses |
-| `fin drill one-offs` | Discretionary spending |
-| `fin drill alerts` | All alerts with details |
-| `fin drill income` | Income sources |
 | `fin audit-subs` | Verify subscription detection accuracy |
+| `fin audit-subs --all` | Include pattern-based detections |
 | `fin bundle-check` | Find duplicate/overlapping subscriptions |
-| `fin dashboard-cli` | Full CLI dashboard with alerts |
+| `fin subs-pick` | Select subscriptions to audit |
+| `fin watchlist-show` | Show transaction watchlist |
+| `fin watchlist-done` | Mark watchlist items as reviewed |
 
 ### Export & Backup
 
 | Command | Description |
 |---------|-------------|
-| `fin export-csv` | Export all data to CSV files |
+| `fin export-csv` | Export all data to CSV |
 | `fin export-backup -p` | Encrypted backup with passphrase |
 | `fin export-backup -r age1...` | Encrypted backup to recipient key |
 | `fin export-summary` | Income vs spend summary with rolling averages |
 | `fin export-duplicates` | Export duplicate subscription groups |
-| `fin import-csv FILE` | Import transactions from CSV (CLI) |
+| `fin export-sketchy` | Export suspicious transactions |
+| `fin import-csv FILE` | Import transactions from CSV |
 
-### Credentials & Setup
+### Setup & Diagnostics
 
 | Command | Description |
 |---------|-------------|
@@ -272,22 +244,16 @@ Flags vendor families where you might be paying twice (Disney+/Hulu/ESPN+, Apple
 | `fin credentials set` | Store credentials in system keyring |
 | `fin credentials status` | Show credential source (keyring/env/none) |
 | `fin credentials clear` | Remove credentials from keyring |
+| `fin db-info` | Show account/transaction count and date range |
+| `fin health` | Check SimpleFIN connection status |
+| `fin demo` | Load demo data for testing |
 
-## Sync Options
+### Accounting
 
-```bash
-# Daily sync (14 days) - catches new transactions
-fin sync --quick
-
-# Weekly sync (30 days) - default, covers statement cycle
-fin sync
-
-# After vacation/absence (120 days)
-fin sync --full
-
-# January annual (400 days) - finds yearly subscriptions
-fin sync --annual-bootstrap
-```
+| Command | Description |
+|---------|-------------|
+| `fin month-close` | Close accounting period |
+| `fin month-report` | Generate monthly reconciliation report |
 
 ## Troubleshooting
 
@@ -297,28 +263,24 @@ Run `fin sync --full` to pull more history, or import a CSV from `/connect`.
 ### Categories are wrong
 Click the category in the dashboard, then click the edit icon to override.
 
-### Subscription showing as Bill (or vice versa)
-Click the type badge on the Recurring page to toggle.
+### Subscription showing as bill (or vice versa)
+Click the type badge on the Commitments page to toggle.
 
 ### Suspicious subscription detection
 Run `fin audit-subs` to verify what's being detected.
 
-### Alerts not showing expected transactions
-Use the date pickers to select a custom range, or click the month navigation to reset to the current month.
+## Contributing
+
+Bug reports and feature requests are welcome via [GitHub Issues](https://github.com/arclighteng/fin/issues). Pull requests are considered — open an issue first to discuss the change. All contributions are licensed under [MIT](LICENSE).
 
 ## Development
 
 ```bash
-# Install with dev dependencies
 pip install -e ".[dev]"
-
-# Run tests
 FIN_DB_PATH=/tmp/test.db pytest
-
-# Type checking
 mypy src/fin
 ```
 
 ## License
 
-PolyForm Noncommercial 1.0.0
+[MIT](LICENSE)
