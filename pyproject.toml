@@ -16,7 +16,7 @@ include = [
 
 [project]
 name = "getfin"
-version = "2.0.0"
+version = "2.0.1"
 description = "Local-first personal finance — sync with your bank, detect subscriptions, track spending. All data stays on your machine."
 readme = "README.md"
 license = {text = "MIT"}
