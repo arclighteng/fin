@@ -198,6 +198,9 @@
     .card-full-v3 {
         grid-column: 1 / -1;
     }
+    .card-tall-v3 {
+        grid-row: span 2;
+    }
 }
 
 /* Card base */
@@ -1081,7 +1084,7 @@
 
         <!-- ==================== CARD 3: SPENDING BREAKDOWN ==================== -->
         {% if category_breakdown %}
-        <div class="card-v3">
+        <div class="card-v3 card-tall-v3">
             <div class="card-title-v3">
                 Spending
                 <span class="spend-total">${{ "%.0f"|format((current_period.discretionary_cents + current_period.recurring_cents) / 100) }}</span>
